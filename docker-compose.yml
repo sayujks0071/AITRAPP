@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: aitrapp-postgres
+    environment:
+      POSTGRES_DB: aitrapp
+      POSTGRES_USER: aitrapp
+      POSTGRES_PASSWORD: aitrapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aitrapp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aitrapp-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: aitrapp-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aitrapp-network
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: aitrapp-api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://aitrapp:aitrapp@postgres:5432/aitrapp
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+      - "9090:9090"
+    volumes:
+      - ./logs:/app/logs
+      - ./configs:/app/configs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aitrapp-network
+    command: >
+      sh -c "
+        python -m packages.storage.migrate &&
+        uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+      "
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: aitrapp-worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://aitrapp:aitrapp@postgres:5432/aitrapp
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./configs:/app/configs:ro
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    networks:
+      - aitrapp-network
+    command: celery -A apps.api.worker worker --loglevel=info
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: aitrapp-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - aitrapp-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  aitrapp-network:
+    driver: bridge
