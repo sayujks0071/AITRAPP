@@ -21,7 +21,13 @@ dev: ## Start development environment (Docker)
 
 paper: ## Run in PAPER mode (safe simulation)
 	@echo "Starting in PAPER MODE (simulation only)"
-	@export APP_MODE=PAPER && python -m apps.api.main
+	@if [ -d "venv" ]; then \
+		echo "Using virtual environment..."; \
+		source venv/bin/activate; \
+	fi; \
+	PORT=$${PORT:-8000}; \
+	export APP_MODE=PAPER; \
+	python -m uvicorn apps.api.main:app --host 0.0.0.0 --port $$PORT
 
 live: ## Run in LIVE mode (⚠️ REAL TRADING - USE WITH CAUTION)
 	@echo "╔════════════════════════════════════════════════╗"
@@ -66,7 +72,93 @@ format: ## Format code
 	ruff check --fix packages apps
 
 migrate: ## Run database migrations
-	python -m packages.storage.migrate
+	alembic upgrade head
+
+burnin-report: ## Generate daily trading report
+	python scripts/daily_report.py --date $$(date +%Y-%m-%d)
+
+verify: ## Verify environment and connectivity
+	python scripts/verify_env.py
+
+smoke-test: ## Run 60-minute smoke test
+	bash scripts/smoke_test.sh
+
+rollback: ## Rollback from LIVE to PAPER
+	bash scripts/rollback.sh
+
+red-team-drills: ## Run red-team resilience drills
+	bash scripts/red_team_drills.sh
+
+failure-drills: ## Run failure drills (dual-runner, WS flap, band jump)
+	bash scripts/failure_drills.sh
+
+post-close: ## Run post-close hygiene (DB snapshot, archive logs)
+	bash scripts/post_close_hygiene.sh
+
+live-dashboard: ## Create tmux dashboard for LIVE monitoring
+	bash ops/live.sh dashboard
+
+live-precheck: ## Run canary pre-check before LIVE switch
+	bash ops/canary_precheck.sh
+
+live-switch: ## Switch to LIVE mode
+	bash ops/live.sh switch
+
+live-full: prelive-gate ## Full LIVE sequence (gate → switch → monitor)
+	bash ops/live.sh full
+
+abort: ## Immediate abort (pause + flatten + PAPER)
+	bash ops/abort.sh
+
+paper-e2e: ## Run 30-minute PAPER end-to-end test
+	python scripts/paper_e2e.py
+
+prelive-gate: ## Run pre-LIVE gate checks (blocks switch if tripwires triggered)
+	bash scripts/prelive_gate.sh
+
+smoke-check: ## Run 2-minute smoke test after migration
+	bash scripts/smoke_check.sh
+
+quick-sanity: ## Run quick sanity checks (enum, column, endpoints)
+	bash scripts/quick_sanity.sh
+
+migration-checklist: ## Run complete migration checklist
+	bash scripts/run_migration_checklist.sh
+
+start-paper: ## Start complete PAPER session (automated)
+	bash scripts/start_paper_session.sh
+
+quick-proveout: ## Run quick prove-out test (health, metrics, kill-switch)
+	bash scripts/quick_proveout.sh
+
+quick-health: ## Run 5 critical health checks for burn-in readiness
+	bash scripts/quick_health_check.sh
+
+burnin-check: ## Quick burn-in check (leader, heartbeats, supervisor, readiness)
+	bash scripts/burn_in_check.sh
+
+reconcile-db: ## Run database reconciliation (check duplicates/orphans)
+	@if [ -z "$$DATABASE_URL" ]; then \
+		echo "❌ DATABASE_URL not set"; \
+		exit 1; \
+	fi; \
+	psql "$${DATABASE_URL#postgresql+psycopg2://}" -f scripts/reconcile_db.sql
+
+chaos-suite: ## Run full chaos test suite (leader lock, rate limit, postgres)
+	@echo "🧪 Running chaos test suite..."
+	@NONINTERACTIVE=1 PAUSE_ON_FAIL=1 bash scripts/chaos_test_leader_lock.sh
+	@bash scripts/chaos_test_rate_limit.sh
+	@bash scripts/chaos_test_postgres.sh
+	@echo "✅ Chaos suite complete"
+
+score-day1: ## One-shot Day-1 PASS scorer (readiness, heartbeats, DB integrity)
+	bash scripts/score_day1.sh
+
+setup-venv: ## Set up clean virtual environment with pinned dependencies
+	bash scripts/setup_venv.sh
+
+check-versions: ## Check installed dependency versions
+	bash scripts/check_versions.sh
 
 docker-build: ## Build Docker images
 	docker-compose build

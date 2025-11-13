@@ -1,56 +1,60 @@
-# Core Framework
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-pydantic==2.5.3
-pydantic-settings==2.1.0
+# Core web framework (pinned)
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.32
+pydantic>=2.9,<2.11
+pydantic-settings>=2.1,<2.2
 
-# Kite Connect
-kiteconnect==5.1.0
+# Database (pinned)
+SQLAlchemy>=2.0,<2.1
+alembic>=1.13,<1.14
+psycopg2-binary>=2.9,<3.0
 
-# WebSocket
-python-socketio==5.11.0
-websockets==12.0
+# Redis (pinned)
+redis>=5.0,<6.0
+hiredis>=2.3,<3.0
 
-# Database
-sqlalchemy==2.0.25
-alembic==1.13.1
-psycopg2-binary==2.9.9
+# Monitoring & metrics (pinned)
+prometheus-client>=0.20,<0.22
 
-# Cache & Queue
-redis==5.0.1
-hiredis==2.3.2
-celery==5.3.6
+# Kite Connect (pinned)
+kiteconnect>=5.0,<6.0
 
-# Data Processing
-numpy==1.26.3
-pandas==2.1.4
-pandas-ta==0.3.14b0
+# WebSocket (pinned)
+websockets>=12,<13
+python-socketio>=5.11,<6.0
+
+# Data processing (pinned)
+pandas>=2.2,<2.3
+numpy>=1.26,<2.0
 
 # Technical Indicators
-ta-lib==0.4.28  # May need system install: brew install ta-lib
-ta==0.11.0
+ta-lib>=0.4.28  # May need system install: brew install ta-lib
+ta>=0.11,<0.12
 
 # HTTP Client
-httpx==0.26.0
-aiohttp==3.9.1
+httpx>=0.27,<0.28
+aiohttp>=3.9,<4.0
 
-# Utilities
-python-dateutil==2.8.2
-pytz==2024.1
-pyyaml==6.0.1
-python-dotenv==1.0.0
+# Utilities (pinned)
+python-dotenv>=1.0,<2.0
+structlog>=24.0,<25.0
+python-dateutil>=2.8,<3.0
+pytz>=2024.1
+pyyaml>=6.0,<7.0
 
-# Monitoring & Logging
-prometheus-client==0.19.0
-structlog==24.1.0
+# Task Queue
+celery>=5.3,<6.0
 
 # Alerting (Optional)
-python-telegram-bot==20.7
-slack-sdk==3.26.2
+python-telegram-bot>=20.7,<21.0
+slack-sdk>=3.26,<4.0
 
 # Authentication
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+python-jose[cryptography]>=3.3,<4.0
+passlib[bcrypt]>=1.7,<2.0
 
 # Rate Limiting
-aiolimiter==1.1.0
+aiolimiter>=1.1,<2.0
+
+# FastAPI form data support
+python-multipart>=0.0.6

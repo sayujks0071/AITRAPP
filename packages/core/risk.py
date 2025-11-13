@@ -407,3 +407,45 @@ class RiskManager:
         self.daily_start_capital = None
         self.trades_today = 0
         logger.info("Daily risk counters reset")
+    
+    def can_enter(
+        self,
+        risk_cfg: RiskConfig,
+        portfolio: PortfolioRisk,
+        stop_dist: float,
+        instrument: Instrument,
+        price: float,
+        capital: float
+    ) -> tuple[bool, int]:
+        """
+        Hard gate check: can we enter this trade?
+        
+        Returns:
+            (approved: bool, quantity: int)
+        """
+        # 1. Per-trade risk
+        rupees_risk = capital * (risk_cfg.per_trade_risk_pct / 100)
+        qty = max(1, int(rupees_risk / (stop_dist * instrument.lot_size * price) * instrument.lot_size))
+        
+        # Round to lot size
+        if instrument.lot_size > 1:
+            lots = max(1, int(qty / instrument.lot_size))
+            qty = lots * instrument.lot_size
+        
+        # 2. Portfolio heat check
+        open_risk = portfolio.total_risk_amount
+        if (open_risk + rupees_risk) > capital * (risk_cfg.max_portfolio_heat_pct / 100):
+            logger.warning("Portfolio heat limit would be breached",
+                         current_heat=open_risk,
+                         new_risk=rupees_risk,
+                         limit=capital * (risk_cfg.max_portfolio_heat_pct / 100))
+            return False, 0
+        
+        # 3. Daily loss stop
+        if portfolio.realized_pnl_today <= -capital * (risk_cfg.daily_loss_stop_pct / 100):
+            logger.warning("Daily loss stop breached",
+                         daily_pnl=portfolio.realized_pnl_today,
+                         limit=-capital * (risk_cfg.daily_loss_stop_pct / 100))
+            return False, 0
+        
+        return True, qty

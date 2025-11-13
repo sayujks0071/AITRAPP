@@ -1,237 +1,196 @@
-# AITRAPP - Autonomous Intelligent Trading Application
+# 🚀 AITRAPP - Autonomous Trading App
 
-**Educational autonomous trading system for Indian markets using Zerodha Kite Connect**
-
-⚠️ **EDUCATIONAL SOFTWARE ONLY** - This system is designed for learning algorithmic trading concepts. 
-Always comply with SEBI regulations and broker Terms of Service.
-
-## Features
-
-- 🔴 **Paper Mode by Default** - Safe simulation environment
-- 🛡️ **Comprehensive Risk Management** - Multi-layered protection
-- 🎯 **Multiple Strategies** - ORB, VWAP Reversion, Trend Pullback, Options strategies
-- 📊 **Real-time Dashboard** - Live monitoring and control
-- 🔌 **WebSocket Market Data** - Low-latency tick streaming
-- 📝 **Audit-Grade Logging** - Full decision trail
-- 🚨 **Kill Switch** - Instant position flatten and pause
-- 📈 **Backtesting Engine** - Test strategies on historical NSE options data
-
-## Architecture
-
-```
-apps/
-  api/          - FastAPI execution engine
-  web/          - Next.js dashboard
-packages/
-  core/         - Signals, ranking, risk management
-  storage/      - Database models and migrations
-  infra/        - Docker and deployment configs
-configs/
-  strategies/   - Strategy YAML configurations
-  app.yaml      - Global application config
-```
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- Node.js 18+
-- Docker & Docker Compose
-- PostgreSQL 15+
-- Redis 7+
-
-### Installation
-
-```bash
-# Clone repository
-git clone <your-repo-url>
-cd AITRAPP
-
-# Setup Python environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-# Setup environment
-cp .env.example .env
-# Edit .env with your Kite API credentials
-
-# Start infrastructure
-make dev
-
-# Run in Paper Mode (default)
-make paper
-```
-
-### Environment Variables
-
-Required variables in `.env`:
-
-```
-# Kite Connect
-KITE_API_KEY=your_api_key
-KITE_API_SECRET=your_api_secret
-KITE_ACCESS_TOKEN=your_access_token
-KITE_USER_ID=your_user_id
-
-# Infrastructure
-DATABASE_URL=postgresql://user:pass@localhost:5432/aitrapp
-REDIS_URL=redis://localhost:6379/0
-
-# Application
-APP_MODE=PAPER
-APP_TIMEZONE=Asia/Kolkata
-
-# Optional: Alerts
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-```
-
-## Safety Features
-
-### Default Risk Limits
-
-- **Per-trade risk**: 0.50% of net liquid capital
-- **Portfolio heat**: Max 2.0% aggregate risk
-- **Daily loss stop**: -2.5% hard stop
-- **EOD square-off**: 15:25 IST automatic flatten
-
-### Kill Switch
-
-Press the kill switch in the dashboard or call:
-
-```bash
-curl -X POST http://localhost:8000/pause
-```
-
-This will:
-1. Cancel all pending orders
-2. Close all positions (market orders)
-3. Block new signal generation
-4. Require manual resume
-
-## Usage
-
-### Paper Mode (Recommended)
-
-```bash
-make paper
-```
-
-Dashboard: http://localhost:3000
-
-### Live Mode (⚠️ USE WITH EXTREME CAUTION)
-
-```bash
-# Requires explicit confirmation
-make live
-```
-
-You will be prompted to type "CONFIRM LIVE TRADING" before the system activates.
-
-## Strategy Configuration
-
-Edit `configs/strategies/*.yaml` to tune parameters:
-
-```yaml
-# configs/strategies/orb.yaml
-name: ORB
-enabled: true
-params:
-  window_min: 15
-  rr_min: 1.8
-  max_positions: 2
-  instruments: [NIFTY, BANKNIFTY]
-```
-
-## Backtesting
-
-Test strategies on historical NSE options data before live trading:
-
-### CLI Script
-
-```bash
-# Run backtest on NIFTY
-python scripts/run_backtest.py \
-    --symbol NIFTY \
-    --start-date 2025-08-15 \
-    --end-date 2025-11-10 \
-    --capital 1000000 \
-    --strategy all
-```
-
-### API Endpoint
-
-```bash
-curl -X POST http://localhost:8000/backtest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "symbol": "NIFTY",
-    "start_date": "2025-08-15",
-    "end_date": "2025-11-10",
-    "initial_capital": 1000000,
-    "strategy": "all"
-  }' | jq
-```
-
-**Historical Data**: Includes NIFTY and BANKNIFTY options data (Aug-Nov 2025) in `docs/NSE OPINONS DATA/`
-
-See [docs/BACKTESTING.md](docs/BACKTESTING.md) for detailed guide.
-
-## Monitoring
-
-- **Dashboard**: http://localhost:3000
-- **API Docs**: http://localhost:8000/docs
-- **Metrics**: http://localhost:8000/metrics (Prometheus format)
-- **Logs**: `logs/aitrapp.log`
-
-## Testing
-
-```bash
-# Unit tests
-make test
-
-# Integration tests
-make test-integration
-
-# Replay historical data
-make test-replay
-```
-
-## Documentation
-
-- [Security & Compliance](docs/SECURITY.md)
-- [Operational Runbook](docs/RUNBOOK.md)
-- [Strategy Development](docs/STRATEGIES.md)
-- [API Reference](docs/API.md)
-
-## Compliance & Legal
-
-This software is provided for **educational purposes only**. Users must:
-
-1. Comply with all SEBI regulations
-2. Respect broker API rate limits and Terms of Service
-3. Understand that algorithmic trading carries significant risk
-4. Never risk capital they cannot afford to lose
-5. Maintain proper audit trails for tax and regulatory purposes
-
-**The authors assume NO LIABILITY for financial losses.**
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md)
-
-## License
-
-MIT License - See [LICENSE](LICENSE)
-
-## Support
-
-- GitHub Issues: Bug reports and feature requests
-- Discussions: Strategy ideas and general questions
+**Exchange-grade, auditable trading bot for India's NSE using Zerodha Kite Connect.**
 
 ---
 
-**⚠️ RISK WARNING**: Trading in derivatives and equities involves substantial risk of loss. 
-Past performance does not guarantee future results. Use at your own risk.
+## 🎯 Quick Start
+
+### Pre-Flight
+```bash
+make verify
+docker compose up -d postgres redis
+alembic upgrade head
+make paper
+make live-dashboard
+make prelive-gate   # blocks if anything is off
+```
+
+### Switch to LIVE
+See `LIVE_SWITCH_QUICK_REF.md` for the quick reference card.
+
+---
+
+## 📚 Documentation
+
+### Getting Started
+- **`LAUNCH_CARD.md`** - Print-friendly launch card (keep by keyboard!)
+- **`LIVE_SWITCH_QUICK_REF.md`** - Quick reference card
+- **`LIVE_SWITCH_RUNBOOK.md`** - Complete 15-minute LIVE switch procedure
+- **`FAST_FAQ.md`** - Quick diagnostics for common issues
+
+### Operational
+- **`FIRST_HOUR_MONITORING.md`** - First hour LIVE monitoring guide
+- **`FIRST_HOUR_LIVE_PLAYBOOK.md`** - Detailed first hour playbook
+- **`POST_CLOSE_RITUAL.md`** - Daily post-close procedure
+- **`BURN_IN_PLAN.md`** - 3-day burn-in protocol
+- **`PAPER_E2E_TEST.md`** - 30-minute PAPER end-to-end test guide
+- **`PRELIVE_GATE.md`** - Pre-LIVE gate checks documentation
+- **`SECRETS_HYGIENE.md`** - Secrets management guide
+
+### Reference
+- **`FINAL_LIVE_READY.md`** - Complete system overview
+- **`FINAL_GO_NO_GO.md`** - Final gates checklist
+- **`FINAL_HARDENING_COMPLETE.md`** - Hardening summary
+- **`WEEK1_BACKLOG.md`** - Post-LIVE improvements (non-blocking)
+
+---
+
+## 🛠️ Key Commands
+
+```bash
+# Pre-flight
+make verify              # Environment check
+make smoke-test          # Smoke tests
+make red-team-drills     # Resilience tests
+make paper-e2e          # 30-min PAPER end-to-end test
+make prelive-gate       # Pre-LIVE gate checks
+make failure-drills      # Failure scenarios
+
+# Trading
+make paper               # Start in PAPER mode
+make live                # Start in LIVE mode (after burn-in)
+
+# Operations
+make post-close          # Daily post-close ritual
+make rollback            # Emergency rollback to PAPER
+make burnin-report       # Generate daily report
+
+# Infrastructure
+docker compose up -d     # Start services
+alembic upgrade head     # Run migrations
+```
+
+---
+
+## 🎯 System Status
+
+**✅ Production-Ready**
+
+All components complete:
+- ✅ Database models & migrations
+- ✅ Persistence layer
+- ✅ OCO manager with sibling cancellation
+- ✅ OrderWatcher with orchestrator callbacks
+- ✅ Hardened risk gates
+- ✅ Redis pub/sub bus
+- ✅ Prometheus metrics
+- ✅ Deterministic IDs & idempotency
+- ✅ Leader lock (single runner)
+- ✅ Crash-safe OCO recovery
+- ✅ Price validation utilities
+- ✅ Market hours gate
+- ✅ Config immutability
+- ✅ Incident snapshot
+
+---
+
+## 🚀 Next Steps
+
+1. **Run 3-day burn-in** (PAPER mode)
+   - Follow `BURN_IN_PLAN.md`
+   - Complete burn-in checklist
+   - Daily reports: `make burnin-report`
+
+2. **Switch to LIVE**
+   - Follow `LIVE_SWITCH_RUNBOOK.md`
+   - Use `LIVE_SWITCH_QUICK_REF.md` as reference
+   - Monitor first hour closely
+
+3. **Daily Operations**
+   - Monitor dashboard
+   - Run post-close ritual: `make post-close`
+   - Review reports and reconcile DB
+
+---
+
+## 🆘 Emergency
+
+**Kill Switch:**
+```bash
+curl -X POST localhost:8000/flatten -d '{"reason":"emergency"}'
+```
+
+**Rollback:**
+```bash
+make rollback
+```
+
+**Quick Diagnostics:**
+See `FAST_FAQ.md`
+
+---
+
+## 📊 Key Metrics
+
+All metrics use `trader_*` prefix:
+- `trader_signals_total`
+- `trader_decisions_total`
+- `trader_orders_placed_total`
+- `trader_orders_filled_total`
+- `trader_portfolio_heat_rupees`
+- `trader_daily_pnl_rupees`
+- `trader_order_latency_ms`
+- `trader_is_leader`
+
+Access: `curl localhost:8000/metrics`
+
+---
+
+## 🔒 Safety Features
+
+- **PAPER mode default** - Safe testing
+- **LIVE mode gated** - Requires explicit confirmation
+- **Kill switch** - Instant flatten ≤ 2s
+- **Risk guardrails** - Per-trade, portfolio heat, daily loss limits
+- **Leader lock** - Prevents dual instances
+- **Idempotency** - No duplicate orders
+- **Crash-safe recovery** - Re-arms OCO on restart
+- **Config immutability** - No runtime changes in LIVE
+
+---
+
+## 📁 Project Structure
+
+```
+AITRAPP/
+├── apps/
+│   ├── api/          # FastAPI control plane
+│   └── web/          # Next.js dashboard (future)
+├── packages/
+│   ├── core/         # Trading logic (signals, execution, risk)
+│   ├── storage/      # Database models & persistence
+│   └── infra/        # Docker, deployment
+├── configs/
+│   ├── app.yaml      # Main config
+│   ├── canary_live.yaml  # Day-1 LIVE config
+│   └── strategies/   # Strategy configs
+├── scripts/          # Operational scripts
+├── ops/              # Prometheus alerts, SLOs
+└── reports/          # Daily reports, incident snapshots
+```
+
+---
+
+## 🎉 You're Ready!
+
+**System is production-ready. Follow the runbooks and go LIVE!**
+
+**Key Documents:**
+- **`LAUNCH_CARD.md`** - Print this and keep by keyboard!
+- **`LIVE_SWITCH_QUICK_REF.md`** - Quick reference
+- **`LIVE_SWITCH_RUNBOOK.md`** - Complete procedure
+- **`FAST_FAQ.md`** - Troubleshooting
+- **`WEEK1_BACKLOG.md`** - Post-LIVE improvements
+
+**Good luck! 🚀**

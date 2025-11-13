@@ -3,13 +3,15 @@ from contextlib import contextmanager
 from typing import Generator
 
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, declarative_base
 import structlog
 
 from packages.core.config import settings
 
 logger = structlog.get_logger(__name__)
+
+# Create declarative base for models
+Base = declarative_base()
 
 # Create engine
 engine = create_engine(
@@ -21,9 +23,6 @@ engine = create_engine(
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Base class for models
-Base = declarative_base()
 
 
 def init_db() -> None:
@@ -53,6 +52,21 @@ def get_db_session() -> Generator[Session, None, None]:
         db.rollback()
         logger.error("Database session error", error=str(e))
         raise
+    finally:
+        db.close()
+
+
+def order_exists(client_order_id: str, status_in: tuple = None) -> bool:
+    """Check if an order with given client_order_id exists (for idempotency)"""
+    from packages.storage.models import Order, OrderStatusEnum
+    
+    db = SessionLocal()
+    try:
+        query = db.query(Order).filter_by(client_order_id=client_order_id)
+        if status_in:
+            status_enums = [OrderStatusEnum(s) for s in status_in]
+            query = query.filter(Order.status.in_(status_enums))
+        return query.first() is not None
     finally:
         db.close()
 

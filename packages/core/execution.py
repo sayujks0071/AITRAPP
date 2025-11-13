@@ -10,7 +10,7 @@ from uuid import uuid4
 import structlog
 from kiteconnect import KiteConnect
 
-from packages.core.config import ExecutionConfig, Settings
+from packages.core.config import ExecutionConfig, Settings, app_config
 from packages.core.models import (
     Instrument,
     Order,
@@ -21,6 +21,40 @@ from packages.core.models import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def plan_client_id(plan) -> str:
+    """
+    Deterministic id per decision plan.
+    Keep it stable across retries; trim to 24 chars for readability.
+    """
+    # Extract plan attributes (assuming plan has these attributes)
+    symbol = getattr(plan, 'symbol', getattr(plan, 'instrument', {}).get('symbol', 'UNKNOWN'))
+    side = getattr(plan, 'side', 'LONG')
+    entry = getattr(plan, 'entry', getattr(plan, 'entry_price', 0.0))
+    stop = getattr(plan, 'stop', getattr(plan, 'stop_loss', 0.0))
+    tp = getattr(plan, 'tp', getattr(plan, 'take_profit_1', 0.0))
+    qty = getattr(plan, 'qty', getattr(plan, 'quantity', 0))
+    strategy = getattr(plan, 'strategy', getattr(plan, 'strategy_name', 'UNKNOWN'))
+    config_sha = getattr(plan, 'config_sha', app_config.config_sha if hasattr(app_config, 'config_sha') else 'default')
+    
+    base = "|".join([
+        str(symbol),
+        str(side),
+        f"{round(float(entry), 2)}",
+        f"{round(float(stop), 2)}",
+        f"{round(float(tp), 2)}",
+        str(int(qty)),
+        str(strategy),
+        str(config_sha),
+    ])
+    return hashlib.sha1(base.encode()).hexdigest()[:24]
+
+
+def order_client_id(plan_cid: str, tag: str, group_id: Optional[str] = None) -> str:
+    """Generate client order ID from plan ID, tag, and optional group ID"""
+    # ENTRY | SL | TP (+ optional OCO group)
+    return f"{plan_cid}:{tag}" + (f":{group_id}" if group_id else "")
 
 
 class OrderResult(Enum):

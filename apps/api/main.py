@@ -9,6 +9,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from kiteconnect import KiteConnect
 from prometheus_client import make_asgi_app
+from fastapi.responses import PlainTextResponse, Response
+from packages.core.metrics import get_metrics, metrics_app
+from packages.core.redis_bus import RedisBus
+from packages.core.oco import OCOManager
+from packages.core.order_watcher import OrderWatcher
+from packages.core.kite_client import KiteClient
+from packages.storage.database import SessionLocal
 from pydantic import BaseModel
 
 from packages.core.config import app_config, settings
@@ -17,8 +24,10 @@ from packages.core.exits import ExitManager, ExitSignal
 from packages.core.instruments import InstrumentManager
 from packages.core.market_data import MarketDataStream
 from packages.core.models import Position, PositionStatus, SystemState
+from packages.core.orchestrator import TradingOrchestrator
 from packages.core.risk import PortfolioRisk, RiskManager
-from packages.core.strategies import ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy
+from packages.core.ranker import SignalRanker
+from packages.core.strategies import ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy, Strategy
 
 # Configure structured logging
 structlog.configure(
@@ -40,9 +49,12 @@ class AppState:
     risk_manager: RiskManager = None
     exit_manager: ExitManager = None
     execution_engine: ExecutionEngine = None
+    ranker: SignalRanker = None
+    orchestrator: TradingOrchestrator = None
     
     # Strategies
     strategies: Dict = {}
+    strategy_list: List[Strategy] = []
     
     # Positions
     positions: List[Position] = []
@@ -101,41 +113,143 @@ async def lifespan(app: FastAPI):
     logger.info(f"Universe: {len(universe_tokens)} instruments")
     
     # Initialize strategies
+    strategy_list = []
     for strategy_config in app_config.get_enabled_strategies():
+        strategy = None
         if strategy_config.name == "ORB":
-            app_state.strategies["ORB"] = ORBStrategy(
-                strategy_config.name,
-                strategy_config.params
-            )
+            strategy = ORBStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["ORB"] = strategy
         elif strategy_config.name == "TrendPullback":
-            app_state.strategies["TrendPullback"] = TrendPullbackStrategy(
-                strategy_config.name,
-                strategy_config.params
-            )
+            strategy = TrendPullbackStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["TrendPullback"] = strategy
         elif strategy_config.name == "OptionsRanker":
-            app_state.strategies["OptionsRanker"] = OptionsRankerStrategy(
-                strategy_config.name,
-                strategy_config.params
-            )
-    
-    logger.info(f"Loaded {len(app_state.strategies)} strategies")
-    
-    # Start market data stream
-    if settings.app_mode.value == "PAPER" or True:  # Always start in paper/dev
-        app_state.market_data_stream.initialize()
-        app_state.market_data_stream.start()
+            strategy = OptionsRankerStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["OptionsRanker"] = strategy
         
-        # Subscribe to universe
-        if universe_tokens:
-            app_state.market_data_stream.subscribe(universe_tokens[:50])  # Limit for demo
+        if strategy:
+            strategy_list.append(strategy)
+    
+    app_state.strategy_list = strategy_list
+    logger.info(f"Loaded {len(strategy_list)} strategies")
+    
+    # Initialize ranker
+    app_state.ranker = SignalRanker(app_config.ranking)
+    
+    # Initialize market data stream
+    app_state.market_data_stream.initialize()
+    
+    # Initialize Redis bus
+    redis_bus = RedisBus()
+    await redis_bus.connect()
+    logger.info("Redis bus connected")
+    
+    # Initialize Kite client wrapper (if needed)
+    kite_client = KiteClient(app_state.kite)
+    
+    # Initialize OCO manager
+    oco_manager = OCOManager(kite_client)
+    logger.info("OCO manager initialized")
+    
+    # Initialize orchestrator with Redis and OCO
+    app_state.orchestrator = TradingOrchestrator(
+        kite=app_state.kite,
+        strategies=strategy_list,
+        instrument_manager=app_state.instrument_manager,
+        market_data_stream=app_state.market_data_stream,
+        risk_manager=app_state.risk_manager,
+        execution_engine=app_state.execution_engine,
+        exit_manager=app_state.exit_manager,
+        ranker=app_state.ranker,
+        redis_bus=redis_bus,
+        oco_manager=oco_manager
+    )
+    
+    # Initialize OrderWatcher
+    order_watcher = OrderWatcher(
+        kite_client=kite_client,
+        orchestrator=app_state.orchestrator,
+        oco_manager=oco_manager,
+        redis_bus=redis_bus,
+        metrics=None  # Can pass metrics if needed
+    )
+    
+    # Start heartbeat updater
+    from packages.core.heartbeats import run_heartbeat_updater
+    hb_stop = asyncio.Event()
+    hb_task = asyncio.create_task(run_heartbeat_updater(1.0, hb_stop))
+    app_state.hb_stop = hb_stop
+    app_state.hb_task = hb_task
+    logger.info("Heartbeat updater started")
+    
+    # Start paper tick simulator if in PAPER mode and market data not connected
+    if settings.app_mode.value == "PAPER" and not app_state.market_data_stream.is_connected:
+        async def run_paper_tick_simulator():
+            """Simulate market data ticks in PAPER mode"""
+            from packages.core.heartbeats import touch_marketdata
+            while not hb_stop.is_set():
+                touch_marketdata()
+                await asyncio.sleep(0.5)  # Simulate tick every 500ms
+        
+        paper_tick_task = asyncio.create_task(run_paper_tick_simulator())
+        app_state.paper_tick_task = paper_tick_task
+        logger.info("Paper tick simulator started")
+    
+    # Start background tasks
+    logger.info("Starting background tasks...")
+    tasks = [
+        asyncio.create_task(app_state.orchestrator.start()),
+        asyncio.create_task(order_watcher.start())
+    ]
+    app_state.tasks = tasks
     
     logger.info("AITRAPP started successfully")
     
     yield
     
-    # Shutdown
+    # Graceful shutdown
     logger.info("Shutting down AITRAPP")
     
+    # Stop heartbeat updater
+    if hasattr(app_state, 'hb_stop') and app_state.hb_stop:
+        app_state.hb_stop.set()
+    if hasattr(app_state, 'hb_task') and app_state.hb_task:
+        try:
+            await app_state.hb_task
+        except Exception as e:
+            logger.warning(f"Error stopping heartbeat updater: {e}")
+    
+    # Stop paper tick simulator
+    if hasattr(app_state, 'paper_tick_task') and app_state.paper_tick_task:
+        try:
+            app_state.paper_tick_task.cancel()
+            await app_state.paper_tick_task
+        except Exception as e:
+            logger.warning(f"Error stopping paper tick simulator: {e}")
+    
+    # Pause orchestrator
+    if app_state.orchestrator:
+        await app_state.orchestrator.pause()
+        try:
+            await app_state.orchestrator.flatten_all()
+        except Exception as e:
+            logger.error("Error during flatten", error=str(e))
+    
+    # Stop OrderWatcher
+    if order_watcher:
+        order_watcher.stop()
+    
+    # Cancel all tasks
+    for task in tasks:
+        task.cancel()
+    
+    # Wait for tasks to complete
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Disconnect Redis
+    if redis_bus:
+        await redis_bus.disconnect()
+    
+    # Stop market data stream
     if app_state.market_data_stream:
         app_state.market_data_stream.stop()
     
@@ -163,6 +277,11 @@ app.add_middleware(
 if settings.enable_metrics:
     metrics_app = make_asgi_app()
     app.mount("/metrics", metrics_app)
+
+# Include debug routers
+from apps.api import debug, debug_supervisor
+app.include_router(debug.router, tags=["debug"])
+app.include_router(debug_supervisor.router, tags=["debug"])
 
 
 # ===== API Models =====
@@ -205,6 +324,65 @@ async def health_check():
         "is_paused": app_state.is_paused,
         "timestamp": datetime.now().isoformat()
     }
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness endpoint - returns 200 only when leader lock is held and all heartbeats are fresh"""
+    import os
+    from packages.core.metrics import (
+        is_leader,
+        marketdata_heartbeat_seconds,
+        order_stream_heartbeat_seconds,
+        scan_heartbeat_seconds,
+    )
+    
+    HEARTBEAT_MAX = float(os.getenv("HEARTBEAT_MAX", "5"))
+    
+    # Prometheus client stores values on samples()[0].value
+    def get_value(gauge):
+        """Get current value from Prometheus gauge"""
+        samples = list(gauge._samples())
+        if samples:
+            return samples[0].value
+        return 999.0  # Default to stale if no samples
+    
+    try:
+        leader_val = get_value(is_leader)
+        md_heartbeat = get_value(marketdata_heartbeat_seconds)
+        order_heartbeat = get_value(order_stream_heartbeat_seconds)
+        scan_heartbeat = get_value(scan_heartbeat_seconds)
+        
+        ok = (
+            leader_val == 1
+            and md_heartbeat < HEARTBEAT_MAX
+            and order_heartbeat < HEARTBEAT_MAX
+            and scan_heartbeat < HEARTBEAT_MAX
+        )
+        
+        if not ok:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "not_ready",
+                    "leader": leader_val,
+                    "marketdata_heartbeat": md_heartbeat,
+                    "order_stream_heartbeat": order_heartbeat,
+                    "scan_heartbeat": scan_heartbeat,
+                    "heartbeat_max": HEARTBEAT_MAX
+                }
+            )
+        
+        return {
+            "status": "ready",
+            "leader": leader_val,
+            "marketdata_heartbeat": md_heartbeat,
+            "order_stream_heartbeat": order_heartbeat,
+            "scan_heartbeat": scan_heartbeat
+        }
+    except Exception as e:
+        logger.error(f"Readiness check failed: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Readiness check error: {str(e)}")
 
 
 @app.post("/mode")
@@ -252,7 +430,9 @@ async def pause_trading():
     PAUSE trading: Stop new signals and cancel pending orders.
     Does NOT close existing positions (use /flatten for that).
     """
-    app_state.is_paused = True
+    if app_state.orchestrator:
+        await app_state.orchestrator.pause()
+        app_state.is_paused = True
     
     logger.warning("🛑 TRADING PAUSED")
     
@@ -266,7 +446,9 @@ async def pause_trading():
 @app.post("/resume")
 async def resume_trading():
     """Resume trading after pause"""
-    app_state.is_paused = False
+    if app_state.orchestrator:
+        await app_state.orchestrator.resume()
+        app_state.is_paused = False
     
     logger.info("▶️  TRADING RESUMED")
     
@@ -277,41 +459,30 @@ async def resume_trading():
 
 
 @app.post("/flatten")
-async def flatten_all():
+async def flatten_all(reason: str = "manual"):
     """
     KILL SWITCH: Close all positions immediately with market orders.
     Also pauses trading.
+    
+    Args:
+        reason: Reason for kill switch (manual|eod|risk)
     """
-    app_state.is_paused = True
-    
-    logger.critical("🚨 KILL SWITCH ACTIVATED - FLATTENING ALL POSITIONS")
-    
-    closed_count = 0
-    errors = []
-    
-    for position in app_state.positions:
-        if position.is_open:
-            try:
-                order = await app_state.execution_engine.close_position(
-                    position,
-                    reason="KILL_SWITCH"
-                )
-                if order:
-                    position.status = PositionStatus.CLOSED
-                    closed_count += 1
-            except Exception as e:
-                errors.append({
-                    "position_id": position.position_id,
-                    "error": str(e)
-                })
-                logger.error(f"Failed to close position {position.position_id}: {e}")
-    
-    return {
-        "status": "flattened",
-        "closed_positions": closed_count,
-        "errors": errors,
-        "timestamp": datetime.now().isoformat()
-    }
+    try:
+        if app_state.orchestrator:
+            await app_state.orchestrator.flatten_all(reason=reason)
+            app_state.is_paused = True
+        
+        logger.critical("🚨 KILL SWITCH ACTIVATED - FLATTENING ALL POSITIONS", reason=reason)
+        
+        return {
+            "status": "flattened",
+            "timestamp": datetime.now().isoformat(),
+            "reason": reason,
+            "message": "All positions closed. Trading paused."
+        }
+    except Exception as e:
+        logger.error(f"Error in flatten: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Flatten failed: {str(e)}")
 
 
 # ===== Data Endpoints =====
@@ -319,6 +490,8 @@ async def flatten_all():
 @app.get("/positions")
 async def get_positions():
     """Get all open positions"""
+    positions_list = app_state.orchestrator.positions if app_state.orchestrator else app_state.positions
+    
     positions = [
         PositionResponse(
             position_id=pos.position_id,
@@ -330,7 +503,7 @@ async def get_positions():
             unrealized_pnl=pos.unrealized_pnl,
             pnl_pct=pos.pnl_pct
         )
-        for pos in app_state.positions if pos.is_open
+        for pos in positions_list if pos.is_open
     ]
     
     return {
@@ -375,20 +548,38 @@ async def close_position(position_id: str):
 @app.get("/state")
 async def get_system_state():
     """Get current system state"""
-    win_rate = 0.0
-    if app_state.trades_today > 0:
-        win_rate = (app_state.wins_today / app_state.trades_today) * 100
-    
-    return SystemStateResponse(
-        timestamp=datetime.now().isoformat(),
-        mode=settings.app_mode.value,
-        is_paused=app_state.is_paused,
-        is_market_open=app_state.is_market_open,
-        positions_count=len([p for p in app_state.positions if p.is_open]),
-        trades_today=app_state.trades_today,
-        win_rate=win_rate,
-        daily_pnl=app_state.realized_pnl_today
-    )
+    try:
+        if app_state.orchestrator:
+            system_state = app_state.orchestrator.get_system_state()
+            return SystemStateResponse(
+                timestamp=system_state.timestamp.isoformat(),
+                mode=system_state.mode,
+                is_paused=system_state.is_paused,
+                is_market_open=system_state.is_market_open,
+                positions_count=system_state.portfolio.total_positions,
+                trades_today=system_state.trades_today,
+                win_rate=system_state.win_rate,
+                daily_pnl=system_state.portfolio.daily_pnl
+            )
+        else:
+            # Fallback if orchestrator not initialized
+            win_rate = 0.0
+            if app_state.trades_today > 0:
+                win_rate = (app_state.wins_today / app_state.trades_today) * 100
+            
+            return SystemStateResponse(
+                timestamp=datetime.now().isoformat(),
+                mode=settings.app_mode.value,
+                is_paused=app_state.is_paused,
+                is_market_open=app_state.is_market_open,
+                positions_count=len([p for p in app_state.positions if p.is_open]),
+                trades_today=app_state.trades_today,
+                win_rate=win_rate,
+                daily_pnl=app_state.realized_pnl_today
+            )
+    except Exception as e:
+        logger.error(f"Error getting system state: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @app.get("/orders")
@@ -545,6 +736,48 @@ async def run_backtest(request: BacktestRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint"""
+    from packages.core.metrics import get_metrics
+    return Response(content=get_metrics(), media_type="text/plain")
+
+
+@app.get("/risk")
+async def get_risk_state():
+    """Get current risk state"""
+    try:
+        if not app_state.orchestrator or not app_state.risk_manager:
+            raise HTTPException(status_code=503, detail="Risk manager not initialized")
+        
+        # Get portfolio risk
+        portfolio_risk = app_state.orchestrator._get_portfolio_risk()
+        
+        return {
+            "net_liquid": portfolio_risk.net_liquid,
+            "used_margin": portfolio_risk.used_margin,
+            "available_margin": portfolio_risk.available_margin,
+            "total_risk_amount": portfolio_risk.total_risk_amount,
+            "portfolio_heat_pct": portfolio_risk.portfolio_heat_pct,
+            "unrealized_pnl": portfolio_risk.unrealized_pnl,
+            "realized_pnl_today": portfolio_risk.realized_pnl_today,
+            "daily_pnl": portfolio_risk.daily_pnl,
+            "daily_pnl_pct": portfolio_risk.daily_pnl_pct,
+            "daily_loss_limit": portfolio_risk.daily_loss_limit,
+            "max_portfolio_heat": portfolio_risk.max_portfolio_heat,
+            "is_daily_loss_breached": portfolio_risk.is_daily_loss_breached,
+            "is_heat_limit_breached": portfolio_risk.is_heat_limit_breached,
+            "can_take_new_position": portfolio_risk.can_take_new_position,
+            "open_positions_count": len(portfolio_risk.open_positions),
+            "timestamp": datetime.now().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting risk state: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -560,7 +793,7 @@ if __name__ == "__main__":
     import uvicorn
     
     uvicorn.run(
-        "main:app",
+        "apps.api.main:app",
         host=settings.api_host,
         port=settings.api_port,
         reload=settings.reload,

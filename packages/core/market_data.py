@@ -12,6 +12,7 @@ from kiteconnect import KiteTicker
 from packages.core.config import Settings
 from packages.core.models import Bar, Tick
 from packages.core.indicators import IndicatorCalculator
+from packages.core.kite_ws import SafeKiteTicker
 
 logger = structlog.get_logger(__name__)
 
@@ -121,6 +122,7 @@ class MarketDataStream:
         
         # Kite WebSocket client
         self.kws: Optional[KiteTicker] = None
+        self.safe_kws: Optional[SafeKiteTicker] = None
         
         # Aggregators per token per window
         self.aggregators: Dict[int, Dict[int, TickAggregator]] = defaultdict(dict)
@@ -146,6 +148,9 @@ class MarketDataStream:
             self.settings.kite_access_token
         )
         
+        # Wrap in SafeKiteTicker for graceful shutdown
+        self.safe_kws = SafeKiteTicker(self.kws)
+        
         # Assign callbacks
         self.kws.on_connect = self._on_connect
         self.kws.on_ticks = self._on_ticks
@@ -166,6 +171,8 @@ class MarketDataStream:
     
     def _on_ticks(self, ws: Any, ticks: List[Dict]) -> None:
         """Callback when ticks are received"""
+        from packages.core.heartbeats import touch_marketdata
+        touch_marketdata()
         try:
             for raw_tick in ticks:
                 # Parse tick
@@ -359,7 +366,22 @@ class MarketDataStream:
     
     def stop(self) -> None:
         """Stop WebSocket connection"""
-        if self.kws:
+        if self.safe_kws:
             logger.info("Stopping WebSocket connection")
-            self.kws.close()
+            self.safe_kws.stop()
             self.is_connected = False
+            self.kws = None
+            self.safe_kws = None
+        elif self.kws:
+            # Fallback if safe_kws not initialized
+            logger.info("Stopping WebSocket connection (fallback)")
+            try:
+                if hasattr(self.kws, 'close'):
+                    self.kws.close()
+                elif hasattr(self.kws, 'stop'):
+                    self.kws.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping WebSocket: {e}")
+            finally:
+                self.is_connected = False
+                self.kws = None
