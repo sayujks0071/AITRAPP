@@ -59,7 +59,7 @@ class PortfolioRisk:
     @property
     def is_heat_limit_breached(self) -> bool:
         """Check if portfolio heat limit is breached"""
-        return self.portfolio_heat_pct >= self.max_portfolio_heat
+        return self.total_risk_amount >= self.max_portfolio_heat
     
     @property
     def can_take_new_position(self) -> bool:
