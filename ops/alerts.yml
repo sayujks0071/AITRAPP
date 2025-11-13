@@ -36,6 +36,22 @@ groups:
       summary: "Leader lock flapping in the last 15m"
       description: "{{ $value }} leader changes detected. Check Redis connectivity and network stability."
 
+  - alert: PreLiveDay2Fail
+    expr: trader_prelive_day2_pass == 0
+    for: 5m
+    labels: { severity: warn }
+    annotations:
+      summary: "Day-2 scorer JSON is not PASS"
+      description: "Day-2 JSON is missing, stale (>36h), or failed validation. Run 'make score-day2' to refresh. Age: {{ $value }}s"
+    
+  - alert: PreLiveDay2Stale
+    expr: trader_prelive_day2_age_seconds > 129600
+    for: 0m
+    labels: { severity: warn }
+    annotations:
+      summary: "Day-2 scorer JSON is stale (>36h)"
+      description: "Latest Day-2 JSON is {{ $value | humanizeDuration }} old. Run 'make score-day2' to refresh."
+
 groups:
   - name: trader
     interval: 30s

@@ -12,25 +12,9 @@ concurrency:
 jobs:
   run-paper-e2e:
     timeout-minutes: 20
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
+    labels: [paper-runner]
     
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: trader
-          POSTGRES_PASSWORD: trader
-          POSTGRES_DB: aitrapp
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd="pg_isready -U trader -d aitrapp"
-          --health-interval=5s --health-timeout=5s --health-retries=10
-      
-      redis:
-        image: redis:7
-        ports: ["6379:6379"]
-        options: --health-cmd="redis-cli ping || exit 1" --health-interval=5s --health-retries=10
-
     env:
       DATABASE_URL: postgresql+psycopg2://trader:trader@localhost:5432/aitrapp
       REDIS_URL: redis://localhost:6379/0
@@ -44,6 +28,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Start services (Postgres + Redis)
+        run: |
+          docker compose up -d postgres redis
+          # Wait for services to be healthy
+          for i in {1..30}; do
+            docker compose exec -T postgres pg_isready -U trader -d aitrapp && \
+            docker compose exec -T redis redis-cli ping && break || sleep 2
+          done
 
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }

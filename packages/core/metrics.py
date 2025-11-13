@@ -140,6 +140,19 @@ leader_changes_total = Counter(
     registry=REGISTRY
 )
 
+# Pre-live gate observability
+prelive_day2_pass = Gauge(
+    'trader_prelive_day2_pass',
+    'Day-2 scorer PASS (0/1)',
+    registry=REGISTRY
+)
+
+prelive_day2_age = Gauge(
+    'trader_prelive_day2_age_seconds',
+    'Age of latest Day-2 JSON in seconds',
+    registry=REGISTRY
+)
+
 # Histograms
 tick_to_decision_ms = Histogram(
     'trader_tick_to_decision_ms',

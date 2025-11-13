@@ -24,6 +24,14 @@ tar -czf "$REPORTS_DIR/logs_and_report_$DATE.tar.gz" \
 echo "   ✅ Archive created: $REPORTS_DIR/logs_and_report_$DATE.tar.gz"
 echo ""
 
+# 2.5. Latency summary (if API is running)
+if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+    echo "2.5️⃣ Printing latency histogram..."
+    bash scripts/print_latency_histogram.sh > "$REPORTS_DIR/latency_summary_$DATE.txt" 2>&1 || true
+    echo "   ✅ Latency summary saved: $REPORTS_DIR/latency_summary_$DATE.txt"
+fi
+echo ""
+
 # 3. Record config SHA, git SHA, and metrics
 echo "3️⃣ Recording system state..."
 {

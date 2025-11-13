@@ -1,32 +1,33 @@
 #!/usr/bin/env bash
-# One-shot Day-1 PASS scorer
-# Checks readiness, heartbeats, and database integrity
-
+# Day-2 PASS Scorer (includes leader flaps check)
 set -euo pipefail
 
 # Enforce timezone consistently
 export TZ="${TZ:-Asia/Kolkata}"
 
 API="${API:-http://localhost:8000}"
+DATABASE_URL="${DATABASE_URL:-postgresql+psycopg2://trader:trader@localhost:5432/aitrapp}"
 HEARTBEAT_MAX="${HEARTBEAT_MAX:-5}"
+LEADER_FLAPS_MAX="${LEADER_FLAPS_MAX:-2}"  # Max leader changes in session
+
 ok=1
 
-echo "📊 Day-1 PASS Scorer"
+echo "📊 Day-2 PASS Scorer"
 echo "===================="
 echo ""
 
-# 1. Check readiness
-echo "1️⃣  Checking /ready..."
-if curl -sf "$API/ready" >/dev/null 2>&1; then
+# 1. Check /ready endpoint
+echo "1️⃣  Checking /ready endpoint..."
+if curl -sf "$API/ready" >/dev/null; then
     echo "   ✅ /ready returns 200"
 else
-    echo "   ❌ /ready not ready (503)"
+    echo "   ❌ /ready returns 503 (Not Ready)"
     ok=0
 fi
 echo ""
 
 # 2. Check heartbeats
-echo "2️⃣  Checking heartbeats..."
+echo "2️⃣  Checking heartbeats (< ${HEARTBEAT_MAX}s)..."
 MD_HB=$(curl -s "$API/metrics" 2>/dev/null | awk '/^trader_marketdata_heartbeat_seconds[^_]/ {print $2; exit}' || echo "999")
 ORDER_HB=$(curl -s "$API/metrics" 2>/dev/null | awk '/^trader_order_stream_heartbeat_seconds[^_]/ {print $2; exit}' || echo "999")
 SCAN_HB=$(curl -s "$API/metrics" 2>/dev/null | awk '/^trader_scan_heartbeat_seconds[^_]/ {print $2; exit}' || echo "999")
@@ -34,7 +35,7 @@ SCAN_HB=$(curl -s "$API/metrics" 2>/dev/null | awk '/^trader_scan_heartbeat_seco
 BAD_HB=0
 curl -s "$API/metrics" 2>/dev/null | awk -v max="$HEARTBEAT_MAX" '/^trader_(marketdata|order_stream|scan)_heartbeat_seconds[^_]/ {
     if ($2 >= max) {
-        print "   ❌ " $1 " = " $2 "s (>= " max "s)"
+        print "   ❌ " $1 " = " $2 "s (stale)"
         bad=1
     } else {
         print "   ✅ " $1 " = " $2 "s"
@@ -58,54 +59,37 @@ else
 fi
 echo ""
 
-# 4. Check for duplicates/orphans
-echo "4️⃣  Checking database integrity..."
-if [ -z "${DATABASE_URL:-}" ]; then
-    echo "   ⚠️  DATABASE_URL not set, skipping DB check"
+# 4. Check leader flaps (Day-2 specific)
+echo "4️⃣  Checking leader flaps (< ${LEADER_FLAPS_MAX} changes)..."
+LEADER_CHANGES=$(curl -s "$API/metrics" 2>/dev/null | awk '/^trader_leader_changes_total/ {print $2; exit}' || echo "0")
+LEADER_CHANGES_INT=${LEADER_CHANGES%.*}
+
+if [ "$LEADER_CHANGES_INT" -le "$LEADER_FLAPS_MAX" ]; then
+    echo "   ✅ trader_leader_changes_total = ${LEADER_CHANGES} (≤ ${LEADER_FLAPS_MAX})"
 else
+    echo "   ❌ trader_leader_changes_total = ${LEADER_CHANGES} (> ${LEADER_FLAPS_MAX})"
+    ok=0
+fi
+echo ""
+
+# 5. Check DB reconciliation
+echo "5️⃣  Checking database integrity..."
+if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
     DB_CONN="${DATABASE_URL#postgresql+psycopg2://}"
+    RECONCILE_OUTPUT=$(psql "$DB_CONN" -tAc "\i scripts/reconcile_db.sql" 2>/dev/null)
+    DUPS=$(echo "$RECONCILE_OUTPUT" | grep 'duplicates' | awk '{print $NF}' || echo "0")
+    ORPHANS=$(echo "$RECONCILE_OUTPUT" | grep 'orphans' | awk '{print $NF}' || echo "0")
     
-    # Check duplicates
-    DUPES=$(psql "$DB_CONN" -tAc "
-        SELECT COUNT(*) 
-        FROM (
-            SELECT client_order_id
-            FROM orders
-            WHERE client_order_id IS NOT NULL
-            GROUP BY client_order_id
-            HAVING COUNT(*) > 1
-        ) dupes;
-    " 2>/dev/null || echo "0")
-    
-    # Check orphans
-    ORPHANS=$(psql "$DB_CONN" -tAc "
-        SELECT COUNT(*)
-        FROM orders o
-        WHERE o.tag IN ('STOP', 'TP1', 'TP2')
-          AND o.parent_group IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 
-              FROM orders parent 
-              WHERE parent.parent_group = o.parent_group 
-                AND parent.tag = 'ENTRY'
-          );
-    " 2>/dev/null || echo "0")
-    
-    TOTAL_ISSUES=$((DUPES + ORPHANS))
-    
-    if [ "$DUPES" -gt 0 ]; then
-        echo "   ❌ Found $DUPES duplicate client_order_ids"
-        ok=0
+    if [[ "$DUPS" -eq 0 ]] && [[ "$ORPHANS" -eq 0 ]]; then
+        echo "   ✅ DB Reconcile: 0 duplicates, 0 orphans"
     else
-        echo "   ✅ No duplicate client_order_ids"
-    fi
-    
-    if [ "$ORPHANS" -gt 0 ]; then
-        echo "   ❌ Found $ORPHANS orphan OCO children"
+        echo "   ❌ DB Reconcile: Found ${DUPS} duplicates, ${ORPHANS} orphans"
+        echo "$RECONCILE_OUTPUT"
         ok=0
-    else
-        echo "   ✅ No orphan OCO children"
     fi
+else
+    echo "   ⚠️  psql not found or DATABASE_URL not set. Skipping DB reconcile."
+    # Not failing the test if psql is not available, but warning
 fi
 echo ""
 
@@ -144,7 +128,7 @@ if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
     " 2>/dev/null || echo "0")
 fi
 
-# Output JSON summary (auto-export) with completeness fields
+# Output JSON summary with completeness fields
 mkdir -p reports/burnin
 TIMESTAMP=$(date -Is)
 JSON_OUTPUT=$(jq -n \
@@ -153,6 +137,7 @@ JSON_OUTPUT=$(jq -n \
   --arg md_hb "$MD_HB" \
   --arg order_hb "$ORDER_HB" \
   --arg scan_hb "$SCAN_HB" \
+  --arg leader_changes "${LEADER_CHANGES:-0}" \
   --arg config_sha "$CONFIG_SHA" \
   --arg git_head "$GIT_HEAD" \
   --arg flatten_ms "${FLATTEN_MS:-0}" \
@@ -170,16 +155,17 @@ JSON_OUTPUT=$(jq -n \
       orders: ($order_hb | tonumber),
       scan: ($scan_hb | tonumber)
     },
+    leader_changes: ($leader_changes | tonumber),
     flatten_ms: ($flatten_ms | tonumber),
     duplicates: ($duplicates | tonumber),
     orphans: ($orphans | tonumber)
-  }' 2>/dev/null || echo '{"status":"ERROR","timestamp":"'$TIMESTAMP'"}')
+  }')
 
 # Atomic write: temp file + atomic move (avoid partial reads)
 mkdir -p reports/burnin
 TODAY=$(date +%F)
-OUT="reports/burnin/day1_${TODAY}.json"
-TMP="$(mktemp "reports/burnin/.day1_${TODAY}.json.XXXX" 2>/dev/null || echo "reports/burnin/.day1_${TODAY}.json.tmp")"
+OUT="reports/burnin/day2_${TODAY}.json"
+TMP="$(mktemp "reports/burnin/.day2_${TODAY}.json.XXXX" 2>/dev/null || echo "reports/burnin/.day2_${TODAY}.json.tmp")"
 printf "%s" "$JSON_OUTPUT" > "${TMP}"
 # fsync to reduce risk of power loss/partial write
 if command -v sync >/dev/null 2>&1; then sync; fi
@@ -187,20 +173,19 @@ mv -f "${TMP}" "${OUT}"
 echo "wrote ${OUT}"
 echo ""
 
-# Final verdict
-echo "📊 Result:"
-echo "==========="
-if [ $ok -eq 1 ]; then
-    echo "✅ DAY-1 PASS"
+echo "=================================="
+if [[ $ok -eq 1 ]]; then
+    echo "✅ DAY-2 PASS"
     echo ""
     echo "All checks passed:"
     echo "  - /ready = 200"
-    echo "  - All heartbeats < 5s"
+    echo "  - All heartbeats < ${HEARTBEAT_MAX}s"
     echo "  - Leader lock = 1"
+    echo "  - Leader changes ≤ ${LEADER_FLAPS_MAX}"
     echo "  - No duplicates/orphans"
     exit 0
 else
-    echo "❌ DAY-1 FAIL"
+    echo "❌ DAY-2 FAIL"
     echo ""
     echo "Some checks failed. Review output above."
     exit 1

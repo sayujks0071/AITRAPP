@@ -148,6 +148,7 @@ execution:
   ioc_for_exits: true
   max_order_retries: 3
   retry_backoff_ms: 500
+  dry_run: false  # Set to true to generate signals but skip order placement (useful for testing ranking/signals)
 
 # Alerts Configuration
 alerts:

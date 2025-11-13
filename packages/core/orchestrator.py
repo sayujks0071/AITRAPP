@@ -775,8 +775,16 @@ class TradingOrchestrator:
             
             record_decision_approved(signal.strategy_name, signal.instrument.symbol)
             
-            # Execute signal with decision context
-            await self._execute_signal(signal, risk_check.position_size, decision_model)
+            # Execute signal with decision context (skip if dry_run mode)
+            if app_config.execution.dry_run:
+                logger.info(
+                    "DRY_RUN: Signal approved but not executing",
+                    strategy=signal.strategy_name,
+                    instrument=signal.instrument.tradingsymbol,
+                    position_size=risk_check.position_size
+                )
+            else:
+                await self._execute_signal(signal, risk_check.position_size, decision_model)
     
     async def _execute_signal(self, signal: Signal, quantity: int, decision_model) -> None:
         """Execute a trading signal with persistence"""

@@ -8,7 +8,8 @@ on:
 jobs:
   run-prelive-gate:
     timeout-minutes: 5
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
+    labels: [paper-runner]
     
     env:
       API: http://localhost:8000

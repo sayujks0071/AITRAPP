@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     # Application
     app_mode: AppMode = Field(default=AppMode.PAPER, alias="APP_MODE")
     app_timezone: str = Field(default="Asia/Kolkata", alias="APP_TIMEZONE")
+    
+    # SEBI/NSE Compliance (Feb 2025)
+    compliance_sebi_2025: bool = Field(default=False, alias="COMPLIANCE_SEBI_2025")
+    exchange_algo_id: Optional[str] = Field(default=None, alias="EXCHANGE_ALGO_ID")
+    whitelisted_clients: str = Field(default="", alias="WHITELISTED_CLIENTS")  # Comma-separated client IDs
+    oauth_required: bool = Field(default=True, alias="OAUTH_REQUIRED")
+    two_fa_required: bool = Field(default=True, alias="TWO_FA_REQUIRED")
+    require_static_ip: bool = Field(default=False, alias="REQUIRE_STATIC_IP")
+    expected_egress_ip: Optional[str] = Field(default=None, alias="EXPECTED_EGRESS_IP")
+    force_daily_logout_iso: str = Field(default="03:30", alias="FORCE_DAILY_LOGOUT_ISO")  # IST time
+    audit_retention_years: int = Field(default=5, alias="AUDIT_RETENTION_YEARS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     
     # Database

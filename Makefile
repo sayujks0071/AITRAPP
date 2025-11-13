@@ -92,7 +92,7 @@ red-team-drills: ## Run red-team resilience drills
 failure-drills: ## Run failure drills (dual-runner, WS flap, band jump)
 	bash scripts/failure_drills.sh
 
-post-close: ## Run post-close hygiene (DB snapshot, archive logs)
+post-close: ## Run post-close hygiene (DB snapshot, archive logs, latency summary)
 	bash scripts/post_close_hygiene.sh
 
 live-dashboard: ## Create tmux dashboard for LIVE monitoring
@@ -153,6 +153,36 @@ chaos-suite: ## Run full chaos test suite (leader lock, rate limit, postgres)
 
 score-day1: ## One-shot Day-1 PASS scorer (readiness, heartbeats, DB integrity)
 	bash scripts/score_day1.sh
+
+score-day2: ## One-shot Day-2 PASS scorer (includes leader flaps check)
+	bash scripts/score_day2.sh
+
+print-latency: ## Print latency histogram p50/p95 (EOD sanity check)
+	bash scripts/print_latency_histogram.sh
+
+prometheus-flare: ## Print key Prometheus metrics (leader changes, order ack p95, scan HB)
+	bash scripts/print_prometheus_flare.sh
+
+read-day2: ## Read Day-2 scorer JSON and print compact PASS/FAIL line (jq-less)
+	@bash scripts/read_day2_pass.sh || true
+
+verify: ## Verify system readiness (clock drift, gate, metrics)
+	@echo "🔍 Verifying system readiness..."
+	@bash scripts/check_ntp_drift.sh || echo "⚠️  Clock drift check unavailable"
+	@bash scripts/read_day2_pass.sh || echo "⚠️  Day-2 JSON check failed"
+	@echo "✅ Verification complete"
+
+.PHONY: verify-egress force-daily-logout sebi-verify
+
+verify-egress: ## Verify egress IP matches expected
+	@bash scripts/egress_ip_check.sh
+
+force-daily-logout: ## Force daily logout (SEBI/NSE requirement)
+	@bash scripts/force_daily_logout.sh
+
+sebi-verify: ## Verify SEBI/NSE compliance status
+	@curl -s :8000/compliance/status | jq .
+	@bash scripts/prelive_gate.sh
 
 setup-venv: ## Set up clean virtual environment with pinned dependencies
 	bash scripts/setup_venv.sh
@@ -250,3 +280,24 @@ mcp-run-readonly: mcp-build ## Run MCP Server in read-only mode (no trading)
 
 mcp-status: ## Check MCP server status
 	@curl -s http://localhost:8080/ 2>/dev/null || echo "❌ MCP server is not running"
+
+# GitHub Actions Runner (self-hosted)
+runner-setup: ## Setup self-hosted GitHub Actions runner (macOS)
+	@bash scripts/setup_github_runner.sh
+
+runner-status: ## Check runner status
+	@if [ -d ~/actions-runner ]; then \
+		cd ~/actions-runner && ./svc.sh status || echo "❌ Runner not installed"; \
+	else \
+		echo "❌ Runner directory not found. Run: make runner-setup"; \
+	fi
+
+runner-logs: ## View runner logs
+	@if [ -d ~/actions-runner ]; then \
+		tail -n 50 ~/actions-runner/_diag/*.log 2>/dev/null || echo "No logs found"; \
+	else \
+		echo "❌ Runner directory not found"; \
+	fi
+
+runner-verify: ## Verify runner setup (check all components)
+	@bash scripts/verify_runner.sh

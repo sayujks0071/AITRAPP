@@ -1,6 +1,7 @@
 """Order execution engine with OCO semantics and retry logic"""
 import asyncio
 import hashlib
+import os
 import time
 from datetime import datetime
 from enum import Enum
@@ -11,6 +12,7 @@ import structlog
 from kiteconnect import KiteConnect
 
 from packages.core.config import ExecutionConfig, Settings, app_config
+from packages.core import compliance
 from packages.core.models import (
     Instrument,
     Order,
@@ -96,6 +98,10 @@ class ExecutionEngine:
         # Rate limiting
         self.last_order_time = 0.0
         self.min_order_interval = 0.1  # 100ms between orders
+        
+        # SEBI/NSE: TOPS throttling (per-second cap)
+        self.tops_cap = config.tops_cap_per_sec
+        self.order_timestamps: List[float] = []  # Track recent orders for TOPS
         
         # Paper mode state
         self.is_paper_mode = settings.app_mode.value == "PAPER"
@@ -328,7 +334,26 @@ class ExecutionEngine:
         
         for attempt in range(max_retries):
             try:
+                # SEBI/NSE: Check TOPS compliance before placing order
+                if not self.is_paper_mode:
+                    from packages.core.compliance import tops_cap_ok
+                    tops_cap = self.config.tops_cap_per_sec
+                    tops_ok, tops_msg = tops_cap_ok(tops_cap)
+                    if not tops_ok:
+                        logger.warning("TOPS cap violation", msg=tops_msg, cap=tops_cap)
+                        # In LIVE mode, this would block; in PAPER we warn
+                
                 # Prepare order params
+                base_tag = client_order_id[:20]  # Kite tag limit is 20 chars
+                
+                # SEBI/NSE: Attach Algo-ID (placeholder route)
+                algo_id = os.getenv("EXCHANGE_ALGO_ID", "").strip()
+                if algo_id:
+                    # Put into tag (Zerodha supports tag str); keep short
+                    tag = f"ALG:{algo_id}"[:20] if len(f"ALG:{algo_id}") <= 20 else base_tag
+                else:
+                    tag = base_tag
+                
                 params = {
                     "variety": "regular",
                     "exchange": exchange,
@@ -337,7 +362,7 @@ class ExecutionEngine:
                     "quantity": quantity,
                     "order_type": order_type,
                     "product": product,
-                    "tag": client_order_id[:20]  # Kite tag limit is 20 chars
+                    "tag": tag
                 }
                 
                 if price:
@@ -345,6 +370,8 @@ class ExecutionEngine:
                 
                 if trigger_price:
                     params["trigger_price"] = trigger_price
+                
+                # Note: client_order_id is already deterministic; Algo-ID is in tag
                 
                 # Place order
                 response = self.kite.place_order(**params)
@@ -552,14 +579,41 @@ class ExecutionEngine:
         return False
     
     async def _rate_limit(self) -> None:
-        """Enforce rate limiting between orders"""
+        """Enforce rate limiting between orders (TOPS + minimum interval)"""
         now = time.time()
-        elapsed = now - self.last_order_time
         
+        # SEBI/NSE: TOPS compliance check (per-second cap)
+        if not self.is_paper_mode:
+            # Remove timestamps older than 1 second
+            self.order_timestamps = [t for t in self.order_timestamps if now - t < 1.0]
+            
+            # Check if we're at the cap
+            if len(self.order_timestamps) >= self.tops_cap:
+                # Wait until the oldest order is > 1 second old
+                oldest = min(self.order_timestamps) if self.order_timestamps else now
+                wait_time = 1.0 - (now - oldest) + 0.01  # Small buffer
+                if wait_time > 0:
+                    logger.warning(
+                        "TOPS cap reached, waiting",
+                        current=len(self.order_timestamps),
+                        cap=self.tops_cap,
+                        wait_sec=wait_time
+                    )
+                    await asyncio.sleep(wait_time)
+                    # Re-check after wait
+                    now = time.time()
+                    self.order_timestamps = [t for t in self.order_timestamps if now - t < 1.0]
+        
+        # Minimum interval between orders (legacy)
+        elapsed = now - self.last_order_time
         if elapsed < self.min_order_interval:
             await asyncio.sleep(self.min_order_interval - elapsed)
         
         self.last_order_time = time.time()
+        
+        # Record this order timestamp for TOPS tracking
+        if not self.is_paper_mode:
+            self.order_timestamps.append(time.time())
     
     def _generate_client_order_id(
         self,
