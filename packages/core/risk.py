@@ -140,7 +140,7 @@ class RiskManager:
         
         if new_heat_pct > self.config.max_portfolio_heat_pct:
             reasons.append(
-                f"New portfolio heat {new_heat_pct:.2f}% would exceed limit {self.config.max_portfolio_heat_pct}%"
+                f"Portfolio heat limit breached: new heat {new_heat_pct:.2f}% would exceed limit {self.config.max_portfolio_heat_pct}%"
             )
             return RiskCheckResult(approved=False, reasons=reasons)
         
