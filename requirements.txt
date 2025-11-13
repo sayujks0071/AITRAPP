@@ -5,7 +5,7 @@ pydantic==2.5.3
 pydantic-settings==2.1.0
 
 # Kite Connect
-kiteconnect==5.1.0
+kiteconnect==5.0.1
 
 # WebSocket
 python-socketio==5.11.0
@@ -24,7 +24,7 @@ celery==5.3.6
 # Data Processing
 numpy==1.26.3
 pandas==2.1.4
-pandas-ta==0.3.14b0
+pandas-ta==0.4.71b0
 
 # Technical Indicators
 ta-lib==0.4.28  # May need system install: brew install ta-lib
