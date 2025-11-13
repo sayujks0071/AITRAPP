@@ -5,7 +5,7 @@ pydantic==2.5.3
 pydantic-settings==2.1.0
 
 # Kite Connect
-kiteconnect==5.1.0
+kiteconnect==5.0.1
 
 # WebSocket
 python-socketio==5.11.0
