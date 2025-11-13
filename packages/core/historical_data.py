@@ -62,13 +62,15 @@ class HistoricalDataLoader:
             
             df = pd.read_csv(
                 filepath,
-                skipinitialspace=True,
-                parse_dates=['Date', 'Expiry'],
-                date_parser=lambda x: pd.to_datetime(x, format='%d-%b-%Y')
+                skipinitialspace=True
             )
             
             # Clean column names (remove extra spaces)
             df.columns = df.columns.str.strip()
+            
+            # Parse dates after column names are cleaned
+            df['Date'] = pd.to_datetime(df['Date'], format='%d-%b-%Y')
+            df['Expiry'] = pd.to_datetime(df['Expiry'], format='%d-%b-%Y')
             
             # Convert numeric columns
             numeric_cols = [

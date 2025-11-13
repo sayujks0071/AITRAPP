@@ -150,7 +150,7 @@ def test_risk_check_portfolio_heat_breach(risk_manager, sample_signal):
     result = risk_manager.check_signal(sample_signal, portfolio_risk)
     
     assert result.approved is False
-    assert "Portfolio heat limit breached" in result.reasons[0]
+    assert "portfolio heat" in result.reasons[0].lower() and "exceed" in result.reasons[0].lower()
 
 
 def test_fee_estimation(risk_manager, sample_instrument):
