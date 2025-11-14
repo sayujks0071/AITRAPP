@@ -1,0 +1,42 @@
+{
+  "date_ist": "2025-11-15",
+  "mode": "PAPER",
+  "ready_code": 200,
+  "leader": 1.0,
+  "leader_changes": 116,
+  "heartbeats_sec": {
+    "marketdata": 0.5014352920006786,
+    "order_stream": 0.003972542002884438,
+    "scan": 0.689380458999949
+  },
+  "scan_ticks_total": 4426,
+  "oco_drill": {
+    "status": "PASS",
+    "flatten_ms": 0
+  },
+  "risk": {
+    "daily_pnl_percent": 0.0,
+    "portfolio_heat_percent": 0.0
+  },
+  "latency_ms": {
+    "order_p50": 0,
+    "order_p95": 0,
+    "ttd_p50": 0,
+    "ttd_p95": 0
+  },
+  "incidents": [],
+  "day2_gate": {
+    "status": "PASS",
+    "fresh_hours": 28.2,
+    "leader_ok": false,
+    "hb_ok": true,
+    "leader_changes_ok": true,
+    "duplicates": 0,
+    "orphans": 0,
+    "flatten_ms_ok": true
+  },
+  "go_for_monday": "NO-GO",
+  "git": {
+    "head": "de368ab"
+  }
+}
