@@ -279,10 +279,14 @@ fi
        fi
        
        # 4) Family-only (PERSONAL profile)
-       MODE_PROFILE_UPPER=$(echo "${MODE_PROFILE}" | tr '[:lower:]' '[:upper:]')
+       MODE_PROFILE_UPPER=$(echo "${MODE_PROFILE:-}" | tr '[:lower:]' '[:upper:]')
        if [[ "${MODE_PROFILE_UPPER}" == "PERSONAL" ]]; then
-         if [[ -z "${WHITELISTED_CLIENTS}" ]]; then
-           fail "family_only" "WHITELISTED_CLIENTS empty"
+         if [[ -z "${WHITELISTED_CLIENTS:-}" ]]; then
+           if [[ "$MODE" = "PAPER" ]]; then
+             echo "⚠️  WARN: WHITELISTED_CLIENTS not set (PAPER mode, PERSONAL profile) – continuing."
+           else
+             fail "family_only" "WHITELISTED_CLIENTS required in LIVE mode with PERSONAL profile"
+           fi
          else
            pass "family_only" "whitelist set"
          fi
