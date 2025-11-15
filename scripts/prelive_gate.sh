@@ -269,7 +269,11 @@ fi
        
        # 3) Algo-ID presence (placeholder; becomes mandatory when broker field goes live)
        if [[ -z "${EXCHANGE_ALGO_ID}" ]]; then
-         fail "exchange_algo_id" "EXCHANGE_ALGO_ID missing (set placeholder now; map to broker field when live)"
+         if [[ "$MODE" = "PAPER" ]]; then
+           echo "⚠️  WARN: EXCHANGE_ALGO_ID not set (PAPER mode) – continuing."
+         else
+           fail "exchange_algo_id" "EXCHANGE_ALGO_ID required in LIVE mode"
+         fi
        else
          pass "exchange_algo_id" "present"
        fi
