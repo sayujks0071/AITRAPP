@@ -299,6 +299,7 @@ fi
          --arg leader "${leader:-0}" \
          --arg mkt "${mkt:-999}" \
          --arg ord "${ord:-999}" \
+         --arg scan "${SCAN:-999}" \
          --argjson flat_ms "$flat_ms" \
          --argjson positions_open "$open" \
          --argjson orders_open "$open_orders" \
@@ -309,7 +310,7 @@ fi
            heartbeats: {
              market: ($mkt | tonumber),
              orders: ($ord | tonumber),
-             scan: ($scan_hb | tonumber)
+             scan: ($scan | tonumber)
            },
            flatten_ms: $flat_ms,
            positions_open: $positions_open,
@@ -323,8 +324,8 @@ fi
            exit 0
        else
            echo ""
-           # Explicit gate: fail immediately if leader == 0 (prevents Redis compatibility regression)
-           [[ "${leader:-0}" == "$LEADER_REQUIRED" ]] || fail "Leader lock not held (trader_is_leader=${leader:-0}, expected $LEADER_REQUIRED) - Redis compatibility regression?"
+           # Explicit gate: fail immediately if leader != 1 (handle float comparison)
+           awk "BEGIN{exit !(${leader:-0} == 1)}" || fail "Leader lock not held (trader_is_leader=${leader:-0}, expected 1) - Redis compatibility regression?"
            awk "BEGIN{exit !(${mkt:-999} < $HEARTBEAT_MAX && ${ord:-999} < $HEARTBEAT_MAX)}" || fail "Stale heartbeats (marketdata=${mkt}s, order_stream=${ord}s, max=${HEARTBEAT_MAX}s)"
            [[ "$open" -eq 0 ]] || fail "Positions not flat after flatten (count=$open)"
            [[ $flat_ms -le 2000 ]] || fail "Flatten exceeded 2s: ${flat_ms}ms"
