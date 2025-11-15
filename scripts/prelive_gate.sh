@@ -233,16 +233,31 @@ fi
        : "${MODE_PROFILE:=PERSONAL}"
        : "${EXCHANGE_ALGO_ID:=}"
        
-       # 1) Static IP check
-       if [[ -n "${EXPECTED_EGRESS_IP}" ]]; then
-         CURR_IP="$(curl -s --max-time 2 https://api.ipify.org || true)"
-         if [[ -z "${CURR_IP}" || "${CURR_IP}" != "${EXPECTED_EGRESS_IP}" ]]; then
-           fail "egress_ip" "Egress IP mismatch or unavailable (curr='${CURR_IP}', expected='${EXPECTED_EGRESS_IP}')"
+       # 1) Static IP check (tolerant in PAPER, strict in LIVE)
+       MODE="${APP_MODE:-PAPER}"
+       CURR_IP="$(curl -s --max-time 2 https://api.ipify.org || true)"
+       
+       if [[ -z "${EXPECTED_EGRESS_IP}" ]]; then
+         if [[ "$MODE" = "PAPER" ]]; then
+           echo "⚠️  WARN: EXPECTED_EGRESS_IP not set (PAPER mode) – continuing."
          else
-           pass "egress_ip" "OK (${CURR_IP})"
+           fail "egress_ip" "EXPECTED_EGRESS_IP required in LIVE mode"
          fi
        else
-         fail "egress_ip" "EXPECTED_EGRESS_IP not set"
+         # Allow CSV of IPs
+         IFS=',' read -ra ALLOWED <<< "${EXPECTED_EGRESS_IP}"
+         ok=0
+         for ip in "${ALLOWED[@]}"; do
+           if [[ "$CURR_IP" = "$ip" ]]; then
+             ok=1
+             break
+           fi
+         done
+         if [[ $ok -eq 1 ]]; then
+           pass "egress_ip" "OK (${CURR_IP})"
+         else
+           fail "egress_ip" "Egress IP mismatch (curr='${CURR_IP}', expected in: ${EXPECTED_EGRESS_IP})"
+         fi
        fi
        
        # 2) TOPS cap

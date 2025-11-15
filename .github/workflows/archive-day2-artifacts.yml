@@ -14,7 +14,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a6376e9db8  # v4.1.1
       
       - name: Archive Day-2 Reports
         run: |
@@ -61,7 +61,7 @@ jobs:
           } > artifacts/day2-$(date +%F)/README.md
       
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@5d5d22b31266ced268874388b865e4b58bb5c2f3  # v4.3.1
         with:
           name: day2-artifacts-$(date +%F)
           path: artifacts/day2-$(date +%F)/

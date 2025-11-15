@@ -27,7 +27,7 @@ jobs:
       KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a6376e9db8  # v4.1.1
 
       - name: Start services (Postgres + Redis)
         run: |
@@ -38,7 +38,7 @@ jobs:
             docker compose exec -T redis redis-cli ping && break || sleep 2
           done
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@0a5c742edd8f32b55bd37a9c1db3f86be2c98b25  # v5.1.0
         with: { python-version: "3.11" }
 
       - name: Install deps
@@ -68,7 +68,7 @@ jobs:
           cp -R logs artifacts/ || true
         shell: bash
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@5d5d22b31266ced268874388b865e4b58bb5c2f3  # v4.3.1
         if: always()
         with:
           name: paper-e2e-${{ github.run_id }}

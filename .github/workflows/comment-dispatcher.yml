@@ -1,0 +1,178 @@
+name: Comment Dispatcher
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dispatch:
+    if: github.event.issue.pull_request && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    
+    steps:
+      - name: Parse comment
+        id: parse
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+          
+          # Extract first slash command
+          CMD=$(echo "$COMMENT" | grep -oE '^/[a-z-]+' | head -1 | sed 's|^/||')
+          
+          if [ -z "$CMD" ]; then
+            echo "No slash command found"
+            exit 0
+          fi
+          
+          echo "command=$CMD" >> $GITHUB_OUTPUT
+          echo "Found command: $CMD"
+
+      - name: Handle help command
+        if: steps.parse.outputs.command == 'help'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '**Slash commands for AITRAPP CI**\n\n' +
+                    '🟢 **PAPER Mode (Safe)**\n' +
+                    '• `/paper-preopen` – run preopen checks (burn-in + E2E + prelive gate)\n' +
+                    '• `/postclose-report` – postclose reports + Day-2 scorer\n' +
+                    '• `/paper-e2e` – run dedicated PAPER E2E workflow\n\n' +
+                    '🔒 **Validation**\n' +
+                    '• `/prelive-gate` or `/gate` – validate Day-2 PASS requirements\n' +
+                    '• `/manual-canary-live` or `/canary-live` – run full prelive validation gate\n\n' +
+                    '⚠️ **LIVE Mode (Blocked)**\n' +
+                    '• `/live-switch` – **blocked** (manual only per SEBI)\n\n' +
+                    '📚 Reference: SEBI/HO/MIRSD/MIRSD-PoD/P/CIR/2025/0000013 (Feb 4, 2025)\n\n' +
+                    'Only OWNER/MEMBER/COLLABORATOR can trigger workflows.'
+            });
+
+      - name: Block LIVE switch
+        if: steps.parse.outputs.command == 'live-switch'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '🚫 **LIVE switch is manual-only per SEBI guardrails**\n\n' +
+                    'After prelive gate PASS, run locally:\n\n' +
+                    '```bash\n' +
+                    'make prelive-gate  # verify Day-2 PASS\n' +
+                    'make live-switch   # manual operator action required\n' +
+                    '```\n\n' +
+                    'Or use the API:\n\n' +
+                    '```bash\n' +
+                    'curl -X POST http://localhost:8000/admin/mode \\\n' +
+                    '     -H "Content-Type: application/json" \\\n' +
+                    '     -d \'{"mode": "LIVE", "confirm": true}\'\n' +
+                    '```\n\n' +
+                    '⚠️ **DO NOT automate this via CI/CD**'
+            });
+
+      - name: Dispatch paper-preopen
+        if: steps.parse.outputs.command == 'paper-preopen' || steps.parse.outputs.command == 'burnin-check'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'paper-preopen.yml',
+              ref: 'main'
+            });
+
+      - name: Dispatch postclose-report
+        if: steps.parse.outputs.command == 'postclose-report'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'postclose-report.yml',
+              ref: 'main'
+            });
+
+      - name: Dispatch paper-e2e
+        if: steps.parse.outputs.command == 'paper-e2e'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'paper-e2e.yml',
+              ref: 'main'
+            });
+
+      - name: Dispatch prelive-gate
+        if: steps.parse.outputs.command == 'prelive-gate' || steps.parse.outputs.command == 'gate'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'prelive-gate.yml',
+              ref: 'main'
+            });
+
+      - name: Dispatch manual-canary-live
+        if: steps.parse.outputs.command == 'manual-canary-live' || steps.parse.outputs.command == 'canary-live'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'manual-canary-live.yml',
+              ref: 'main'
+            });
+
+      - name: Confirm dispatch
+        if: steps.parse.outputs.command != 'help' && steps.parse.outputs.command != 'live-switch' && steps.parse.outputs.command != ''
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const workflow = '${{ steps.parse.outputs.command }}';
+            const workflowMap = {
+              'paper-preopen': 'paper-preopen.yml',
+              'burnin-check': 'paper-preopen.yml',
+              'postclose-report': 'postclose-report.yml',
+              'paper-e2e': 'paper-e2e.yml',
+              'prelive-gate': 'prelive-gate.yml',
+              'gate': 'prelive-gate.yml',
+              'manual-canary-live': 'manual-canary-live.yml',
+              'canary-live': 'manual-canary-live.yml'
+            };
+            
+            const workflowFile = workflowMap[workflow] || workflow + '.yml';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ **Dispatched `' + workflowFile + '` on `main`**\n\n' +
+                    'Watch the [Actions tab](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions) for results.\n\n' +
+                    'Self-hosted runner with label `paper-runner` will execute.'
+            });
+
+      - name: Handle unknown command
+        if: steps.parse.outputs.command != '' && steps.parse.outputs.command != 'help' && steps.parse.outputs.command != 'live-switch' && steps.parse.outputs.command != 'paper-preopen' && steps.parse.outputs.command != 'burnin-check' && steps.parse.outputs.command != 'postclose-report' && steps.parse.outputs.command != 'paper-e2e' && steps.parse.outputs.command != 'prelive-gate' && steps.parse.outputs.command != 'gate' && steps.parse.outputs.command != 'manual-canary-live' && steps.parse.outputs.command != 'canary-live'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const cmd = '${{ steps.parse.outputs.command }}';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❓ Unknown command: `/' + cmd + '`\n\n' +
+                    'Type `/help` to see available commands.'
+            });
+

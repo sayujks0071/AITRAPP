@@ -1,0 +1,160 @@
+name: Manual Canary LIVE Gate
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate-live-gate:
+    timeout-minutes: 10
+    runs-on: self-hosted
+    labels: [paper-runner]
+    
+    env:
+      APP_MODE: PAPER
+      APP_TIMEZONE: Asia/Kolkata
+      PYTHONPATH: .
+      DATABASE_URL: postgresql+psycopg2://trader:traderpw@localhost:5432/aitrapp
+      REDIS_URL: redis://localhost:6379/0
+      EXPECTED_EGRESS_IP: ${{ vars.EXPECTED_EGRESS_IP }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a6376e9db8  # v4.1.1
+
+      - name: Check Docker availability
+        run: |
+          if ! command -v docker &> /dev/null; then
+            echo "❌ Docker not found"
+            exit 1
+          fi
+          docker --version
+
+      - name: Start infrastructure
+        run: |
+          docker compose up -d postgres redis
+          bash scripts/db_ready.sh
+
+      - name: Setup Python
+        uses: actions/setup-python@0a5c742edd8f32b55bd37a9c1db3f86be2c98b25  # v5.1.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run database migrations
+        run: |
+          alembic upgrade head
+
+      - name: Verify Day-2 JSON exists and is fresh
+        id: day2-check
+        run: |
+          DAY2_FILE=$(find reports -name "day2_*.json" -type f | sort -r | head -1)
+          if [ -z "$DAY2_FILE" ]; then
+            echo "❌ Day-2 JSON not found"
+            exit 1
+          fi
+          
+          # Check file age (must be ≤36 hours old)
+          FILE_AGE_HOURS=$(($(date +%s) - $(stat -f %m "$DAY2_FILE" 2>/dev/null || stat -c %Y "$DAY2_FILE" 2>/dev/null)) / 3600)
+          if [ "$FILE_AGE_HOURS" -gt 36 ]; then
+            echo "❌ Day-2 JSON is too old (${FILE_AGE_HOURS} hours, max 36)"
+            exit 1
+          fi
+          
+          echo "✅ Day-2 JSON found: $DAY2_FILE (${FILE_AGE_HOURS} hours old)"
+          echo "day2_file=$DAY2_FILE" >> $GITHUB_OUTPUT
+
+      - name: Parse Day-2 JSON (jq-less fallback)
+        id: day2-parse
+        run: |
+          DAY2_FILE="${{ steps.day2-check.outputs.day2_file }}"
+          
+          # Try jq first, fallback to grep/sed
+          if command -v jq &> /dev/null; then
+            OVERALL_STATUS=$(jq -r '.overall_status' "$DAY2_FILE" 2>/dev/null || echo "UNKNOWN")
+          else
+            # jq-less fallback: grep for overall_status
+            OVERALL_STATUS=$(grep -o '"overall_status"[[:space:]]*:[[:space:]]*"[^"]*"' "$DAY2_FILE" | sed 's/.*"\([^"]*\)".*/\1/' || echo "UNKNOWN")
+          fi
+          
+          echo "Day-2 overall_status: $OVERALL_STATUS"
+          echo "overall_status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
+          
+          if [ "$OVERALL_STATUS" != "PASS" ]; then
+            echo "❌ Day-2 status is not PASS (got: $OVERALL_STATUS)"
+            exit 1
+          fi
+          
+          echo "✅ Day-2 status is PASS"
+
+      - name: Run prelive-gate
+        run: |
+          make prelive-gate || exit 1
+
+      - name: Verify APP_MODE is not LIVE
+        run: |
+          # Check if APP_MODE is set to LIVE in environment or config
+          if [ "$APP_MODE" = "LIVE" ]; then
+            echo "❌ APP_MODE is already set to LIVE. Cannot proceed."
+            exit 1
+          fi
+          
+          # Check config file if it exists
+          if [ -f "configs/app.yaml" ] && grep -q "mode.*LIVE" configs/app.yaml; then
+            echo "⚠️  Warning: app.yaml contains LIVE mode. Verify this is intentional."
+          fi
+          
+          echo "✅ APP_MODE is not LIVE (current: $APP_MODE)"
+
+      - name: Display SEBI compliance reference
+        run: |
+          echo "## SEBI Compliance Reference"
+          echo ""
+          echo "**Circular:** SEBI/HO/MIRSD/MIRSD-PoD/P/CIR/2025/0000013"
+          echo "**Date:** February 4, 2025"
+          echo "**Subject:** Framework for Retail Participation in Algorithmic Trading"
+          echo ""
+          echo "This workflow validates readiness but **DOES NOT automate** the LIVE switch."
+          echo "All LIVE mode changes require manual operator action."
+
+      - name: Display manual switch instructions
+        if: success()
+        run: |
+          echo "## ✅ Validation Complete - Manual Switch Required"
+          echo ""
+          echo "All gate checks passed. To switch to LIVE mode, run **locally** on your machine:"
+          echo ""
+          echo "### Option 1: Using Make"
+          echo "\`\`\`bash"
+          echo "make live-switch"
+          echo "\`\`\`"
+          echo ""
+          echo "### Option 2: Using curl"
+          echo "\`\`\`bash"
+          echo "curl -X POST http://localhost:8000/mode \\"
+          echo "  -H 'Content-Type: application/json' \\"
+          echo "  -d '{\"mode\":\"LIVE\",\"confirmation\":\"LIVE\"}'"
+          echo "\`\`\`"
+          echo ""
+          echo "⚠️  **IMPORTANT:**"
+          echo "- Ensure the API is running locally"
+          echo "- Verify all safety checks before switching"
+          echo "- Monitor closely after switch"
+          echo "- Have kill-switch ready: \`curl -X POST http://localhost:8000/flatten\`"
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@5d5d22b31266ced268874388b865e4b58bb5c2f3  # v4.3.1
+        with:
+          name: live-gate-validation-$(date +%Y%m%d-%H%M%S)
+          path: |
+            logs/*.log
+            reports/day2_*.json
+          retention-days: 90
+          if-no-files-found: ignore
+
