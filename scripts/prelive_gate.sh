@@ -279,7 +279,8 @@ fi
        fi
        
        # 4) Family-only (PERSONAL profile)
-       if [[ "${MODE_PROFILE^^}" == "PERSONAL" ]]; then
+       MODE_PROFILE_UPPER=$(echo "${MODE_PROFILE}" | tr '[:lower:]' '[:upper:]')
+       if [[ "${MODE_PROFILE_UPPER}" == "PERSONAL" ]]; then
          if [[ -z "${WHITELISTED_CLIENTS}" ]]; then
            fail "family_only" "WHITELISTED_CLIENTS empty"
          else
