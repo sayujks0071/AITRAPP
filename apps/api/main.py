@@ -383,13 +383,39 @@ class SystemStateResponse(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {
+    """Health check endpoint with active risk caps"""
+    health_data = {
         "status": "healthy",
         "mode": settings.app_mode.value,
         "is_paused": app_state.is_paused,
         "timestamp": datetime.now().isoformat()
     }
+    
+    # Add active risk caps if orchestrator is initialized
+    if app_state.orchestrator and hasattr(app_state.orchestrator, 'config'):
+        config = app_state.orchestrator.config
+        if hasattr(config, 'risk'):
+            health_data["risk_caps"] = {
+                "per_trade_risk_pct": config.risk.per_trade_risk_pct,
+                "max_portfolio_heat_pct": config.risk.max_portfolio_heat_pct,
+                "daily_loss_stop_pct": config.risk.daily_loss_stop_pct,
+                "max_open_positions": config.risk.max_open_positions
+            }
+        if hasattr(config, 'execution'):
+            health_data["execution_limits"] = {
+                "min_order_interval_ms": config.execution.min_order_interval_ms,
+                "per_instrument_cooldown_ms": config.execution.per_instrument_cooldown_ms,
+                "price_band_bps": config.execution.price_band_bps,
+                "order_burst_limit": config.execution.order_burst_limit,
+                "order_fanout_per_sec": getattr(config.execution, 'order_fanout_per_sec', None)
+            }
+        if hasattr(config, 'universe'):
+            health_data["universe"] = {
+                "indices": config.universe.indices if hasattr(config.universe, 'indices') else [],
+                "fo_stocks_liquidity_rank_top_n": getattr(config.universe, 'fo_stocks_liquidity_rank_top_n', 0)
+            }
+    
+    return health_data
 
 
 @app.get("/ready")

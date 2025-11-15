@@ -27,8 +27,11 @@ execution:
   ioc_retry_attempts: 2
 
 universe:
-  indices: [NIFTY, BANKNIFTY]
-  fo_stocks_liquidity_rank_top_n: 0   # indices only for day-1
+  # Canary underlyings for Monday 09:30-11:00 IST
+  indices: 
+    - NIFTY
+    - BANKNIFTY
+  fo_stocks_liquidity_rank_top_n: 0   # indices only for canary window
 
 exits:
   trail_atr_mult: 1.0
