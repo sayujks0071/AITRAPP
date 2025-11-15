@@ -1,17 +1,30 @@
-# Canary LIVE profile for Day-1 (09:10-10:10 IST)
-# Use this override for the first LIVE hour
+# Canary LIVE profile for Monday 09:30-11:00 IST (conservative)
+# Use this override for the first LIVE canary window
+# After 2-3 clean sessions, switch to configs/live.yaml with raised caps
 
 mode: LIVE
 
 risk:
-  per_trade_risk_pct: 0.25
-  max_portfolio_heat_pct: 1.0
-  daily_loss_stop_pct: 1.0
+  per_trade_risk_pct: 0.30       # Conservative: 0.30% per trade
+  max_portfolio_heat_pct: 1.0    # Conservative: 1.0% portfolio heat
+  daily_loss_stop_pct: 1.50      # Conservative: -1.50% daily stop
+  max_open_positions: 2          # Conservative: 2 concurrent positions
 
-order:
-  max_child_retries: 3
-  max_entry_chase_ticks: 2
-  cancel_timeout_ms: 800
+execution:
+  default_order_type: LIMIT
+  limit_chase_ticks: 2
+  limit_timeout_sec: 5
+  ioc_for_exits: true
+  max_order_retries: 3
+  retry_backoff_ms: 500
+  tops_cap_per_sec: 5
+  price_band_bps: 30             # Conservative: 30 bps price band
+  min_order_interval_ms: 350     # Conservative: 350ms engine gaps
+  per_instrument_cooldown_ms: 350 # Conservative: 350ms per-instrument cooldown
+  order_burst_limit: 4           # Conservative: burst limit 4
+  order_burst_cooldown_ms: 1000
+  order_fanout_per_sec: 6        # Conservative: fan-out 6/s
+  ioc_retry_attempts: 2
 
 universe:
   indices: [NIFTY, BANKNIFTY]
@@ -26,4 +39,3 @@ exits:
 guards:
   block_around_events_min: 10   # CPI/RBI/expiry
   max_spread_mid_pct: 0.35
-
