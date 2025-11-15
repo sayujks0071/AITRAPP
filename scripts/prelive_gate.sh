@@ -104,26 +104,29 @@ gate_day2_json_pass() {
     exit 1
   fi
 
-  # Extract values
-  declare -A kv=()
+  # Extract values (using case for compatibility)
+  local status="" leader="" hb_m="" hb_o="" hb_s="" flaps="" dups="" orph="" flat_ms=""
   while IFS='=' read -r k v; do
-    [[ -n "${k:-}" ]] && kv["$k"]="${v:-}"
+    [[ -z "$k" ]] && continue
+    case "$k" in
+      status) status="$v" ;;
+      leader) leader="$v" ;;
+      hb_marketdata) hb_m="$v" ;;
+      hb_order_stream) hb_o="$v" ;;
+      hb_scan) hb_s="$v" ;;
+      leader_changes) flaps="$v" ;;
+      duplicates) dups="$v" ;;
+      orphans) orph="$v" ;;
+      flatten_ms) flat_ms="$v" ;;
+    esac
   done < <(read_day2_json_values "$f")
 
   # Required fields & validations
-  local status="${kv[status]:-}"
-  local leader="${kv[leader]:-}"
-  local hb_m="${kv[hb_marketdata]:-}"
-  local hb_o="${kv[hb_order_stream]:-}"
-  local hb_s="${kv[hb_scan]:-}"
-  local flaps="${kv[leader_changes]:-}"
-  local dups="${kv[duplicates]:-}"
-  local orph="${kv[orphans]:-}"
-  local flat_ms="${kv[flatten_ms]:-}"
 
   # Hard checks (fail closed)
   [[ "${status}" == "PASS" ]] || { echo "FAIL: Day-2 JSON status=${status} (expected PASS). File: $f"; exit 1; }
-  [[ "${leader}" == "1" ]] || { echo "FAIL: leader==${leader} (expected 1). File: $f"; exit 1; }
+  # Handle both "1" and "1.0" (float comparison)
+  awk "BEGIN{exit !(${leader:-0} == 1)}" || { echo "FAIL: leader==${leader} (expected 1). File: $f"; exit 1; }
 
   awk -v m="${hb_m:-9999}" -v o="${hb_o:-9999}" -v s="${hb_s:-9999}" -v mx="${HEARTBEAT_MAX}" '
     BEGIN{

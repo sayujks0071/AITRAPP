@@ -130,7 +130,7 @@ fi
 
 # Output JSON summary with completeness fields
 mkdir -p reports/burnin
-TIMESTAMP=$(date -Is)
+TIMESTAMP=$(date +%Y-%m-%dT%H:%M:%S%z)
 JSON_OUTPUT=$(jq -n \
   --arg status "$( [[ $ok -eq 1 ]] && echo "PASS" || echo "FAIL" )" \
   --arg leader "${LEADER:-0}" \
