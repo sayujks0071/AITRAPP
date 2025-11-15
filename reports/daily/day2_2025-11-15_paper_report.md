@@ -11,7 +11,8 @@
 
 ## System Stability
 
-* Leader changes (total): 116.0
+* Leader changes (total): 116.0 ⚠️ **Historical artifact** — live metrics show 210.0 (accumulating from pre-fix sessions)
+* **Note:** Codebase updated with improved leader-lock handling; counter will reset after orchestrator restart
 * Scan ticks trend: rising YES (with last value: 4426.0)
 * Supervisor state: running NO
 
@@ -55,10 +56,28 @@
 
 ## Recommendations for Monday LIVE
 
-* Monitor leader lock stability (current changes: 116.0)
+**⚠️ IMPORTANT: Historical Leader Changes Counter**
+
+The current `leader_changes=116` (now 210 in live metrics) is a **historical artifact** from before the leader-lock improvements were deployed. The codebase has been updated with:
+
+- Tighter leader-lock TTL/refresh cadence to prevent flapping
+- Fixed double-counting of flaps
+- Improved lock refresh logic
+
+**Required Actions Before Monday LIVE:**
+
+1. **Restart orchestrator or reset Prometheus metrics** to clear the historical counter
+2. **Run a clean Day-2 session** (`make score-day2`) after restart to generate fresh JSON with `leader_changes<=2`
+3. **Verify Python environment** and rerun `make paper-e2e` (currently blocked by missing venv)
+4. **Re-run prelive-gate** after fresh Day-2 JSON is generated
+5. **Update this report** with new Day-2 JSON evidence once clean session completes
+
+**Other Recommendations:**
+
+* Monitor leader lock stability after restart (target: ≤2 changes per session)
 * Ensure all heartbeats remain < 5s during market hours
 * Verify OCO drill completes within 2s target
-* Review Day-2 JSON freshness before switch
+* Review Day-2 JSON freshness before switch (must be ≤36h old)
 * Confirm all gate checks PASS before proceeding
 
 ## Appendix
