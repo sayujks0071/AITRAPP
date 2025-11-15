@@ -309,7 +309,7 @@ fi
            heartbeats: {
              market: ($mkt | tonumber),
              orders: ($ord | tonumber),
-             scan: ($SCAN | tonumber)
+             scan: ($scan_hb | tonumber)
            },
            flatten_ms: $flat_ms,
            positions_open: $positions_open,
