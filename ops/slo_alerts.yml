@@ -48,6 +48,24 @@ groups:
           summary: "Orphan OCO siblings detected"
           description: "Found {{ $value }} orphan OCO siblings"
 
+groups:
+  - name: crypto_slos
+    interval: 30s
+    rules:
+      # Crypto flatten duration p95 ≤ 2s
+      - alert: CryptoFlattenSLOBreach
+        expr: |
+          histogram_quantile(0.95, 
+            rate(trader_crypto_flatten_duration_seconds_bucket[5m])
+          ) > 2
+        for: 1m
+        labels:
+          severity: critical
+          component: crypto
+        annotations:
+          summary: "Crypto flatten SLO breach"
+          description: "95th percentile flatten time is {{ $value }}s (SLO: ≤2s) for {{ $labels.venue }}"
+
       # Heat guard: portfolio_heat_rupees ≤ 0.02 * NL (or configured cap)
       - alert: HeatGuardBreach
         expr: trader_portfolio_heat_rupees > (trader_net_liquid_rupees * 0.02)

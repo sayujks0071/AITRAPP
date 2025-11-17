@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "trading-analyst": {
+      "command": "node",
+      "args": [
+        "/Users/mac/CRYPTO/AITRAPP/mcp-servers/trading-analyst/build/index.js"
+      ],
+      "env": {
+        "BOT_API_URL": "http://localhost:8000",
+        "NODE_ENV": "production"
+      },
+      "disabled": false
+    }
+  }
+}

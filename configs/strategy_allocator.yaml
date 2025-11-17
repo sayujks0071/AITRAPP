@@ -1,0 +1,83 @@
+# configs/strategy_allocator.yaml
+
+strategy_allocator:
+  enabled: true
+
+  # Global risk envelope for all strategies controlled by allocator
+  global_max_capital_pct: 0.60        # 60% of capital under allocator control
+  min_capital_pct_per_strategy: 0.01  # 1% floor if enabled
+  max_capital_pct_per_strategy: 0.25  # 25% per strategy cap
+
+  # Stats lookbacks
+  stats:
+    trade_window: 50                  # last 50 trades
+    day_window: 30                    # last 30 days
+
+  # Performance thresholds (rule-based layer)
+  thresholds:
+    min_hit_rate: 0.45
+    min_expectancy_perc: 0.10         # avg PnL per trade (% of risk) over window
+    max_drawdown_perc: 5.0            # >5% DD → downweight / disable
+    cold_streak_trades: 7             # N losses in a row = disable until cool-down
+
+  # ML / scoring model (can be rule-based initially)
+  model:
+    type: "RULE_BASED"                # later: "ML_REMOTE", "ML_LOCAL"
+    ml_endpoint: ""                   # if you later host a model
+    risk_aversion: 0.5                # 0=aggressive, 1=conservative
+
+  # Strategies under allocator control
+  strategies:
+    - name: "expiry_short_strangle"
+      base_weight: 0.20
+      role: "income_short_vol"
+
+    - name: "intraday_short_strangle"
+      base_weight: 0.10
+      role: "intraday_short_vol"
+
+    - name: "index_sniper"
+      base_weight: 0.15
+      role: "directional_trend"
+
+    - name: "drifting_credit_spread"
+      base_weight: 0.15
+      role: "directional_income"
+
+    - name: "vscore_credit_spread"
+      base_weight: 0.10
+      role: "vol_surface"
+
+    - name: "kurtosis_straddle"
+      base_weight: 0.05
+      role: "long_vol"
+
+    - name: "gamma_scalper"
+      base_weight: 0.10
+      role: "long_gamma"
+
+    - name: "calendar_arb"
+      base_weight: 0.10
+      role: "term_structure"
+
+    - name: "dispersion_arb"
+      base_weight: 0.05
+      role: "dispersion"
+
+  # Integration with R1 regimes (optional rule overlay)
+  regime_overlays:
+    LOW_MEAN_REVERT:
+      boost_roles: ["income_short_vol", "directional_income", "term_structure"]
+      cut_roles:   ["long_vol", "long_gamma"]
+
+    MEDIUM_TREND:
+      boost_roles: ["directional_trend", "directional_income", "dispersion"]
+      cut_roles:   ["income_short_vol"]
+
+    HIGH_EVENT:
+      boost_roles: ["long_vol", "long_gamma", "term_structure"]
+      cut_roles:   ["income_short_vol"]
+
+    CHAOTIC:
+      boost_roles: ["long_vol", "long_gamma"]
+      cut_roles:   ["income_short_vol", "directional_trend", "directional_income"]

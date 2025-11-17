@@ -1,5 +1,6 @@
 """FastAPI main application"""
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -8,8 +9,8 @@ import structlog
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from kiteconnect import KiteConnect
-from prometheus_client import make_asgi_app
-from fastapi.responses import PlainTextResponse, Response
+from prometheus_client import make_asgi_app, generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import PlainTextResponse, Response, JSONResponse
 from packages.core.metrics import get_metrics, metrics_app
 from packages.core.redis_bus import RedisBus
 from packages.core.oco import OCOManager
@@ -27,7 +28,10 @@ from packages.core.models import Position, PositionStatus, SystemState
 from packages.core.orchestrator import TradingOrchestrator
 from packages.core.risk import PortfolioRisk, RiskManager
 from packages.core.ranker import SignalRanker
-from packages.core.strategies import ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy, Strategy
+from packages.core.strategies import (
+    ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy, Strategy,
+    RegimeVolEngine, GammaScalper, CalendarArb, DispersionArb, TailShortVolOverlay
+)
 
 # Configure structured logging
 structlog.configure(
@@ -55,6 +59,9 @@ class AppState:
     # Strategies
     strategies: Dict = {}
     strategy_list: List[Strategy] = []
+    
+    # Event engine (E1)
+    event_engine: Any = None
     
     # Positions
     positions: List[Position] = []
@@ -129,23 +136,203 @@ async def lifespan(app: FastAPI):
     
     # Initialize strategies
     strategy_list = []
+    strategy_registry = {}  # For R1 meta-strategy
+    
     for strategy_config in app_config.get_enabled_strategies():
         strategy = None
         if strategy_config.name == "ORB":
             strategy = ORBStrategy(strategy_config.name, strategy_config.params)
             app_state.strategies["ORB"] = strategy
+            strategy_registry["ORB"] = strategy
         elif strategy_config.name == "TrendPullback":
             strategy = TrendPullbackStrategy(strategy_config.name, strategy_config.params)
             app_state.strategies["TrendPullback"] = strategy
+            strategy_registry["TrendPullback"] = strategy
         elif strategy_config.name == "OptionsRanker":
             strategy = OptionsRankerStrategy(strategy_config.name, strategy_config.params)
             app_state.strategies["OptionsRanker"] = strategy
+            strategy_registry["OptionsRanker"] = strategy
+        elif strategy_config.name == "IronCondor":
+            from packages.core.strategies import IronCondorStrategy
+            strategy = IronCondorStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["IronCondor"] = strategy
+            strategy_registry["IronCondor"] = strategy
+        elif strategy_config.name == "RegimeVolEngine":
+            # Load R1 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            
+            r1_config_path = Path("configs/regime_vol_engine.yaml")
+            if r1_config_path.exists():
+                with open(r1_config_path, "r") as f:
+                    r1_config = yaml.safe_load(f)
+                    strategy = RegimeVolEngine(
+                        strategy_config.name,
+                        r1_config.get("regime_vol_engine", {}),
+                        strategy_registry=strategy_registry,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper()
+                    )
+                    app_state.strategies["RegimeVolEngine"] = strategy
+                    strategy_registry["RegimeVolEngine"] = strategy
+            else:
+                logger.warning("RegimeVolEngine config not found, using default params")
+                from packages.core.metrics_wrapper import MetricsWrapper
+                strategy = RegimeVolEngine(
+                    strategy_config.name,
+                    strategy_config.params,
+                    strategy_registry=strategy_registry,
+                    risk_engine=app_state.risk_manager,
+                    metrics=MetricsWrapper()
+                )
+                app_state.strategies["RegimeVolEngine"] = strategy
+                strategy_registry["RegimeVolEngine"] = strategy
+        elif strategy_config.name == "GammaScalper":
+            # Load G1 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            
+            g1_config_path = Path("configs/gamma_scalper.yaml")
+            if g1_config_path.exists():
+                with open(g1_config_path, "r") as f:
+                    g1_config = yaml.safe_load(f)
+                    strategy = GammaScalper(
+                        strategy_config.name,
+                        g1_config.get("gamma_scalper", {}),
+                        instrument_manager=app_state.instrument_manager,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper()
+                    )
+                    app_state.strategies["GammaScalper"] = strategy
+                    strategy_registry["GammaScalper"] = strategy
+            else:
+                logger.warning("GammaScalper config not found, using default params")
+                strategy = GammaScalper(
+                    strategy_config.name,
+                    strategy_config.params,
+                    instrument_manager=app_state.instrument_manager,
+                    risk_engine=app_state.risk_manager,
+                    metrics=MetricsWrapper()
+                )
+                app_state.strategies["GammaScalper"] = strategy
+                strategy_registry["GammaScalper"] = strategy
+        elif strategy_config.name == "CalendarArb":
+            # Load T1 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            
+            t1_config_path = Path("configs/calendar_arb.yaml")
+            if t1_config_path.exists():
+                with open(t1_config_path, "r") as f:
+                    t1_config = yaml.safe_load(f)
+                    strategy = CalendarArb(
+                        strategy_config.name,
+                        t1_config.get("calendar_arb", {}),
+                        instrument_manager=app_state.instrument_manager,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper()
+                    )
+                    app_state.strategies["CalendarArb"] = strategy
+                    strategy_registry["CalendarArb"] = strategy
+            else:
+                logger.warning("CalendarArb config not found, using default params")
+                strategy = CalendarArb(
+                    strategy_config.name,
+                    strategy_config.params,
+                    instrument_manager=app_state.instrument_manager,
+                    risk_engine=app_state.risk_manager,
+                    metrics=MetricsWrapper()
+                )
+                app_state.strategies["CalendarArb"] = strategy
+                strategy_registry["CalendarArb"] = strategy
+        elif strategy_config.name == "DispersionArb":
+            # Load D1 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            
+            d1_config_path = Path("configs/dispersion_arb.yaml")
+            if d1_config_path.exists():
+                with open(d1_config_path, "r") as f:
+                    d1_config = yaml.safe_load(f)
+                    strategy = DispersionArb(
+                        strategy_config.name,
+                        d1_config.get("dispersion_arb", {}),
+                        instrument_manager=app_state.instrument_manager,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper()
+                    )
+                    app_state.strategies["DispersionArb"] = strategy
+                    strategy_registry["DispersionArb"] = strategy
+            else:
+                logger.warning("DispersionArb config not found, using default params")
+                strategy = DispersionArb(
+                    strategy_config.name,
+                    strategy_config.params,
+                    instrument_manager=app_state.instrument_manager,
+                    risk_engine=app_state.risk_manager,
+                    metrics=MetricsWrapper()
+                )
+                app_state.strategies["DispersionArb"] = strategy
+                strategy_registry["DispersionArb"] = strategy
+        elif strategy_config.name == "TailShortVolOverlay":
+            # Load H1 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            
+            h1_config_path = Path("configs/tail_short_vol.yaml")
+            if h1_config_path.exists():
+                with open(h1_config_path, "r") as f:
+                    h1_config = yaml.safe_load(f)
+                    strategy = TailShortVolOverlay(
+                        strategy_config.name,
+                        h1_config.get("tail_short_vol", {}),
+                        instrument_manager=app_state.instrument_manager,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper(),
+                        positions_store=None  # Would pass position store in production
+                    )
+                    app_state.strategies["TailShortVolOverlay"] = strategy
+                    strategy_registry["TailShortVolOverlay"] = strategy
+            else:
+                logger.warning("TailShortVolOverlay config not found, using default params")
+                strategy = TailShortVolOverlay(
+                    strategy_config.name,
+                    strategy_config.params,
+                    instrument_manager=app_state.instrument_manager,
+                    risk_engine=app_state.risk_manager,
+                    metrics=MetricsWrapper(),
+                    positions_store=None
+                )
+                app_state.strategies["TailShortVolOverlay"] = strategy
+                strategy_registry["TailShortVolOverlay"] = strategy
         
         if strategy:
             strategy_list.append(strategy)
     
     app_state.strategy_list = strategy_list
     logger.info(f"Loaded {len(strategy_list)} strategies")
+    
+    # Initialize E1 Event Vol Engine
+    import yaml
+    from pathlib import Path
+    from packages.core.event_vol_engine import EventVolEngine
+    from packages.core.metrics_wrapper import MetricsWrapper
+    
+    event_cfg_path = Path("configs/event_vol_engine.yaml")
+    if event_cfg_path.exists():
+        with open(event_cfg_path, "r") as f:
+            raw = yaml.safe_load(f) or {}
+        e1_cfg = raw.get("event_vol_engine", {})
+        app_state.event_engine = EventVolEngine(cfg=e1_cfg, metrics=MetricsWrapper())
+        logger.info("E1 Event Vol Engine initialized", enabled=e1_cfg.get("enabled", False))
+    else:
+        app_state.event_engine = EventVolEngine(cfg={"enabled": False}, metrics=None)
+        logger.info("E1 Event Vol Engine disabled (config not found)")
     
     # Initialize ranker
     app_state.ranker = SignalRanker(app_config.ranking)
@@ -165,6 +352,39 @@ async def lifespan(app: FastAPI):
     oco_manager = OCOManager(kite_client)
     logger.info("OCO manager initialized")
     
+    # Initialize crypto router if in crypto mode
+    app_state.crypto_router = None
+    if settings.app_mode.value in ("CRYPTO_PAPER", "CRYPTO_LIVE"):
+        from packages.core.venues.crypto_router import CryptoRouter
+        from packages.core.models import Venue
+        
+        venue_config = getattr(app_config, "venue", {})
+        venue_name = venue_config.get("name", "KRAKEN_SPOT")
+        venue = Venue[venue_name] if venue_name in [v.name for v in Venue] else Venue.KRAKEN_SPOT
+        
+        # Get API credentials from environment
+        secrets_env = venue_config.get("secrets_env", {})
+        api_key = os.getenv(secrets_env.get("api_key", "KRAKEN_API_KEY"), "")
+        api_secret = os.getenv(secrets_env.get("api_secret", "KRAKEN_API_SECRET"), "")
+        
+        if api_key and api_secret:
+            # Choose exchange based on venue
+            if venue == Venue.BINANCE_SPOT:
+                from packages.exchanges.binance_spot import BinanceSpot
+                # Use testnet if: CRYPTO_PAPER mode OR BINANCE_TESTNET env var is set
+                use_testnet = (settings.app_mode.value == "CRYPTO_PAPER") or (os.getenv("BINANCE_TESTNET") == "1")
+                exchange = BinanceSpot(api_key=api_key, api_secret=api_secret, testnet=use_testnet)
+            else:
+                from packages.exchanges.kraken_spot import KrakenSpot
+                exchange = KrakenSpot(api_key=api_key, api_secret=api_secret, testnet=(settings.app_mode.value == "CRYPTO_PAPER"))
+            
+            paper_mode = (settings.app_mode.value == "CRYPTO_PAPER")
+            app_state.crypto_router = CryptoRouter(exchange=exchange, config=app_config, venue=venue, paper_mode=paper_mode)
+            await app_state.crypto_router.initialize()
+            logger.info("Crypto router initialized", venue=venue.value, paper_mode=paper_mode)
+        else:
+            logger.warning("Crypto API credentials not found, crypto router not initialized")
+    
     # Initialize orchestrator with Redis and OCO
     app_state.orchestrator = TradingOrchestrator(
         kite=app_state.kite,
@@ -176,7 +396,8 @@ async def lifespan(app: FastAPI):
         exit_manager=app_state.exit_manager,
         ranker=app_state.ranker,
         redis_bus=redis_bus,
-        oco_manager=oco_manager
+        oco_manager=oco_manager,
+        crypto_router=app_state.crypto_router
     )
     
     # Initialize OrderWatcher
@@ -215,6 +436,7 @@ async def lifespan(app: FastAPI):
         from pathlib import Path
         import time
         import json
+        from packages.core.metrics import prelive_day2_pass, prelive_day2_age
         
         DAY2_DIR = Path("reports/burnin")
         FRESH_SECS = 36 * 3600
@@ -330,13 +552,43 @@ app = FastAPI(
 )
 
 # Add CORS
+# Note: In production, set exact origins: allow_origins=["https://ops-ui.yourdomain.com"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure properly for production
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://172.20.10.4:3000",  # Network IP for Ops Browser
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],  # Only methods we actually use
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID", "X-Ops-Key"],  # Headers we send
+    expose_headers=["X-Retry-After", "X-Rate-Limit-Remaining", "X-Time-Skew-Ms"],  # Headers UI reads
+    max_age=600,  # Cache preflight for 10 minutes
 )
+
+# Exception handler to ensure CORS headers on errors
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc):
+    """Ensure CORS headers are included even on unhandled exceptions"""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    origin = request.headers.get("origin", "*")
+    # Use exact origin if it's in allowed list, otherwise use the origin from request
+    allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    if origin not in allowed_origins and origin != "*":
+        origin = "*"  # Fallback to wildcard for unknown origins in dev
+    return JSONResponse(
+        status_code=500,
+        content={"ok": False, "error": str(exc), "ready": False},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Ops-Key, X-Request-ID",
+            "Access-Control-Expose-Headers": "X-Retry-After, X-Rate-Limit-Remaining, X-Time-Skew-Ms",
+            "Vary": "Origin",
+        }
+    )
 
 # Mount Prometheus metrics
 if settings.enable_metrics:
@@ -347,6 +599,10 @@ if settings.enable_metrics:
 from apps.api import debug, debug_supervisor
 app.include_router(debug.router, tags=["debug"])
 app.include_router(debug_supervisor.router, tags=["debug"])
+
+# Include MCP analyst router
+from apps.api.routes import mcp_analyst
+app.include_router(mcp_analyst.router, tags=["mcp-analyst"])
 
 
 # ===== API Models =====
@@ -384,15 +640,54 @@ class SystemStateResponse(BaseModel):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
+    health_data = {
         "status": "healthy",
         "mode": settings.app_mode.value,
         "is_paused": app_state.is_paused,
         "timestamp": datetime.now().isoformat()
     }
+    
+    # Add crypto venue info if in crypto mode
+    if settings.app_mode.value in ("CRYPTO_PAPER", "CRYPTO_LIVE"):
+        venue_config = getattr(app_config, "venue", {})
+        if venue_config:
+            health_data["crypto_venue"] = venue_config.get("name", "UNKNOWN")
+            health_data["allowed_symbols"] = venue_config.get("allowed_symbols", [])
+            health_data["maker_fee_bps"] = venue_config.get("maker_fee_bps", 0)
+            health_data["taker_fee_bps"] = venue_config.get("taker_fee_bps", 0)
+            
+            # Add precision info for top 3 symbols (if crypto router initialized)
+            # Note: This is optional and may not be available on first health check
+            try:
+                if hasattr(app_state, "crypto_router") and app_state.crypto_router:
+                    symbols = venue_config.get("allowed_symbols", [])[:3]
+                    precision_info = {}
+                    for sym in symbols:
+                        symbol_info = await app_state.crypto_router.exchange.get_symbol_info(sym)
+                        if symbol_info:
+                            precision_info[sym] = {
+                                "tick_size": float(symbol_info.tick_size),
+                                "step_size": float(symbol_info.step_size),
+                                "min_notional": float(symbol_info.min_notional)
+                            }
+                    if precision_info:
+                        health_data["precision"] = precision_info
+            except Exception as e:
+                # Silently fail - precision info is optional
+                pass
+    
+    # Return JSONResponse to ensure CORS expose headers are included
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content=health_data,
+        headers={
+            "Access-Control-Expose-Headers": "X-Retry-After, X-Rate-Limit-Remaining, X-Time-Skew-Ms",
+            "Vary": "Origin",
+        }
+    )
 
 
-@app.get("/ready")
+@app.get("/ready", response_class=JSONResponse)
 async def ready():
     """Readiness endpoint - returns 200 only when leader lock is held and all heartbeats are fresh"""
     import os
@@ -427,28 +722,77 @@ async def ready():
         )
         
         if not ok:
-            raise HTTPException(
+            # Return JSONResponse with CORS headers instead of raising HTTPException
+            return JSONResponse(
                 status_code=503,
-                detail={
+                content={
+                    "ok": False,
+                    "ready": False,
                     "status": "not_ready",
-                    "leader": leader_val,
+                    "mode": settings.app_mode.value,
+                    "leader": int(leader_val),
                     "marketdata_heartbeat": md_heartbeat,
                     "order_stream_heartbeat": order_heartbeat,
                     "scan_heartbeat": scan_heartbeat,
                     "heartbeat_max": HEARTBEAT_MAX
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Ops-Key, X-Request-ID",
+                    "Access-Control-Expose-Headers": "X-Retry-After, X-Rate-Limit-Remaining, X-Time-Skew-Ms",
+                    "Vary": "Origin",
+                    "Cache-Control": "no-store, no-cache, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
                 }
             )
         
-        return {
-            "status": "ready",
-            "leader": leader_val,
-            "marketdata_heartbeat": md_heartbeat,
-            "order_stream_heartbeat": order_heartbeat,
-            "scan_heartbeat": scan_heartbeat
-        }
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "ready": True,
+                "status": "ready",
+                "mode": settings.app_mode.value,
+                "leader": int(leader_val),
+                "marketdata_heartbeat": md_heartbeat,
+                "order_stream_heartbeat": order_heartbeat,
+                "scan_heartbeat": scan_heartbeat
+            },
+            headers={
+                "Vary": "Origin",
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+        )
+        return response
     except Exception as e:
         logger.error(f"Readiness check failed: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail=f"Readiness check error: {str(e)}")
+        # Return JSONResponse with CORS headers instead of raising HTTPException
+        # This ensures CORS headers are present even on errors
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "ready": False,
+                "status": "not_ready",
+                "mode": settings.app_mode.value if hasattr(settings, 'app_mode') else "UNKNOWN",
+                "error": str(e)
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Ops-Key, X-Request-ID",
+                "Access-Control-Expose-Headers": "X-Retry-After, X-Rate-Limit-Remaining, X-Time-Skew-Ms",
+                "Vary": "Origin",
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+        )
 
 
 @app.get("/compliance/status")
@@ -790,28 +1134,50 @@ async def resume_trading():
 @app.post("/flatten")
 async def flatten_all(reason: str = "manual"):
     """
-    KILL SWITCH: Close all positions immediately with market orders.
-    Also pauses trading.
+    Flatten (close) all positions.
     
-    Args:
-        reason: Reason for kill switch (manual|eod|risk)
+    For crypto mode, uses crypto router to flatten positions.
+    For equity mode, uses orchestrator flatten_all.
     """
-    try:
-        if app_state.orchestrator:
-            await app_state.orchestrator.flatten_all(reason=reason)
-            app_state.is_paused = True
+    import time
+    from packages.core.metrics import crypto_flatten_duration_seconds
+    
+    start_time = time.time()
+    
+    if settings.app_mode.value in ("CRYPTO_PAPER", "CRYPTO_LIVE") and app_state.crypto_router:
+        # Use crypto router to flatten
+        orders = await app_state.crypto_router.flatten()
         
-        logger.critical("🚨 KILL SWITCH ACTIVATED - FLATTENING ALL POSITIONS", reason=reason)
+        # Record duration metric
+        duration = time.time() - start_time
+        venue = getattr(app_state.crypto_router, 'venue', None)
+        if venue:
+            crypto_flatten_duration_seconds.labels(venue=venue.value).observe(duration)
         
         return {
             "status": "flattened",
-            "timestamp": datetime.now().isoformat(),
             "reason": reason,
-            "message": "All positions closed. Trading paused."
+            "orders": len(orders),
+            "duration_seconds": round(duration, 3),
+            "timestamp": datetime.now().isoformat()
         }
-    except Exception as e:
-        logger.error(f"Error in flatten: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Flatten failed: {str(e)}")
+    
+    # Equity mode - use orchestrator
+    if app_state.orchestrator:
+        await app_state.orchestrator.flatten_all(reason=reason)
+        duration = time.time() - start_time
+        return {
+            "status": "flattened",
+            "reason": reason,
+            "duration_seconds": round(duration, 3),
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    return {
+        "status": "no_positions",
+        "reason": reason,
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 # ===== Data Endpoints =====
@@ -835,10 +1201,18 @@ async def get_positions():
         for pos in positions_list if pos.is_open
     ]
     
-    return {
-        "positions": positions,
-        "count": len(positions)
-    }
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={
+            "positions": positions,
+            "count": len(positions)
+        },
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
 
 
 @app.post("/positions/{position_id}/close")
@@ -916,22 +1290,30 @@ async def get_orders():
     """Get all orders"""
     orders = app_state.execution_engine.orders.values()
     
-    return {
-        "orders": [
-            {
-                "order_id": order.order_id,
-                "client_order_id": order.client_order_id,
-                "timestamp": order.timestamp.isoformat(),
-                "side": order.side,
-                "quantity": order.quantity,
-                "price": order.price,
-                "status": order.status.value,
-                "filled_quantity": order.filled_quantity
-            }
-            for order in orders
-        ],
-        "count": len(orders)
-    }
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={
+            "orders": [
+                {
+                    "order_id": order.order_id,
+                    "client_order_id": order.client_order_id,
+                    "timestamp": order.timestamp.isoformat(),
+                    "side": order.side,
+                    "quantity": order.quantity,
+                    "price": order.price,
+                    "status": order.status.value,
+                    "filled_quantity": order.filled_quantity
+                }
+                for order in orders
+            ],
+            "count": len(orders)
+        },
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
 
 
 @app.post("/universe/reload")
@@ -1067,9 +1449,17 @@ async def run_backtest(request: BacktestRequest):
 
 @app.get("/metrics")
 async def metrics():
-    """Prometheus metrics endpoint"""
+    """Prometheus metrics endpoint with cache control"""
     from packages.core.metrics import get_metrics
-    return Response(content=get_metrics(), media_type="text/plain")
+    return Response(
+        content=get_metrics(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
 
 
 @app.get("/risk")

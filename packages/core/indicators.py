@@ -93,8 +93,12 @@ class IndicatorCalculator:
     def _vwap(self, df: pd.DataFrame) -> Optional[float]:
         """Volume Weighted Average Price"""
         try:
+            volume_sum = df["volume"].sum()
+            if volume_sum == 0:
+                # No volume data, return None instead of NaN
+                return None
             typical_price = (df["high"] + df["low"] + df["close"]) / 3
-            vwap = (typical_price * df["volume"]).sum() / df["volume"].sum()
+            vwap = (typical_price * df["volume"]).sum() / volume_sum
             return float(vwap)
         except:
             return None

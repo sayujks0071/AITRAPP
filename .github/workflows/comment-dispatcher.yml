@@ -51,7 +51,10 @@ jobs:
               'manual-canary-live': 'manual-canary-live.yml',
               'canary-live':        'manual-canary-live.yml',
               'burnin-check':       'paper-preopen.yml',  // bundled in preopen
-              'paper-e2e':          'paper-e2e.yml'       // existing dedicated workflow
+              'paper-e2e':          'paper-e2e.yml',       // existing dedicated workflow
+              'crypto-health':      'crypto-health.yml',   // crypto health checks
+              'crypto-oco':         'crypto-health.yml',   // crypto OCO drill (via health workflow)
+              'crypto-report':      'crypto-health.yml'    // crypto report (via health workflow)
             };
 
             async function reply(body) {
@@ -71,6 +74,11 @@ jobs:
                 '• `/paper-preopen` – run preopen checks (burn-in + E2E + prelive gate)',
                 '• `/postclose-report` – postclose reports + Day-2 scorer',
                 '• `/paper-e2e` – run dedicated PAPER E2E workflow',
+                '',
+                '🪙 **Crypto (PAPER)**',
+                '• `/crypto-health` – run crypto health checks + scorer',
+                '• `/crypto-oco` – run crypto OCO drill (paper)',
+                '• `/crypto-report` – compile last 24h crypto report',
                 '',
                 '🔒 **Validation**',
                 '• `/prelive-gate` or `/gate` – validate Day-2 PASS requirements',

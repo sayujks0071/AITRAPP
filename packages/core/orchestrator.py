@@ -1,7 +1,7 @@
 """Main trading orchestrator - connects all components"""
 import asyncio
 from datetime import datetime, time, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 from kiteconnect import KiteConnect
@@ -12,6 +12,7 @@ from packages.core.exits import ExitManager, ExitReason, ExitSignal
 from packages.core.instruments import InstrumentManager
 from packages.core.market_data import MarketDataStream
 from packages.core.models import Position, PositionStatus, Signal, SignalSide, SystemState
+from packages.core.config import AppMode
 from packages.core.paper_simulator import PaperSimulator
 from packages.core.ranker import SignalRanker, RankedOpportunity
 from packages.core.risk import PortfolioRisk, RiskManager
@@ -54,7 +55,8 @@ class TradingOrchestrator:
         exit_manager: ExitManager,
         ranker: SignalRanker,
         redis_bus: Optional[RedisBus] = None,
-        oco_manager: Optional[OCOManager] = None
+        oco_manager: Optional[OCOManager] = None,
+        crypto_router: Optional[Any] = None
     ):
         self.kite = kite
         self.strategies = strategies
@@ -66,6 +68,7 @@ class TradingOrchestrator:
         self.ranker = ranker
         self.redis_bus = redis_bus
         self.oco_manager = oco_manager
+        self.crypto_router = crypto_router
         self.leader_lock: Optional[LeaderLock] = None
         
         # State
@@ -122,16 +125,33 @@ class TradingOrchestrator:
         self.is_running = True
         self.is_paused = False
         
-        # Start market data stream
-        if not self.market_data_stream.is_connected:
-            self.market_data_stream.start()
-            await asyncio.sleep(2)  # Wait for connection
-        
-        # Subscribe to universe
-        universe_tokens = self.instrument_manager.get_universe_tokens()
-        if universe_tokens:
-            self.market_data_stream.subscribe(universe_tokens[:50])  # Limit for demo
-            logger.info(f"Subscribed to {len(universe_tokens[:50])} instruments")
+        # Initialize crypto venue if in crypto mode
+        if settings.app_mode.value in ("CRYPTO_PAPER", "CRYPTO_LIVE") and self.crypto_router:
+            try:
+                await self.crypto_router.connect_ws()
+                venue_config = app_config.venue if hasattr(app_config, "venue") else {}
+                allowed_symbols = venue_config.get("allowed_symbols", [])
+                for symbol in allowed_symbols:
+                    await self.crypto_router.subscribe_symbol(symbol)
+                logger.info(f"Subscribed to {len(allowed_symbols)} crypto symbols")
+            except Exception as e:
+                logger.warning("Crypto WebSocket connection failed (continuing in paper mode)", error=str(e))
+                # In paper mode, we can continue without WebSocket
+                if settings.app_mode.value == "CRYPTO_PAPER":
+                    logger.info("Continuing in CRYPTO_PAPER mode without WebSocket")
+                else:
+                    raise
+        else:
+            # Start market data stream for equity mode
+            if not self.market_data_stream.is_connected:
+                self.market_data_stream.start()
+                await asyncio.sleep(2)  # Wait for connection
+            
+            # Subscribe to universe
+            universe_tokens = self.instrument_manager.get_universe_tokens()
+            if universe_tokens:
+                self.market_data_stream.subscribe(universe_tokens[:50])  # Limit for demo
+                logger.info(f"Subscribed to {len(universe_tokens[:50])} instruments")
         
         # Start scan supervisor (never silently dies)
         from packages.core.metrics import scan_supervisor_state

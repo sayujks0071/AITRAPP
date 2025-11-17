@@ -1,0 +1,24 @@
+{
+  "name": "trading-analyst-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for high-level trading analysis and risk monitoring",
+  "type": "module",
+  "bin": {
+    "trading-analyst": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "prepare": "npm run build"
+  },
+  "keywords": ["mcp", "trading", "analysis", "kite", "zerodha"],
+  "author": "AITRAPP",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2"
+  }
+}

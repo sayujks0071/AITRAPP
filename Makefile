@@ -1,10 +1,18 @@
-.PHONY: help dev paper live stop clean test test-integration test-replay lint format install
+.PHONY: help dev paper live stop clean test test-integration test-replay lint format install ops-smoke ops-smoke-no-ui ops-verify-cors ops-verify-preflight ops-verify-expose ops-smoke-proxy
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Available targets:'
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ''
+	@echo 'Ops Browser Commands:'
+	@echo '  ops-smoke          - API + UI smoke test'
+	@echo '  ops-smoke-no-ui    - API-only smoke test (SKIP_UI_CHECK=true)'
+	@echo '  ops-smoke-proxy    - Production smoke test (API behind proxy)'
+	@echo '  ops-verify-cors    - Verify CORS headers on all endpoints'
+	@echo '  ops-verify-preflight - Verify OPTIONS preflight CORS headers'
+	@echo '  ops-verify-expose  - Verify Access-Control-Expose-Headers'
 
 install: ## Install Python dependencies
 	pip install -r requirements.txt
@@ -77,8 +85,54 @@ migrate: ## Run database migrations
 burnin-report: ## Generate daily trading report
 	python scripts/daily_report.py --date $$(date +%Y-%m-%d)
 
-verify: ## Verify environment and connectivity
+verify-env: ## Verify environment and connectivity
 	python scripts/verify_env.py
+
+verify-r1: ## Verify R1 Regime-Switching Volatility Engine is loaded and working
+	python3 scripts/verify_r1.py
+
+test-r1-routing: ## Test R1 routing to A-G strategies (usage: make test-r1-routing UNDERLYING=BANKNIFTY)
+	@bash scripts/test_r1_routing.sh $${UNDERLYING:-BANKNIFTY}
+
+verify-g1: ## Verify G1 Gamma Scalper is loaded and working
+	python3 scripts/verify_g1.py
+
+verify-t1: ## Verify T1 Calendar Arb is loaded and working
+	python3 scripts/verify_t1.py
+
+verify-d1: ## Verify D1 Dispersion Arb is loaded and working
+	python3 scripts/verify_d1.py
+
+verify-allocator: ## Verify Strategy Allocator is loaded and working
+	python3 scripts/verify_allocator.py
+
+verify-h1: ## Verify H1 Tail Short Vol Overlay is loaded and working
+	python3 scripts/verify_h1.py
+
+verify-e1: ## Verify E1 Event Vol Engine is loaded and working
+	python3 scripts/verify_e1.py
+
+daily-report: ## Generate daily trading report
+	python3 scripts/generate_daily_report.py
+
+sanity-check: ## Quick sanity check of all strategy metrics
+	@python3 scripts/quick_sanity_check.py
+
+commit-configs: ## Commit config changes (usage: make commit-configs MSG="tune: R1 bands")
+	@if [ -z "$(MSG)" ]; then \
+		echo "❌ Usage: make commit-configs MSG='tune: description'"; \
+		exit 1; \
+	fi; \
+	./scripts/commit_configs.sh "$(MSG)"
+
+save-snapshot: ## Save daily snapshot (report + sanity check + configs)
+	@./scripts/save_daily_snapshot.sh
+
+sanity-check-position-store: ## Sanity check position store with round-trip test
+	python3 scripts/sanity_check_position_store.py
+
+dry-run-playbook: ## Dry run PAPER playbook (rehearsal, no markets needed)
+	python3 scripts/dry_run_paper_playbook.py
 
 smoke-test: ## Run 60-minute smoke test
 	bash scripts/smoke_test.sh
@@ -127,6 +181,170 @@ migration-checklist: ## Run complete migration checklist
 
 start-paper: ## Start complete PAPER session (automated)
 	bash scripts/start_paper_session.sh
+
+crypto-paper: ## Start API in CRYPTO_PAPER mode
+	@echo "Starting in CRYPTO_PAPER mode..."
+	@if [ -z "$$BINANCE_API_KEY" ] || [ -z "$$BINANCE_API_SECRET" ]; then \
+		echo "⚠️  Warning: BINANCE_API_KEY or BINANCE_API_SECRET not set"; \
+		echo "   Set them with: export BINANCE_API_KEY=... BINANCE_API_SECRET=..."; \
+	fi; \
+	if [ -d "venv" ]; then \
+		echo "Using virtual environment..."; \
+		source venv/bin/activate; \
+	fi; \
+	export APP_MODE=CRYPTO_PAPER; \
+	export APP_TIMEZONE=UTC; \
+	export PYTHONPATH=.; \
+	uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+score-crypto-day1: ## Run crypto Day-1 scorer
+	bash scripts/score_crypto_day1.sh
+
+watch-metrics: ## Watch key metrics (leader, heartbeats, errors) - generic for Kite/Crypto
+	@watch -n 5 'curl -s http://localhost:8000/metrics 2>/dev/null | grep -E "^trader_(is_leader|.*heartbeat.*|.*errors.*|oco_orphans_total)" | sort' || echo "⚠️  API not running or watch command not available"
+
+watch-crypto: ## Watch crypto metrics (heartbeats, WS reconnects, OCO orphans, Binance rate limits)
+	@watch -n 5 'curl -s http://localhost:8000/metrics 2>/dev/null | grep -E "^trader_(is_leader|marketdata_heartbeat_seconds|order_stream_heartbeat_seconds|scan_heartbeat_seconds|crypto_ws_reconnects_total|oco_orphans_total|binance_used_weight_1m|binance_order_count_1m|binance_listenkey_renew_total|binance_time_skew_ms)" | sort' || echo "⚠️  API not running or watch command not available"
+
+watch-all: ## Watch all key metrics (unified - equity + crypto)
+	@watch -n 5 'curl -s http://localhost:8000/metrics 2>/dev/null | grep -E "^(trader_is_leader|trader_(marketdata|order_stream|scan)_heartbeat_seconds|trader_scan_ticks_total|trader_leader_changes_total|trader_oco_orphans_total|trader_crypto_ws_reconnects_total|trader_binance_(used_weight_1m|order_count_1m|time_skew_ms|listenkey_renew_total))" | sort' || echo "⚠️  API not running or watch command not available"
+
+crypto-oco-drill: ## Run crypto OCO drill (inject plan + flatten)
+	@echo "🧪 Running crypto OCO drill..."
+	@python scripts/synthetic_crypto_plan.py || (echo "❌ Plan injection failed" && exit 1)
+	@sleep 2
+	@echo "📉 Flattening positions..."
+	@curl -fsS -X POST http://localhost:8000/flatten | jq || (echo "❌ Flatten failed" && exit 1)
+	@sleep 1
+	@echo "📊 Checking positions..."
+	@POS_COUNT=$$(curl -fsS http://localhost:8000/positions 2>/dev/null | jq '.count // 0'); \
+	if [ "$$POS_COUNT" -eq 0 ]; then \
+		echo "✅ Positions count: $$POS_COUNT (expected 0)"; \
+	else \
+		echo "⚠️  Positions count: $$POS_COUNT (expected 0)"; \
+		exit 1; \
+	fi
+
+crypto-report: ## Generate crypto report from last 24h scorer JSONs
+	bash scripts/crypto_report.sh
+
+crypto-gonogo: ## Run GO/NO-GO check before canary launch
+	bash scripts/crypto_gonogo_check.sh
+
+crypto-canary-launch: ## Launch crypto canary (pre-flight → launch → watch instructions)
+	bash scripts/crypto_canary_launch.sh
+
+crypto-canary-stop: ## Stop crypto canary and flatten positions
+	@echo "🛑 Stopping crypto canary..."
+	@curl -fsS -X POST http://localhost:8000/flatten >/dev/null 2>&1 || true
+	@pkill -f 'uvicorn' || true
+	@echo "✅ Canary stopped and flattened"
+
+crypto-canary-status: ## Check crypto canary status (ready + key metrics)
+	@echo "📊 Crypto Canary Status"
+	@echo "======================"
+	@echo ""
+	@echo "1️⃣  /ready endpoint:"
+	@curl -s http://localhost:8000/ready | jq . || echo "   ❌ API not responding"
+	@echo ""
+	@echo "2️⃣  Key metrics:"
+	@curl -s http://localhost:8000/metrics 2>/dev/null | grep -E '^trader_(is_leader|.*heartbeat.*|oco_orphans_total|crypto_ws_reconnects_total)' || echo "   ⚠️  Metrics not available"
+
+# Kite Canary Commands
+kite-size: ## Calculate Kite debit spread sizing (CAPITAL=30000 RISK_PCT=0.30)
+	@if [ -z "$(CAPITAL)" ]; then \
+		echo "❌ Usage: make kite-size CAPITAL=30000 RISK_PCT=0.30"; \
+		exit 1; \
+	fi; \
+	python3 scripts/kite_sizing_calc.py --capital $(CAPITAL) --risk-pct $${RISK_PCT:-0.30}
+
+kite-canary-launch: ## Launch Kite canary (pre-flight → gate → watch instructions)
+	@echo "🚀 Kite Canary Launch Sequence"
+	@echo "=============================="
+	@echo ""
+	@echo "1️⃣  Pre-flight gate checks..."
+	@make prelive-gate || (echo "❌ Pre-flight gate failed. Fix issues before proceeding." && exit 1)
+	@echo ""
+	@echo "2️⃣  API readiness check..."
+	@curl -fsS http://localhost:8000/ready | jq . || (echo "❌ API not ready" && exit 1)
+	@echo ""
+	@echo "3️⃣  Starting metrics watch (Ctrl+C to stop)..."
+	@echo "   Key metrics to watch:"
+	@echo "   - trader_is_leader should be 1"
+	@echo "   - *_heartbeat_seconds should be < 5"
+	@echo "   - leader_changes_total should be 0"
+	@echo ""
+	@echo "✅ Canary ready. Monitoring metrics..."
+	@echo "   Run 'make kite-canary-status' in another terminal to check status"
+	@echo "   Run 'make kite-canary-stop' to stop and flatten"
+	@make watch-metrics
+
+kite-canary-stop: ## Stop Kite canary and flatten positions
+	@echo "🛑 Stopping Kite canary..."
+	@curl -fsS -X POST http://localhost:8000/flatten >/dev/null 2>&1 || echo "   ⚠️  Flatten endpoint not available or already flat"
+	@pkill -f 'uvicorn.*apps.api.main' || echo "   ⚠️  API process not found"
+	@echo "✅ Canary stopped and flattened"
+
+kite-canary-status: ## Check Kite canary status (ready + key metrics)
+	@echo "📊 Kite Canary Status"
+	@echo "===================="
+	@echo ""
+	@echo "1️⃣  /ready endpoint:"
+	@curl -s http://localhost:8000/ready | jq . || echo "   ❌ API not responding"
+	@echo ""
+	@echo "2️⃣  Key metrics:"
+	@curl -s http://localhost:8000/metrics 2>/dev/null | grep -E '^trader_(is_leader|.*heartbeat.*|oco_orphans_total|leader_changes_total)' || echo "   ⚠️  Metrics not available"
+
+kite-token-refresh: ## Refresh Kite access token (daily - opens browser for OAuth)
+	@echo "🔄 Refreshing Kite access token..."
+	@python3 scripts/kite_token_refresh.py || echo "   ❌ Token refresh failed. Check KITE_API_KEY and KITE_API_SECRET are set."
+
+kite-token-check: ## Verify Kite access token is valid (quick self-check)
+	@echo "🔍 Checking Kite access token..."
+	@python3 scripts/kite_token_check.py || echo "   ❌ Token check failed. Run 'make kite-token-refresh' to get a fresh token."
+
+kite-token-smoke: ## Smoke test token refresh script (no secrets, dry run)
+	@bash scripts/kite_token_smoke_test.sh
+
+verify-infra: ## Verify infrastructure (orchestrator, metrics, docker, watch commands)
+	@bash scripts/verify_infrastructure.sh
+
+# Ops Browser Commands
+ops-smoke: ## Run ops browser smoke test (API + UI)
+	@if [ -z "$$API_BASE" ]; then API_BASE=http://localhost:8000; fi; \
+	if [ -z "$$UI_BASE" ]; then UI_BASE=http://localhost:3000; fi; \
+	API_BASE=$$API_BASE UI_BASE=$$UI_BASE \
+	bash apps/ops-browser/scripts/prod_smoke.sh
+
+ops-smoke-no-ui: ## Run ops browser smoke test (API only, skip UI check)
+	@if [ -z "$$API_BASE" ]; then API_BASE=http://localhost:8000; fi; \
+	SKIP_UI_CHECK=true API_BASE=$$API_BASE \
+	bash apps/ops-browser/scripts/prod_smoke.sh
+
+ops-verify-cors: ## Verify CORS headers on API endpoints
+	@bash apps/ops-browser/scripts/verify_cors.sh
+
+ops-verify-preflight: ## Verify OPTIONS preflight CORS headers
+	@bash apps/ops-browser/scripts/verify_preflight.sh
+
+ops-verify-expose: ## Verify Access-Control-Expose-Headers on API endpoints
+	@API=$${API:-http://localhost:8000} ORIGIN=$${ORIGIN:-http://localhost:3000} ENDPOINT=$${ENDPOINT:-/ready} STRICT=$${STRICT:-true} TEST_ERROR_ENDPOINT=$${TEST_ERROR_ENDPOINT:-} \
+	bash apps/ops-browser/scripts/ops-verify-expose.sh
+
+ops-smoke-proxy: ## Run production smoke test (API behind reverse proxy)
+	@if [ -z "$$API" ]; then API=https://ops-api.yourdomain.com; fi; \
+	if [ -z "$$ORIGIN" ]; then ORIGIN=https://ops-ui.yourdomain.com; fi; \
+	API=$$API ORIGIN=$$ORIGIN \
+	bash apps/ops-browser/scripts/prod_smoke_proxy.sh
+
+crypto-prelaunch-smoke: ## Run 30-second pre-launch smoke test
+	bash scripts/crypto_prelaunch_smoke.sh
+
+crypto-validation-flight: ## Run 7-minute Binance validation flight
+	bash scripts/crypto_validation_flight.sh
+
+test-binance: ## Run Binance adapter unit tests
+	pytest tests/test_binance_spot.py -v
 
 quick-proveout: ## Run quick prove-out test (health, metrics, kill-switch)
 	bash scripts/quick_proveout.sh

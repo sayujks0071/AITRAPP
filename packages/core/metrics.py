@@ -57,6 +57,65 @@ retries_total = Counter(
     registry=REGISTRY
 )
 
+# Crypto metrics
+crypto_orders_placed_total = Counter(
+    'trader_crypto_orders_placed_total',
+    'Crypto orders placed',
+    ['venue', 'symbol', 'side'],
+    registry=REGISTRY
+)
+
+crypto_ws_reconnects_total = Counter(
+    'trader_crypto_ws_reconnects_total',
+    'Crypto WebSocket reconnects',
+    ['venue'],
+    registry=REGISTRY
+)
+
+oco_orphans_total = Counter(
+    'trader_oco_orphans_total',
+    'OCO orphan orders (sibling not cancelled)',
+    ['venue'],
+    registry=REGISTRY
+)
+
+crypto_flatten_duration_seconds = Histogram(
+    'trader_crypto_flatten_duration_seconds',
+    'Crypto flatten operation duration',
+    ['venue'],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0],
+    registry=REGISTRY
+)
+
+# Binance-specific metrics
+binance_used_weight_1m = Gauge(
+    'trader_binance_used_weight_1m',
+    'Binance API weight used in last 1 minute',
+    ['venue'],
+    registry=REGISTRY
+)
+
+binance_order_count_1m = Gauge(
+    'trader_binance_order_count_1m',
+    'Binance order count in last 1 minute',
+    ['venue'],
+    registry=REGISTRY
+)
+
+binance_listenkey_renew_total = Counter(
+    'trader_binance_listenkey_renew_total',
+    'Binance listen key renewals',
+    ['venue'],
+    registry=REGISTRY
+)
+
+binance_time_skew_ms = Gauge(
+    'trader_binance_time_skew_ms',
+    'Binance time skew (absolute offset from server time) in milliseconds',
+    ['venue'],
+    registry=REGISTRY
+)
+
 # Gauges
 positions_open = Gauge(
     'trader_positions_open',

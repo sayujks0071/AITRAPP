@@ -1,0 +1,35 @@
+# Caddy reverse proxy configuration
+# Place this in /etc/caddy/Caddyfile or your Caddy config directory
+# Generate password hash: caddy hash-password
+
+ops-ui.example.com {
+  # Basic Auth (optional - use VPN/proxy auth instead)
+  basicauth /* {
+    admin JDJhJDEwJE5Y...   # Replace with: caddy hash-password output
+  }
+  
+  # Compression
+  encode zstd gzip
+  
+  # Reverse proxy to Next.js app
+  reverse_proxy 127.0.0.1:3000
+}
+
+ops-api.example.com {
+  # Compression
+  encode zstd gzip
+  
+  # Reverse proxy to AITRAPP API
+  reverse_proxy 127.0.0.1:8000
+  
+  # CORS headers for ops-browser
+  header {
+    Access-Control-Allow-Origin https://ops-ui.example.com
+    Access-Control-Allow-Methods "GET, POST, OPTIONS"
+    Access-Control-Allow-Headers "Content-Type, Authorization"
+    Access-Control-Allow-Credentials "true"
+  }
+}
+
+
+

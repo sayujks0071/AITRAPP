@@ -14,6 +14,23 @@ class InstrumentType(str, Enum):
     FUT = "FUT"  # Futures
     CE = "CE"  # Call Option
     PE = "PE"  # Put Option
+    CRYPTO = "CRYPTO"  # Cryptocurrency
+
+
+class AssetType(str, Enum):
+    """Asset types"""
+    EQUITY = "EQUITY"
+    DERIVATIVES = "DERIVATIVES"
+    OPTIONS = "OPTIONS"
+    CRYPTO = "CRYPTO"
+
+
+class Venue(str, Enum):
+    """Trading venues"""
+    NSE = "NSE"  # National Stock Exchange (India)
+    BSE = "BSE"  # Bombay Stock Exchange
+    KRAKEN_SPOT = "KRAKEN_SPOT"  # Kraken Spot
+    BINANCE_SPOT = "BINANCE_SPOT"  # Binance Spot
 
 
 class SignalSide(str, Enum):
@@ -57,6 +74,8 @@ class Instrument:
     # Metadata
     segment: Optional[str] = None
     isin: Optional[str] = None
+    venue: Optional[Venue] = None  # Trading venue
+    asset_type: Optional[AssetType] = None  # Asset type
     
     @property
     def is_option(self) -> bool:

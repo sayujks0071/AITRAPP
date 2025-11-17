@@ -1,0 +1,76 @@
+name: Deploy Ops Browser
+
+on:
+  push:
+    paths:
+      - "apps/ops-browser/**"
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-ship:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      
+      - name: Set up Node
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8
+        with:
+          node-version: 20
+      
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
+      
+      - name: Build
+        working-directory: apps/ops-browser
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Docker build
+        run: |
+          docker build -t registry.example.com/ops-browser:${{ github.sha }} \
+            -f apps/ops-browser/Dockerfile .
+          docker tag registry.example.com/ops-browser:${{ github.sha }} \
+            registry.example.com/ops-browser:latest
+      
+      - name: Push to registry
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.REG_PASS }}" | docker login registry.example.com \
+            -u "${{ secrets.REG_USER }}" --password-stdin
+          docker push registry.example.com/ops-browser:${{ github.sha }}
+          docker push registry.example.com/ops-browser:latest
+        env:
+          REG_USER: ${{ secrets.REG_USER }}
+          REG_PASS: ${{ secrets.REG_PASS }}
+      
+      - name: Deploy via SSH
+        if: github.ref == 'refs/heads/main'
+        uses: appleboy/ssh-action@5a3aeae8c0c4b4c8c8c8c8c8c8c8c8c8c8c8c8c8
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            docker pull registry.example.com/ops-browser:${{ github.sha }}
+            docker stop ops-browser || true
+            docker rm ops-browser || true
+            docker run -d \
+              --name ops-browser \
+              -p 3000:3000 \
+              -e NEXT_PUBLIC_API_BASE="${{ secrets.API_BASE_URL }}" \
+              --restart=always \
+              registry.example.com/ops-browser:${{ github.sha }}
+            
+            # Wait for health check
+            sleep 5
+            curl -f http://localhost:3000 || exit 1
+
+
+

@@ -1,0 +1,191 @@
+# Kite LIVE Canary Configuration - Day-1 (₹20-50k capital)
+# Conservative, SEBI-safe parameters for first LIVE session
+# 
+# Usage:
+#   export APP_MODE=LIVE
+#   export APP_TIMEZONE=Asia/Kolkata
+#   export KITE_API_KEY="***"
+#   export KITE_API_SECRET="***"
+#   export KITE_ACCESS_TOKEN="***"  # from today's OAuth exchange
+#   export EXPECTED_EGRESS_IP="x.x.x.x"  # your allowlisted IP
+#
+#   # Load this config override
+#   python -m uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+
+app:
+  mode: LIVE
+  timezone: Asia/Kolkata
+
+venue:
+  name: NSE
+  # Kite Connect integration
+  api_key_env: KITE_API_KEY
+  api_secret_env: KITE_API_SECRET
+  access_token_env: KITE_ACCESS_TOKEN
+
+# Risk Management - Day-1 Conservative Parameters
+risk:
+  per_trade_risk_pct: 0.30      # 0.30% per trade (₹60-₹150 for ₹20k-₹50k)
+  max_portfolio_heat_pct: 1.0    # ≤1.0% portfolio heat
+  daily_loss_stop_pct: -1.50     # -1.50% daily loss cap (₹300-₹750)
+  max_positions: 2                # Max 1-2 concurrent positions
+  max_position_size_multiplier: 1 # Conservative: 1x lot size max
+  slippage_bps: 5                # 5 bps slippage assumption
+  fees_per_order: 20             # ₹20 per order (Kite)
+  fees_per_option_leg: 20        # ₹20 per option leg
+
+# Market Hours & Entry Windows
+market:
+  open_time: "09:15"             # Market open
+  close_time: "15:20"            # Last entry time
+  eod_squareoff_time: "15:25"    # Hard flat time (IST)
+  eod_squareoff_enabled: true    # Force flatten at 15:25
+  premarket_sync_time: "08:55"   # Pre-open sync
+  event_aware: true              # Block around events
+  event_stop_mult: 1.5
+  
+# Entry Window Restriction (Day-1 only)
+entry:
+  window_start: "09:30"          # First entry allowed
+  window_end: "10:30"            # No new entries after 10:30 IST
+  max_entries_per_day: 1         # One attempt only (Day-1)
+  cooldown_minutes: 0            # No re-entries today
+
+# Execution Throttles (SEBI/NSE compliant)
+execution:
+  engine_gap_ms: 300             # 250-350ms gap between orders
+  instrument_gap_ms: 300         # Gap between instruments
+  price_band_bps: 40             # 0.4% price band check
+  burst: 2                        # Max 2 orders in burst
+  fanout_per_sec: 4              # 4 orders/sec max
+  use_native_oco: false            # Client-side OCO (Kite doesn't support native)
+  default_order_type: LIMIT       # Use LIMIT orders
+  limit_chase_ticks: 2            # Chase limit orders 2 ticks
+  limit_timeout_sec: 5           # Timeout after 5s
+  ioc_for_exits: true            # IOC for exits
+  max_order_retries: 3            # Max retries
+  retry_backoff_ms: 500          # Backoff between retries
+  tops_cap_per_sec: 10           # TOPS compliance: 10 updates/sec
+
+# Universe - NIFTY weekly options only (Day-1)
+universe:
+  indices: [NIFTY]               # NIFTY only for Day-1
+  fo_stocks_liquidity_rank_top_n: 0  # No stocks, indices only
+  exclude_fo_ban: true           # Exclude F&O ban stocks
+  exclude_illiquid_threshold_turnover: 10000000
+  sync_time: "08:55"             # Sync instruments at 08:55 IST
+
+# Options Filters - Tight liquidity gates
+options:
+  max_spread_mid_pct: 0.5        # Bid-ask spread ≤ 0.5% of mid
+  min_oi: 50000                   # Minimum OI: 50k
+  min_last_traded_volume: 100     # Minimum volume: 100
+  strikes_from_atm: 5            # Look 5 strikes around ATM
+  prefer_weekly: true            # Prefer weekly expiries
+  max_dte: 7                     # Max 7 days to expiry
+  iv_percentile_min: 20          # IV percentile range
+  iv_percentile_max: 80
+
+# Strategy Configuration - Debit Spreads Only
+strategies:
+  - name: OptionsRanker
+    enabled: true
+    priority: 1
+    params:
+      strategy_type: DEBIT_SPREAD  # Buy call spread or buy put spread
+      ivp_min: 20                   # IV percentile min
+      ivp_max: 80                   # IV percentile max
+      liquidity_score_min: 0.7      # 70% liquidity score
+      max_spread_legs: 2            # 2-leg spreads only
+      rr_min: 1.5                   # Min risk-reward 1.5:1
+      max_positions: 1              # 1 position max (Day-1)
+      instruments: [NIFTY]          # NIFTY only
+      
+      # Debit spread specific
+      max_cost_pct: 30              # Max cost = 30% of spread width
+      min_pop: 40                   # Min 40% probability of profit
+      stop_loss_pct: 50             # Stop at -50% of net debit
+      take_profit_pct: 70           # TP at +60-80% (use 70% for Day-1)
+      
+      # Entry filters
+      require_trend_confirmation: true  # EMA34 > EMA89 for calls
+      orb_window_min: 15               # ORB 15-min window (9:15-9:30)
+      require_breakout_confirmation: true
+
+# Exit Management - Day-1 Conservative
+exits:
+  hard_stop_atr_mult: 2.0         # Hard stop (not used for spreads)
+  trail_enabled: false            # No trailing stops for Day-1
+  trail_atr_mult: 1.2
+  trail_step_pct: 0.5
+  tp1_rr: 1.2                     # TP1 (not used for spreads)
+  tp1_partial_pct: 50
+  tp2_rr: 2.0                     # TP2 (not used for spreads)
+  tp2_partial_pct: 100
+  move_to_be_after_tp1: false
+  time_stop_enabled: true         # Time-based exit
+  time_stop_min: 20               # Exit after 20 min if no TP/SL
+  vol_stop_enabled: false          # No vol stops Day-1
+  vol_spike_mult: 2.0
+  mae_stop_enabled: false         # No MAE stops Day-1
+  mae_stop_pct: 1.5
+  
+  # Debit spread specific exits
+  debit_spread_stop_pct: 50       # Stop at -50% of net debit
+  debit_spread_tp_pct: 70         # TP at +70% of net debit
+  debit_spread_timeout_min: 20    # Exit by 15:10-15:20 if still open
+
+# Guards & Safety
+guards:
+  block_around_events_min: 10     # Block 10 min around CPI/RBI/expiry
+  max_spread_mid_pct: 0.5         # Reject if spread > 0.5%
+  min_liquidity_score: 0.7         # Min liquidity score
+  require_unique_order_ids: true   # Enforce unique order IDs
+  audit_all_decisions: true       # Full audit trail
+
+# Ranking Engine (simplified for Day-1)
+ranking:
+  weights:
+    momentum: 0.20
+    trend: 0.30                   # Higher weight on trend
+    liquidity: 0.30               # High weight on liquidity
+    regime: 0.10
+    rr: 0.10
+  penalties:
+    illiquid_mult: 0.3            # Heavy penalty for illiquid
+    news_event_mult: 0.5          # Heavy penalty around events
+    far_from_vwap_mult: 0.8
+  top_n: 3                        # Top 3 opportunities
+
+# Logging & Audit (SEBI compliance)
+logging:
+  level: INFO
+  format: json
+  log_file: logs/kite_canary_live.log
+  max_bytes: 104857600            # 100 MB
+  backup_count: 10
+  audit_all_decisions: true       # Full audit trail
+  audit_retention_days: 90        # 90 days retention
+
+# Monitoring
+monitoring:
+  prometheus_enabled: true
+  prometheus_port: 9090
+  health_check_interval_sec: 30
+  heartbeat_timeout_sec: 5        # Alert if heartbeat > 5s
+  leader_election_enabled: true   # Single leader only
+
+# SEBI/NSE Compliance
+compliance:
+  sebi_2025: true                 # SEBI Feb 2025 compliance
+  exchange_algo_id_env: EXCHANGE_ALGO_ID  # Algo-ID from env
+  oauth_required: true            # OAuth required
+  two_fa_required: true           # 2FA required
+  require_static_ip: true         # Static IP required
+  expected_egress_ip_env: EXPECTED_EGRESS_IP  # Check egress IP
+  force_daily_logout_iso: "03:30"  # Force logout at 03:30 IST
+  audit_retention_years: 5        # 5 years audit retention
+  whitelisted_clients_env: WHITELISTED_CLIENTS  # Comma-separated client IDs
+
+
+

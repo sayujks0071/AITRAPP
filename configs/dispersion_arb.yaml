@@ -1,0 +1,59 @@
+# configs/dispersion_arb.yaml
+
+dispersion_arb:
+  enabled: true
+
+  pairs:
+    - parent: "NIFTY"
+      sector: "BANKNIFTY"
+    # Optional additional pairs when liquidity/infra allow
+    - parent: "NIFTY"
+      sector: "FINNIFTY"
+    - parent: "NIFTY"
+      sector: "MIDCAPNIFTY"
+
+  mode: "PAPER"                        # start here
+
+  entry:
+    entry_window:
+      start: "10:00"
+      end: "14:00"
+
+    # Volatility lookbacks (intraday, minutes)
+    rv_lookback_minutes: 60            # realised vol window
+    corr_lookback_minutes: 60          # correlation window
+
+    # Dispersion detection thresholds
+    min_corr: 0.6                      # only act if correlation reasonably high
+    min_vol_ratio_sector_parent: 1.5   # sector RV >= 1.5x parent RV
+    min_iv_ratio_sector_parent: 1.2    # sector ATM IV >= 1.2x parent ATM IV
+
+    # Market quality filters
+    min_liquidity_score: 7
+    max_bid_ask_spread_pct: 0.8
+
+    # Structures & sizing
+    lots_sector_long_vol: 1
+    lots_parent_short_vol: 1
+    max_pair_books_per_pair: 1         # keep it simple initially
+
+  exits:
+    hard_exit_time: "15:10"
+
+    # PnL exits (relative to capital used for the pair)
+    pnl_target_pct: 1.0
+    pnl_stop_pct: 0.8
+
+    # Structural exits
+    corr_break_min: 0.4                # if corr drops below, exit
+    vol_ratio_normalise_max: 1.2       # if RV_sector/RV_parent < 1.2, exit (dispersion faded)
+
+  risk:
+    max_capital_pct: 0.05              # capital allocation to dispersion per pair
+    max_daily_loss_pct: 0.8
+
+  integration:
+    require_r1_regime: true
+    allowed_r1_regimes:
+      - "LOW_MEAN_REVERT"              # calm index, hyper sector
+      - "MEDIUM_TREND"

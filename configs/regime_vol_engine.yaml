@@ -1,0 +1,88 @@
+regime_vol_engine:
+  enabled: true
+  
+  # Underlyings this engine is allowed to control
+  underlyings:
+    - "NIFTY"
+    - "BANKNIFTY"
+
+  shared:
+    timeframe: "5m"
+    
+    # Basic market quality filters
+    min_liquidity_score: 7
+    max_bid_ask_spread_pct: 0.80
+    
+    lookbacks:
+      iv_rank_days: 60        # IV rank lookback
+      rv_days: 10             # realised vol lookback
+      vix_rank_days: 90
+      atr_period: 14
+    
+    thresholds:
+      low_iv_rank: 0.25       # below → low vol regime
+      high_iv_rank: 0.65      # above → high vol regime
+      
+      rv_iv_low: 0.60         # RV/IV below → implied rich
+      rv_iv_high: 1.10        # RV/IV above → implied cheap
+      
+      atr_pct_low: 0.40       # ATR as % of spot
+      atr_pct_high: 1.50
+      
+      trend_strength_min: 0.60  # 0–1 scale from your trend score
+      
+      vix_slope_up: 0.00        # dVIX/dt > 0 = rising
+      vix_extreme_rank: 0.80    # top 20% of VIX history
+
+  regimes:
+    LOW_MEAN_REVERT:
+      description: "Low IV, low ATR, choppy mean-reverting"
+      conditions:
+        iv_rank_max: 0.25
+        atr_pct_max: 0.60
+        rv_iv_max: 0.90
+        vix_rank_max: 0.60
+      actions:
+        primary_structure: "iron_condor"
+        fallback_structure: "short_strangle"
+        max_daily_trades: 1
+        capital_pct: 0.25    # max capital fraction across all positions this regime starts
+
+    MEDIUM_TREND:
+      description: "Normal IV, decent ATR, strong trend"
+      conditions:
+        iv_rank_min: 0.20
+        iv_rank_max: 0.70
+        atr_pct_min: 0.50
+        atr_pct_max: 1.50
+        trend_strength_min: 0.60
+        rv_iv_min: 0.70
+      actions:
+        primary_structure: "directional_credit_spread"
+        secondary_structure: "index_sniper"
+        max_daily_trades: 2
+        capital_pct: 0.30
+
+    HIGH_EVENT:
+      description: "Elevated IV, event / gap risk"
+      conditions:
+        iv_rank_min: 0.60
+        vix_rank_min: 0.70
+        vix_slope_min: 0.0
+      actions:
+        primary_structure: "long_straddle"
+        fallback_structure: "stay_flat"
+        max_daily_trades: 1
+        capital_pct: 0.15
+
+    CHAOTIC:
+      description: "Very high IV, big tails, poor quality flows"
+      conditions:
+        iv_rank_min: 0.80
+        atr_pct_min: 1.50
+        rv_iv_min: 1.20
+      actions:
+        primary_structure: "stay_flat"
+        max_daily_trades: 0
+        capital_pct: 0.0
+

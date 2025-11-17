@@ -1,6 +1,7 @@
 """Heartbeat tracking for market data, order stream, and scan loop"""
 import asyncio
 import time
+from typing import Optional
 import structlog
 
 from packages.core.metrics import (
@@ -35,7 +36,7 @@ def touch_scan() -> None:
     _last_scan = time.monotonic()
 
 
-async def run_heartbeat_updater(interval: float = 1.0, stop: asyncio.Event | None = None) -> None:
+async def run_heartbeat_updater(interval: float = 1.0, stop: Optional[asyncio.Event] = None) -> None:
     """Background task to update heartbeat metrics"""
     log = logger.bind(component="heartbeats")
     

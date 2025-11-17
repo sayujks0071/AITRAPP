@@ -1,0 +1,51 @@
+# configs/gamma_scalper.yaml
+
+gamma_scalper:
+  enabled: true
+
+  underlyings:
+    - "NIFTY"
+    - "BANKNIFTY"
+
+  mode: "PAPER"          # start with PAPER; later LIVE with tight caps
+
+  entry:
+    entry_window:
+      start: "09:20"
+      end: "11:00"
+    expiry_selector: "nearest_weekly"
+    max_days_to_expiry: 4      # avoid ultra-long tails
+    min_days_to_expiry: 1      # avoid pure expiry decay at first
+    min_iv_rank: 0.20          # don't buy vol if IV is extremely cheap for no reason
+    max_iv_rank: 0.80          # avoid crazy IV (CHAOTIC) here
+    rv_iv_min: 0.9             # prefer regime where realised ~ implied or higher
+    min_liquidity_score: 7
+    max_bid_ask_spread_pct: 0.80
+    lots_per_underlying: 1
+
+  hedging:
+    target_abs_delta: 0.10     # keep |Δ| below this
+    rebalance_delta_threshold: 0.15  # trigger hedge if |Δ| exceeds this
+    rebalance_cooldown_seconds: 60   # avoid over-trading
+    max_hedge_lots: 3                # cap futures exposure
+    hedging_instrument: "FUT"        # or "PERPETUAL" if you ever add it
+
+  exits:
+    hard_exit_time: "15:10"
+    max_hold_minutes: 300           # safety for configs without hard_exit_time
+    pnl_target_pct: 0.8             # optional: close if > +0.8% of capital used
+    pnl_stop_pct: 0.6               # close all if loss > 0.6% of capital used
+    vol_collapse_rv_iv_max: 0.7     # if RV/IV drops below this → exit, vol not realising
+
+  risk:
+    max_capital_pct: 0.05           # 5% of total capital per gamma book
+    max_daily_loss_pct: 0.7         # cap for this strategy, % of capital used
+    max_rebalances: 25              # protect from churn/slippage
+
+  integration:
+    require_r1_regime: true
+    allowed_r1_regimes:
+      - "MEDIUM_TREND"
+      - "HIGH_EVENT"
+
+

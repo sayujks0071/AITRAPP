@@ -1,7 +1,7 @@
 """Risk management and position sizing"""
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 
@@ -12,6 +12,7 @@ from packages.core.models import (
     RiskCheckResult,
     Signal,
     SignalSide,
+    AssetType,
 )
 
 logger = structlog.get_logger(__name__)
@@ -85,6 +86,9 @@ class RiskManager:
         # Daily tracking
         self.daily_start_capital: Optional[float] = None
         self.trades_today = 0
+        
+        # Per-strategy capital caps (set by allocator)
+        self.strategy_caps: Dict[str, float] = {}
     
     def check_signal(
         self,
@@ -158,18 +162,26 @@ class RiskManager:
                     size=position_size
                 )
         
-        # 7. Check available margin
-        estimated_margin = self.estimate_margin_required(
-            signal.instrument,
-            position_size,
-            signal.entry_price
-        )
+        # 7. Crypto-specific checks
+        if signal.instrument.asset_type == AssetType.CRYPTO:
+            crypto_check = self._check_crypto_requirements(signal, position_size)
+            if not crypto_check["approved"]:
+                reasons.extend(crypto_check["reasons"])
+                return RiskCheckResult(approved=False, reasons=reasons)
         
-        if estimated_margin > portfolio_risk.available_margin:
-            reasons.append(
-                f"Insufficient margin: required {estimated_margin:.0f}, available {portfolio_risk.available_margin:.0f}"
+        # 8. Check available margin (skip for crypto spot - no margin)
+        if signal.instrument.asset_type != AssetType.CRYPTO:
+            estimated_margin = self.estimate_margin_required(
+                signal.instrument,
+                position_size,
+                signal.entry_price
             )
-            return RiskCheckResult(approved=False, reasons=reasons)
+            
+            if estimated_margin > portfolio_risk.available_margin:
+                reasons.append(
+                    f"Insufficient margin: required {estimated_margin:.0f}, available {portfolio_risk.available_margin:.0f}"
+                )
+                return RiskCheckResult(approved=False, reasons=reasons)
         
         # All checks passed
         logger.info(
@@ -408,6 +420,51 @@ class RiskManager:
         self.trades_today = 0
         logger.info("Daily risk counters reset")
     
+    def _check_crypto_requirements(
+        self,
+        signal: Signal,
+        position_size: int
+    ) -> Dict[str, Any]:
+        """
+        Check crypto-specific requirements:
+        - Min notional (order value >= min_notional)
+        - Precision (price/quantity rounding)
+        - Spot-only (no leverage)
+        - 24/7 guardrails (no market hours restrictions)
+        
+        Args:
+            signal: Trading signal
+            position_size: Calculated position size
+        
+        Returns:
+            Dict with 'approved' bool and 'reasons' list
+        """
+        reasons = []
+        
+        # 1. Check min notional (if symbol_info available)
+        # This is a placeholder - in production, would fetch from exchange
+        min_notional_usd = 25.0  # Conservative default
+        order_notional = signal.entry_price * position_size
+        
+        if order_notional < min_notional_usd:
+            reasons.append(
+                f"Crypto order notional {order_notional:.2f} USD < min_notional {min_notional_usd} USD"
+            )
+            return {"approved": False, "reasons": reasons}
+        
+        # 2. Precision check (would be enforced by exchange adapter)
+        # Price and quantity will be rounded by exchange adapter
+        
+        # 3. Spot-only check (no leverage)
+        # For spot, we only check available balance, not margin
+        # This is handled in the main check_signal flow
+        
+        # 4. 24/7 guardrails
+        # Crypto markets are 24/7, so no market hours check needed
+        # But we can add volatility/spread checks here if needed
+        
+        return {"approved": True, "reasons": []}
+    
     def can_enter(
         self,
         risk_cfg: RiskConfig,
@@ -449,3 +506,61 @@ class RiskManager:
             return False, 0
         
         return True, qty
+    
+    def set_strategy_cap(self, strategy_name: str, max_capital_pct: float) -> None:
+        """
+        Set maximum capital percentage for a strategy (called by allocator).
+        
+        Args:
+            strategy_name: Name of the strategy
+            max_capital_pct: Maximum capital percentage (0.0 to 1.0)
+        """
+        self.strategy_caps[strategy_name] = max(0.0, min(1.0, max_capital_pct))
+        logger.info(
+            "Strategy cap updated",
+            strategy=strategy_name,
+            max_capital_pct=max_capital_pct
+        )
+    
+    def get_strategy_cap(self, strategy_name: str) -> Optional[float]:
+        """
+        Get maximum capital percentage for a strategy.
+        
+        Args:
+            strategy_name: Name of the strategy
+        
+        Returns:
+            Max capital percentage or None if not set
+        """
+        return self.strategy_caps.get(strategy_name)
+    
+    def can_allocate(self, signal: Signal, max_capital_pct: Optional[float] = None) -> bool:
+        """
+        Check if a signal can be allocated capital.
+        
+        This is a simplified check that respects strategy caps.
+        In production, would integrate with full risk checks.
+        
+        Args:
+            signal: Trading signal
+            max_capital_pct: Optional override for max capital %
+        
+        Returns:
+            True if allocation is allowed
+        """
+        strategy_name = signal.strategy_name
+        
+        # Check strategy cap if set
+        if strategy_name in self.strategy_caps:
+            cap = self.strategy_caps[strategy_name]
+            if cap <= 0.0:
+                return False
+            # In production, would check current allocation vs cap
+            # For now, just check if cap > 0
+        
+        # If max_capital_pct provided, use it
+        if max_capital_pct is not None:
+            if max_capital_pct <= 0.0:
+                return False
+        
+        return True

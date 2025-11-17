@@ -1,0 +1,23 @@
+# Conservative round-trip costs for Indian equities
+# Adjust to your broker/plan
+
+slippage_bps: 5
+brokerage_flat: 20        # per order
+exchange_txn_bps: 3
+stt_bps: 1
+gst_bps: 1.8
+stamp_bps: 0.003
+sebi_bps: 0.0005
+
+# Total round-trip cost (approximate)
+# For a ₹100,000 trade:
+# - Slippage: 5 bps = ₹50
+# - Brokerage: ₹20
+# - Exchange: 3 bps = ₹30
+# - STT: 1 bps = ₹10
+# - GST: 1.8 bps = ₹18
+# - Stamp: 0.003 bps = ₹0.30
+# - SEBI: 0.0005 bps = ₹0.05
+# Total ≈ ₹128.35 (~12.8 bps)
+
+

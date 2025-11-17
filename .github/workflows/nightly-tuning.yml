@@ -1,0 +1,47 @@
+name: Research • Nightly Mini Tuning
+
+on:
+  schedule:
+    - cron: "10 13 * * 1-5"  # 18:40 IST on weekdays
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tune-orb-nifty:
+    runs-on: [self-hosted, paper-runner]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Python env
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip -q install -U pip
+          pip -q install -r requirements.txt
+
+      - name: Run NIFTY ORB mini grid
+        run: |
+          source .venv/bin/activate
+          python scripts/tune_walkforward.py \
+            --strategy ORB \
+            --symbol NIFTY \
+            --start 2023-01-01 --end 2025-11-15 \
+            --in-sample 60d --out-of-sample 20d --stride 20d \
+            --grid grids/orb_small.json \
+            --cost-model configs/costs/india_equities.yaml \
+            --max-trials 128 --seed 1337 \
+            --export reports/tuning/orb_nifty_walkforward.json
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: orb-nifty-walkforward
+          path: |
+            reports/tuning/orb_nifty_walkforward.json
+            reports/tuning/orb_nifty_walkforward.md
+
+

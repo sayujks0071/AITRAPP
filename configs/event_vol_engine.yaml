@@ -1,0 +1,95 @@
+# configs/event_vol_engine.yaml
+event_vol_engine:
+  enabled: true
+  timezone: "Asia/Kolkata"
+
+  # 1) Event calendar
+  calendar:
+    - name: "UNION_BUDGET"
+      type: "DOMESTIC_MACRO"
+      underlyings: ["NIFTY", "BANKNIFTY"]
+      dates: ["2025-02-01"]  # add future years
+      pre_event_days: 2
+      post_event_days: 1
+      severity: 1.0  # 0-1 scale
+
+    - name: "RBI_POLICY"
+      type: "DOMESTIC_MACRO"
+      underlyings: ["NIFTY", "BANKNIFTY"]
+      dates: ["2025-04-05", "2025-06-07"]  # example
+      pre_event_days: 1
+      post_event_days: 1
+      severity: 0.8
+
+    - name: "US_FED_FOMC"
+      type: "GLOBAL_MACRO"
+      underlyings: ["NIFTY", "BANKNIFTY"]
+      dates: ["2025-03-19"]
+      pre_event_days: 1
+      post_event_days: 1
+      severity: 0.7
+
+    - name: "US_CPI"
+      type: "GLOBAL_MACRO"
+      underlyings: ["NIFTY", "BANKNIFTY"]
+      dates: ["2025-01-14"]
+      pre_event_days: 0
+      post_event_days: 0
+      severity: 0.6
+
+    - name: "ELECTION_RESULTS"
+      type: "POLITICAL"
+      underlyings: ["NIFTY", "BANKNIFTY"]
+      dates: ["2024-06-04"]  # add more when known
+      pre_event_days: 2
+      post_event_days: 2
+      severity: 1.0
+
+  # 2) Day-type classification and weights
+  # Day types: NORMAL, PRE_EVENT, EVENT_DAY, POST_EVENT
+  day_type_overlays:
+    NORMAL:
+      r1_regime_bias: {}  # no bias
+      allocator_role_multipliers: {}
+      h1_coverage_multiplier: 1.0
+
+    PRE_EVENT:
+      r1_regime_bias:
+        HIGH_EVENT: 0.3  # soft hint; R1 can use if needed
+      allocator_role_multipliers:
+        income_short_vol: 0.8
+        directional_trend: 1.1
+        long_vol: 1.2
+        long_gamma: 1.2
+      h1_coverage_multiplier: 1.3
+
+    EVENT_DAY:
+      r1_regime_bias:
+        HIGH_EVENT: 0.8
+        CHAOTIC: 0.4
+      allocator_role_multipliers:
+        income_short_vol: 0.4
+        directional_trend: 0.8
+        long_vol: 1.5
+        long_gamma: 1.5
+        term_structure: 1.2
+      h1_coverage_multiplier: 1.7
+
+    POST_EVENT:
+      r1_regime_bias:
+        MEDIUM_TREND: 0.4
+        LOW_MEAN_REVERT: 0.2
+      allocator_role_multipliers:
+        income_short_vol: 1.1
+        directional_trend: 1.1
+        long_vol: 0.8
+        long_gamma: 0.9
+      h1_coverage_multiplier: 1.2
+
+  # 3) Defaults & safety
+  defaults:
+    day_type: "NORMAL"
+    min_severity_for_event_day: 0.5
+    min_severity_for_pre_post: 0.3
+
+
