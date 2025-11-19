@@ -1,0 +1,334 @@
+# Kite DAY-1 LIVE Configuration
+# Conservative 2-strategy setup: OptionsRanker + expiry_short_strangle + H1 tails
+# Capital: ₹1,000,000 | Max risk today: ₹8,000 | Max positions: 2
+#
+# Usage:
+#   export APP_MODE=LIVE
+#   export APP_TIMEZONE=Asia/Kolkata
+#   export KITE_API_KEY="***"
+#   export KITE_ACCESS_TOKEN="***"  # fresh from today's OAuth
+#   python -m uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+
+app:
+  mode: LIVE
+  timezone: Asia/Kolkata
+
+venue:
+  name: NSE
+  api_key_env: KITE_API_KEY
+  api_secret_env: KITE_API_SECRET
+  access_token_env: KITE_ACCESS_TOKEN
+
+# Risk Management - Day-1 Conservative
+risk:
+  per_trade_risk_pct: 0.30      # ₹3,000 per trade
+  max_portfolio_heat_pct: 1.0    # ≤1.0% total heat
+  daily_loss_stop_pct: -2.50     # -₹25,000 hard stop
+  max_positions: 2                # Max 2 positions today (1 debit spread + 1 short strangle)
+  max_position_size_multiplier: 1 # 1x lot size only
+  slippage_bps: 5
+  fees_per_order: 20
+  fees_per_option_leg: 20
+
+# Market Hours
+market:
+  open_time: "09:15"
+  close_time: "15:20"
+  eod_squareoff_time: "15:25"
+  eod_squareoff_enabled: true
+  premarket_sync_time: "08:55"
+  event_aware: true
+  event_stop_mult: 1.5
+
+# Entry Windows
+entry:
+  window_start: "09:30"          # Wait for ORB to complete
+  window_end: "14:00"            # Stop new entries by 14:00
+  max_entries_per_day: 2         # Max 2 trades today
+  cooldown_minutes: 30           # 30-min gap between entries
+
+# Execution Throttles
+execution:
+  engine_gap_ms: 300
+  instrument_gap_ms: 300
+  price_band_bps: 40
+  burst: 2
+  fanout_per_sec: 4
+  use_native_oco: false
+  default_order_type: LIMIT
+  limit_chase_ticks: 2
+  limit_timeout_sec: 5
+  ioc_for_exits: true
+  max_order_retries: 3
+  retry_backoff_ms: 500
+  tops_cap_per_sec: 10
+  
+  # Level 4: Limit Chase Execution Alpha
+  use_limit_chase: true              # Enable intelligent limit order chasing
+  limit_chase_max_slippage_bps: 5.0  # Max 5 bps slippage (0.05%)
+  limit_chase_timeout_ms: 500        # Wait 500ms before chasing price
+  limit_chase_max_chases: 10          # Max 10 price chases before giving up
+  tick_size: 0.05                    # NIFTY options tick size
+
+# Delta Neutralizer - Phase-1 Safety Version
+delta_neutralizer:
+  enabled: true
+  underlying: "NIFTY"
+  fut_symbol: "NFO:NIFTY24NOVFUT"   # or monthly front future symbol resolver later
+  rebalance_threshold: 50.0          # when |net_delta| > 50, act
+  max_hedge_lots: 2                  # safety
+  lot_size: 25                       # NIFTY lot
+
+# Universe - NIFTY only
+universe:
+  indices: [NIFTY]
+  fo_stocks_liquidity_rank_top_n: 0
+  exclude_fo_ban: true
+  exclude_illiquid_threshold_turnover: 10000000
+  sync_time: "08:55"
+
+# Options Filters
+options:
+  max_spread_mid_pct: 0.5
+  min_oi: 50000
+  min_last_traded_volume: 100
+  strikes_from_atm: 5
+  prefer_weekly: true
+  max_dte: 7
+  iv_percentile_min: 20
+  iv_percentile_max: 80
+
+# ========================================
+# STRATEGY CONFIGURATION - DAY-1
+# ========================================
+
+strategies:
+  # PRIMARY: OptionsRanker (Debit Spreads)
+  # Fires first, defined risk, simple structure
+  - name: OptionsRanker
+    enabled: true
+    priority: 1
+    params:
+      strategy_type: DEBIT_SPREAD
+
+      # Position sizing
+      max_positions: 1              # ONE debit spread max
+      max_lot_size: 1               # 1 lot (25-50 qty NIFTY)
+      instruments: [NIFTY]
+
+      # Entry filters
+      ivp_min: 20
+      ivp_max: 80
+      liquidity_score_min: 0.7
+      max_spread_legs: 2
+      rr_min: 1.5
+
+      # Debit spread specific
+      max_cost_pct: 30              # Max 30% of spread width
+      min_pop: 40                   # Min 40% probability
+
+      # Risk exits
+      stop_loss_pct: 50             # Stop at -50% of debit
+      take_profit_pct: 70           # TP at +70% of debit
+
+      # Confirmation gates
+      require_trend_confirmation: true
+      orb_window_min: 15
+      require_breakout_confirmation: true
+
+  # SECONDARY: Expiry Short Strangle (Income Generator)
+  # Only fires if OptionsRanker hasn't taken a position by 10:30
+  - name: expiry_short_strangle
+    enabled: true
+    priority: 2
+    params:
+      # Position sizing
+      max_positions: 1              # ONE strangle max
+      max_lot_size: 1               # 1 lot NIFTY
+      instruments: [NIFTY]
+
+      # Entry conditions
+      min_dte: 2                    # At least 2 days to expiry
+      max_dte: 7                    # Max 7 days (weekly)
+      target_delta: 0.20            # Sell ~20 delta options
+      min_ivp: 40                   # Need elevated IV
+      max_ivp: 85
+
+      # Premium targets
+      min_premium_per_lot: 3000     # Collect ≥₹3,000 per lot
+      max_premium_per_lot: 8000     # Cap at ₹8,000 (don't sell ITM)
+
+      # Risk management
+      stop_loss_mult: 2.0           # Stop at 2x premium collected
+      take_profit_pct: 50           # TP at 50% premium decay
+
+      # Regime integration
+      allowed_regimes: [LOW_MEAN_REVERT, MEDIUM_TREND]  # Block in HIGH_EVENT/CHAOTIC
+
+      # Time-based exit
+      exit_dte: 1                   # Close 1 day before expiry
+      exit_time: "15:00"            # Close by 15:00 on expiry day
+
+      # Conditional entry (only if OptionsRanker hasn't fired)
+      entry_after_time: "10:30"     # Don't enter before 10:30
+      block_if_positions_exist: true  # Block if OptionsRanker already has position
+
+  # PREMIUM STRATEGY: Expiry Short Strangle V2 (Weekly Income Engine)
+  # Day-4+: Regime-aware, delta-based, IV+realized vol filtered
+  - name: expiry_short_strangle_v2
+    enabled: true
+    priority: 2
+    params:
+      # Config loaded from configs/expiry_short_strangle_v2.yaml
+      pass_through: true  # Uses separate config file
+
+  # PREMIUM STRATEGY: Intraday Short Strangle V1 (Precision Scalper)
+  # Day-4+: Precision entry at 09:20, intraday vol filtered, hard exit at 15:15
+  - name: intraday_short_strangle_v1
+    enabled: true
+    priority: 3
+    params:
+      # Config loaded from configs/intraday_short_strangle_v1.yaml
+      pass_through: true  # Uses separate config file
+
+  # PREMIUM STRATEGY: Trend Credit Spread V1 (ADX-Filtered Directional Spreads)
+  # Day-4+: ADX-filtered, UP trend → Bull Put, DOWN trend → Bear Call
+  - name: trend_credit_spread_v1
+    enabled: true
+    priority: 4
+    params:
+      # Config loaded from configs/trend_credit_spread_v1.yaml
+      pass_through: true  # Uses separate config file
+
+  # REGIME ENGINE: R1 (Meta-strategy for regime classification)
+  # Provides regime context for all other strategies
+  - name: RegimeVolEngine
+    enabled: true
+    priority: 0  # Highest priority - runs first to classify regime
+    params:
+      # Config loaded from configs/regime_vol_engine.yaml
+      pass_through: true  # Uses separate config file
+
+  # PREMIUM STRATEGY: G1 (Gamma Scalper - Long Gamma with Futures Hedge)
+  # Day-4: Tiny live size (1 lot, ₹5k daily loss cap)
+  - name: GammaScalper
+    enabled: true
+    priority: 4
+    params:
+      # Config loaded from configs/gamma_scalper.yaml
+      pass_through: true  # Uses separate config file
+
+  # PREMIUM STRATEGY: T1 (Calendar Arbitrage)
+  # Day-4: Tiny live size (1 lot, ₹5k daily loss cap)
+  - name: CalendarArb
+    enabled: true
+    priority: 5
+    params:
+      # Config loaded from configs/calendar_arb.yaml
+      pass_through: true  # Uses separate config file
+
+  # PREMIUM STRATEGY: D1 (Dispersion Arbitrage)
+  # Day-4: Tiny live size (1 lot, ₹5k daily loss cap)
+  - name: DispersionArb
+    enabled: true
+    priority: 6
+    params:
+      # Config loaded from configs/dispersion_arb.yaml
+      pass_through: true  # Uses separate config file
+
+  # TAIL OVERLAY: H1 (Auto-hedge for short premium)
+  # Automatically deploys when expiry_short_strangle fires
+  - name: TailShortVolOverlay
+    enabled: true
+    priority: 3
+    params:
+      # This strategy monitors short premium and auto-hedges
+      short_vol_strategies: [expiry_short_strangle]
+
+      # Tail instruments
+      tail_underlyings: [NIFTY]
+      tail_type: DEEP_OTM_PUT
+      strike_offset_pct: 5.0        # 5% OTM
+      expiry_selector: next_month
+
+      # Coverage targets
+      target_tail_coverage_pct: 15  # Deploy 15% of short premium notional
+      min_tail_coverage_pct: 10     # Never below 10%
+      max_tail_coverage_pct: 25
+
+      # Rebalance rules
+      rebalance_interval_minutes: 30
+      min_notional_change_pct: 10
+      min_tail_gap_pct: 3
+
+      # Tail exits
+      max_days_to_expiry: 20
+      pnl_take_profit_pct: 100
+      pnl_stop_loss_pct: -70
+
+      # Regime adjustments
+      regime_coverage_multipliers:
+        LOW_MEAN_REVERT: 1.0
+        MEDIUM_TREND: 1.1
+        HIGH_EVENT: 1.5
+        CHAOTIC: 2.0
+
+# Exit Management
+exits:
+  # For debit spreads (OptionsRanker)
+  debit_spread_stop_pct: 50
+  debit_spread_tp_pct: 70
+  debit_spread_timeout_min: 20
+
+  # For short premium (expiry_short_strangle)
+  credit_stop_mult: 2.0
+  credit_tp_pct: 50
+
+  # Universal
+  time_stop_enabled: true
+  time_stop_min: 20
+  eod_flatten_enabled: true
+  eod_flatten_time: "15:20"
+
+# Guards & Safety
+guards:
+  block_around_events_min: 10
+  max_spread_mid_pct: 0.5
+  min_liquidity_score: 0.7
+  require_unique_order_ids: true
+  audit_all_decisions: true
+
+  # Day-4 specific gates (with premium strategies enabled)
+  max_total_positions: 4          # Hard cap: 4 positions (OptionsRanker + G1 + T1 + D1)
+  max_capital_deployed_pct: 15.0   # Max 15% of capital at risk (up from 8% for Day-4)
+  max_margin_used_pct: 30.0       # Max 30% margin usage (unchanged)
+
+# Ranking Engine
+ranking:
+  weights:
+    momentum: 0.20
+    trend: 0.30
+    liquidity: 0.25
+    regime: 0.15
+    rr: 0.10
+
+  penalties:
+    illiquid_mult: 0.5
+    news_event_mult: 0.7
+    far_from_vwap_mult: 0.8
+
+  top_n: 3                        # Only rank top 3 signals
+
+# ========================================
+# SHADOW MODE STRATEGIES (observe only)
+# ========================================
+# All other strategies enabled for signal generation but not trading
+# Check logs to see what signals they would have generated
+
+shadow_strategies:
+  - intraday_short_strangle
+  - index_sniper
+  - drifting_credit_spread
+  - vscore_credit_spread
+  - kurtosis_straddle
+  # G1, T1, D1, R1 now promoted to LIVE (removed from shadow)

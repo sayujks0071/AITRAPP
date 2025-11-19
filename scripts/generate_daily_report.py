@@ -129,6 +129,18 @@ def generate_tail_coverage_report(metrics_text: str) -> Dict[str, Dict[str, floa
     return coverage
 
 
+def fetch_execution_alpha() -> Dict[str, any]:
+    """Fetch execution alpha stats from API"""
+    try:
+        response = requests.get(f"{API_BASE}/api/execution/stats", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return {}
+    except Exception as e:
+        print(f"⚠️  Could not fetch execution alpha: {e}")
+        return {}
+
+
 def generate_daily_report() -> Dict[str, any]:
     """Generate complete daily report"""
     print("Generating daily report...")
@@ -140,6 +152,9 @@ def generate_daily_report() -> Dict[str, any]:
     
     date = datetime.now().strftime("%Y-%m-%d")
     
+    # Fetch execution alpha stats
+    execution_alpha = fetch_execution_alpha()
+    
     report = {
         "date": date,
         "timestamp": datetime.now().isoformat(),
@@ -147,6 +162,7 @@ def generate_daily_report() -> Dict[str, any]:
         "allocator": generate_allocator_report(metrics_text),
         "tail_coverage": generate_tail_coverage_report(metrics_text),
         "regime_timeline": get_regime_timeline(metrics_text),
+        "execution_alpha": execution_alpha,
     }
     
     # Add strategy reports
@@ -200,6 +216,17 @@ def save_report(report: Dict[str, any]) -> None:
         f.write("## Regime Timeline\n\n")
         for entry in report.get("regime_timeline", []):
             f.write(f"- {entry.get('time')}: {entry.get('regime')}\n")
+        
+        # Execution Alpha section
+        exec_alpha = report.get("execution_alpha", {})
+        if exec_alpha:
+            f.write("\n## Execution Alpha (Limit Chase)\n\n")
+            f.write(f"- Attempts: {exec_alpha.get('attempts', 0)}\n")
+            f.write(f"- Fills via Chase: {exec_alpha.get('fills', 0)}\n")
+            f.write(f"- Timeouts: {exec_alpha.get('timeouts', 0)}\n")
+            f.write(f"- Slippage Stops: {exec_alpha.get('slippage_stops', 0)}\n")
+            f.write(f"- Errors: {exec_alpha.get('errors', 0)}\n")
+            f.write(f"- Estimated Slippage Saved: **₹{exec_alpha.get('saved_slippage_rs', 0.0):.2f}**\n")
     
     print(f"✅ Report saved: {json_path}")
     print(f"✅ Report saved: {md_path}")

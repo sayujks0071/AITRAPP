@@ -27,6 +27,15 @@ from packages.core.strategies.tail_short_vol import (
     TailShortVolOverlay,
     TailState,
 )
+from packages.core.strategies.expiry_short_strangle_v2 import (
+    ExpiryShortStrangleV2,
+)
+from packages.core.strategies.intraday_short_strangle_v1 import (
+    IntradayShortStrangleV1,
+)
+from packages.core.strategies.trend_credit_spread_v1 import (
+    TrendCreditSpreadV1,
+)
 from packages.core.event_vol_engine import (
     EventVolEngine,
     EventDef,
@@ -53,6 +62,9 @@ __all__ = [
     "DispersionBookState",
     "TailShortVolOverlay",
     "TailState",
+    "ExpiryShortStrangleV2",
+    "IntradayShortStrangleV1",
+    "TrendCreditSpreadV1",
     "EventVolEngine",
     "EventDef",
     "DayContext",

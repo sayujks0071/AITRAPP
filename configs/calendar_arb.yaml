@@ -7,12 +7,12 @@ calendar_arb:
     - "NIFTY"
     - "BANKNIFTY"
 
-  mode: "PAPER"                # start in PAPER
+  mode: "LIVE"
 
   entry:
     entry_window:
-      start: "09:30"
-      end: "13:30"
+      start: "10:00"              # Day-4: Conservative start (was 09:30)
+      end: "14:30"                # Day-4: Extended to 14:30 (was 13:30)
 
     # Expiry selection
     weekly_selector: "nearest_weekly"
@@ -44,7 +44,8 @@ calendar_arb:
 
     # Structure sizing
     base_lots_per_underlying: 1
-    max_lots_per_underlying: 3
+    max_lots_per_underlying: 1    # Day-4: 1 lot only (was 3)
+    max_positions: 1               # Day-4: Max 1 calendar spread per underlying
 
   exits:
     hard_exit_time: "15:10"
@@ -56,9 +57,10 @@ calendar_arb:
     decay_exit_days: 1                  # if weekly expiry is tomorrow & not moving → exit
 
   risk:
-    max_capital_pct: 0.05               # total capital allocation to calendar arb
-    max_daily_loss_pct: 0.7             # relative to capital used in calendar arb
-    max_open_calendars_per_underlying: 2
+    max_capital_pct: 0.10               # Day-4: 10% of total capital (₹100k max)
+    max_daily_loss_pct: 0.5             # Day-4: 0.5% of capital = ₹5,000 daily loss cap
+    max_daily_loss_absolute: 5000       # Day-4: Hard cap ₹5,000 per day
+    max_open_calendars_per_underlying: 1 # Day-4: 1 calendar max (was 2)
 
   integration:
     require_r1_regime: true

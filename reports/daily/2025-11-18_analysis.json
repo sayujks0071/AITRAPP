@@ -1,0 +1,56 @@
+{
+  "date": "2025-11-18",
+  "timestamp": "2025-11-18T20:33:21.837931",
+  "signals": {
+    "total": 0,
+    "by_strategy": {},
+    "signals": []
+  },
+  "decisions": {
+    "total": 0,
+    "approved": 0,
+    "rejected": 0,
+    "rejection_reasons": {},
+    "max_portfolio_heat": 0.0,
+    "decisions": []
+  },
+  "orders": {
+    "total": 0,
+    "filled": 0,
+    "by_status": {},
+    "by_type": {},
+    "rejected_count": 0,
+    "rejected_orders": [],
+    "orders": []
+  },
+  "positions": {
+    "total": 0,
+    "open": 0,
+    "closed": 0,
+    "by_strategy": {},
+    "positions": []
+  },
+  "trades": {
+    "total": 0,
+    "winners": 0,
+    "losers": 0,
+    "total_pnl": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "win_rate": 0.0,
+    "trades": []
+  },
+  "risk_events": {
+    "total": 0,
+    "by_type": {},
+    "events": []
+  },
+  "compliance": {
+    "per_trade_risk_ok": true,
+    "daily_loss_limit_ok": true,
+    "margin_usage_ok": true,
+    "time_window_ok": true,
+    "violations": [],
+    "warnings": []
+  }
+}

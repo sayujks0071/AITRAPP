@@ -6,7 +6,9 @@ tail_short_vol:
   # Which strategies are considered "short vol" for this overlay
   short_vol_strategies:
     - "expiry_short_strangle"
+    - "expiry_short_strangle_v2"    # Day-4+: Weekly income engine
     - "intraday_short_strangle"
+    - "intraday_short_strangle_v1"  # Day-4+: Precision scalper
     - "vscore_credit_spread"
     - "drifting_credit_spread"
     - "calendar_arb"         # optional, only if net-short vega

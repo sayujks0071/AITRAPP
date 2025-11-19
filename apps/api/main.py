@@ -3,7 +3,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -24,14 +24,19 @@ from packages.core.execution import ExecutionEngine
 from packages.core.exits import ExitManager, ExitSignal
 from packages.core.instruments import InstrumentManager
 from packages.core.market_data import MarketDataStream
+from packages.core.position_store import PositionStore
 from packages.core.models import Position, PositionStatus, SystemState
 from packages.core.orchestrator import TradingOrchestrator
 from packages.core.risk import PortfolioRisk, RiskManager
+from packages.core.risk.delta_neutralizer import DeltaNeutralizer, DeltaNeutralizerConfig
 from packages.core.ranker import SignalRanker
 from packages.core.strategies import (
     ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy, Strategy,
-    RegimeVolEngine, GammaScalper, CalendarArb, DispersionArb, TailShortVolOverlay
+    RegimeVolEngine, GammaScalper, CalendarArb, DispersionArb, TailShortVolOverlay,
+    ExpiryShortStrangleV2, IntradayShortStrangleV1
 )
+from packages.core.strategies.trend_credit_spread_v1 import TrendCreditSpreadV1
+from packages.core.strategies.strategy_allocator import StrategyAllocator
 
 # Configure structured logging
 structlog.configure(
@@ -56,12 +61,21 @@ class AppState:
     ranker: SignalRanker = None
     orchestrator: TradingOrchestrator = None
     
+    # Position store (canonical PnL/exposure source)
+    position_store: PositionStore = None
+    
+    # Strategy allocator (capital allocation meta-layer)
+    strategy_allocator: StrategyAllocator = None
+    
     # Strategies
     strategies: Dict = {}
     strategy_list: List[Strategy] = []
     
     # Event engine (E1)
     event_engine: Any = None
+    
+    # Shared delta selector (for option strategies)
+    delta_selector: Any = None
     
     # Positions
     positions: List[Position] = []
@@ -84,6 +98,49 @@ app_state = AppState()
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     logger.info("Starting AITRAPP", mode=settings.app_mode.value)
+    
+    # CRITICAL: Validate config coherence for LIVE mode
+    if settings.app_mode.value == "LIVE":
+        venue_name = app_config.venue.get("name", "UNKNOWN") if isinstance(app_config.venue, dict) else getattr(app_config.venue, "name", "UNKNOWN")
+        strategy_names = [s.name for s in app_config.get_enabled_strategies()]
+        
+        # Verify NSE venue for LIVE mode
+        if venue_name not in ["NSE", "NFO"]:
+            logger.critical(
+                "LIVE mode config validation FAILED",
+                venue=venue_name,
+                expected="NSE",
+                config_path=app_config.config_path
+            )
+            raise ValueError(
+                f"LIVE mode requires NSE venue, but loaded config has venue={venue_name}. "
+                f"Config loaded from: {app_config.config_path}. "
+                f"Set APP_CONFIG=configs/kite_day1_live.yaml to fix."
+            )
+        
+        # Verify expected strategies are loaded
+        expected_strategies = ["OptionsRanker"]  # Minimum required
+        missing = [s for s in expected_strategies if s not in strategy_names]
+        if missing:
+            logger.critical(
+                "LIVE mode missing required strategies",
+                missing=missing,
+                loaded=strategy_names,
+                config_path=app_config.config_path
+            )
+            raise ValueError(
+                f"LIVE mode missing required strategies: {missing}. "
+                f"Loaded strategies: {strategy_names}. "
+                f"Config loaded from: {app_config.config_path}. "
+                f"Set APP_CONFIG=configs/kite_day1_live.yaml to fix."
+            )
+        
+        logger.info(
+            "LIVE mode config validation PASSED",
+            venue=venue_name,
+            strategies=strategy_names,
+            config_path=app_config.config_path
+        )
     
     # Clock skew check (fail if drift > 2s)
     import subprocess
@@ -114,10 +171,13 @@ async def lifespan(app: FastAPI):
     app_state.risk_manager = RiskManager(app_config.risk)
     app_state.exit_manager = ExitManager(app_config.exits)
     
+    # Initialize PositionStore (canonical source for positions/PnL)
+    app_state.position_store = PositionStore()
+    logger.info("PositionStore initialized")
+    
     app_state.execution_engine = ExecutionEngine(
         app_state.kite,
         app_config.execution,
-        settings
     )
     
     # Initialize market data stream
@@ -294,7 +354,7 @@ async def lifespan(app: FastAPI):
                         instrument_manager=app_state.instrument_manager,
                         risk_engine=app_state.risk_manager,
                         metrics=MetricsWrapper(),
-                        positions_store=None  # Would pass position store in production
+                        positions_store=app_state.position_store
                     )
                     app_state.strategies["TailShortVolOverlay"] = strategy
                     strategy_registry["TailShortVolOverlay"] = strategy
@@ -306,16 +366,187 @@ async def lifespan(app: FastAPI):
                     instrument_manager=app_state.instrument_manager,
                     risk_engine=app_state.risk_manager,
                     metrics=MetricsWrapper(),
-                    positions_store=None
+                    positions_store=app_state.position_store
                 )
                 app_state.strategies["TailShortVolOverlay"] = strategy
                 strategy_registry["TailShortVolOverlay"] = strategy
+        elif strategy_config.name == "expiry_short_strangle_v2":
+            # Load Expiry Short Strangle V2 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            
+            v2_config_path = Path("configs/expiry_short_strangle_v2.yaml")
+            if v2_config_path.exists():
+                with open(v2_config_path, "r") as f:
+                    v2_config = yaml.safe_load(f)
+                    strategy = ExpiryShortStrangleV2(
+                        strategy_config.name,
+                        v2_config.get("expiry_short_strangle_v2", {}),
+                        instrument_manager=app_state.instrument_manager,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper(),
+                        regime_engine=app_state.strategies.get("RegimeVolEngine")
+                    )
+                    app_state.strategies["expiry_short_strangle_v2"] = strategy
+                    strategy_registry["expiry_short_strangle_v2"] = strategy
+                    logger.info("Strategy Loaded: Expiry Short Strangle V2")
+            else:
+                logger.warning("Expiry Short Strangle V2 config not found, using default params")
+                strategy = ExpiryShortStrangleV2(
+                    strategy_config.name,
+                    strategy_config.params,
+                    instrument_manager=app_state.instrument_manager,
+                    risk_engine=app_state.risk_manager,
+                    metrics=MetricsWrapper(),
+                    regime_engine=app_state.strategies.get("RegimeVolEngine")
+                )
+                app_state.strategies["expiry_short_strangle_v2"] = strategy
+                strategy_registry["expiry_short_strangle_v2"] = strategy
+        elif strategy_config.name == "intraday_short_strangle_v1":
+            # Load Intraday Short Strangle V1 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            from packages.core.options.delta_selector import DeltaOptionSelector
+            from packages.core.kite_client import KiteClient
+            
+            # Create shared delta selector (if not already created)
+            if not hasattr(app_state, 'delta_selector') or app_state.delta_selector is None:
+                kite_client_wrapper = KiteClient(app_state.kite) if app_state.kite else None
+                app_state.delta_selector = DeltaOptionSelector(
+                    instrument_manager=app_state.instrument_manager,
+                    broker_client=kite_client_wrapper or app_state.kite,
+                    greeks_engine=None  # Optional - can be added later if available
+                )
+                logger.info("Shared DeltaOptionSelector created")
+            
+            # Create KiteClient wrapper for order placement
+            kite_client_wrapper = KiteClient(app_state.kite) if app_state.kite else None
+            
+            v1_config_path = Path("configs/intraday_short_strangle_v1.yaml")
+            if v1_config_path.exists():
+                with open(v1_config_path, "r") as f:
+                    v1_config = yaml.safe_load(f)
+                    strategy = IntradayShortStrangleV1(
+                        strategy_config.name,
+                        v1_config.get("intraday_short_strangle_v1", {}),
+                        instrument_manager=app_state.instrument_manager,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper(),
+                        regime_engine=app_state.strategies.get("RegimeVolEngine"),
+                        event_engine=app_state.strategies.get("EventVolEngine"),
+                        delta_selector=app_state.delta_selector,
+                        kite_client=kite_client_wrapper,
+                        execution_engine=app_state.execution_engine,
+                    )
+                    app_state.strategies["intraday_short_strangle_v1"] = strategy
+                    strategy_registry["intraday_short_strangle_v1"] = strategy
+                    logger.info("Strategy Loaded: Intraday Short Strangle V1")
+            else:
+                logger.warning("Intraday Short Strangle V1 config not found, using default params")
+                strategy = IntradayShortStrangleV1(
+                    strategy_config.name,
+                    strategy_config.params,
+                    instrument_manager=app_state.instrument_manager,
+                    risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper(),
+                        regime_engine=app_state.strategies.get("RegimeVolEngine"),
+                        event_engine=app_state.strategies.get("EventVolEngine"),
+                        delta_selector=app_state.delta_selector,
+                        kite_client=kite_client_wrapper,
+                        execution_engine=app_state.execution_engine,
+                    )
+                app_state.strategies["intraday_short_strangle_v1"] = strategy
+                strategy_registry["intraday_short_strangle_v1"] = strategy
+        elif strategy_config.name == "trend_credit_spread_v1":
+            # Load Trend Credit Spread V1 config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.metrics_wrapper import MetricsWrapper
+            from packages.core.kite_client import KiteClient
+            from packages.core.options.delta_selector import DeltaOptionSelector
+            
+            # Create shared delta selector (if not already created)
+            if not hasattr(app_state, 'delta_selector') or app_state.delta_selector is None:
+                kite_client_wrapper = KiteClient(app_state.kite) if app_state.kite else None
+                app_state.delta_selector = DeltaOptionSelector(
+                    instrument_manager=app_state.instrument_manager,
+                    broker_client=kite_client_wrapper or app_state.kite,
+                    greeks_engine=None  # Optional - can be added later if available
+                )
+                logger.info("Shared DeltaOptionSelector created")
+            
+            # Create KiteClient wrapper for order placement
+            kite_client_wrapper = KiteClient(app_state.kite) if app_state.kite else None
+            
+            v1_config_path = Path("configs/trend_credit_spread_v1.yaml")
+            if v1_config_path.exists():
+                with open(v1_config_path, "r") as f:
+                    v1_config = yaml.safe_load(f)
+                    strategy = TrendCreditSpreadV1(
+                        strategy_config.name,
+                        v1_config.get("trend_credit_spread_v1", {}),
+                        instrument_manager=app_state.instrument_manager,
+                        risk_engine=app_state.risk_manager,
+                        metrics=MetricsWrapper(),
+                        kite_client=kite_client_wrapper,
+                        position_store=app_state.position_store,
+                        delta_selector=app_state.delta_selector,
+                        regime_engine=app_state.strategies.get("RegimeVolEngine"),
+                        event_engine=app_state.strategies.get("EventVolEngine"),
+                        execution_engine=app_state.execution_engine,
+                    )
+                    app_state.strategies["trend_credit_spread_v1"] = strategy
+                    strategy_registry["trend_credit_spread_v1"] = strategy
+                    logger.info("Strategy Loaded: Trend Credit Spread V1")
+            else:
+                logger.warning("Trend Credit Spread V1 config not found, using default params")
+                strategy = TrendCreditSpreadV1(
+                    strategy_config.name,
+                    strategy_config.params,
+                    instrument_manager=app_state.instrument_manager,
+                    risk_engine=app_state.risk_manager,
+                    metrics=MetricsWrapper(),
+                    kite_client=kite_client_wrapper,
+                    position_store=app_state.position_store,
+                    delta_selector=app_state.delta_selector,
+                    regime_engine=app_state.strategies.get("RegimeVolEngine"),
+                    event_engine=app_state.strategies.get("EventVolEngine"),
+                    execution_engine=app_state.execution_engine,
+                )
+                app_state.strategies["trend_credit_spread_v1"] = strategy
+                strategy_registry["trend_credit_spread_v1"] = strategy
         
         if strategy:
+            # Patch 2: Set priority from config (default 100 if not specified)
+            strategy_priority = getattr(strategy_config, 'priority', None)
+            if strategy_priority is None:
+                # Try to get from params
+                strategy_priority = strategy_config.params.get('priority', 100)
+            else:
+                strategy_priority = int(strategy_priority)
+            
+            # Set priority on strategy instance
+            strategy.priority = strategy_priority
             strategy_list.append(strategy)
+            logger.debug(
+                f"Strategy {strategy.name} loaded with priority {strategy.priority}",
+                strategy=strategy.name,
+                priority=strategy.priority
+            )
     
     app_state.strategy_list = strategy_list
-    logger.info(f"Loaded {len(strategy_list)} strategies")
+    
+    # Log strategy priorities for verification
+    strategy_priorities = [
+        f"{s.name}(prio={getattr(s, 'priority', 100)})" 
+        for s in strategy_list
+    ]
+    logger.info(
+        f"Loaded {len(strategy_list)} strategies",
+        strategies=", ".join(strategy_priorities)
+    )
     
     # Initialize E1 Event Vol Engine
     import yaml
@@ -333,6 +564,58 @@ async def lifespan(app: FastAPI):
     else:
         app_state.event_engine = EventVolEngine(cfg={"enabled": False}, metrics=None)
         logger.info("E1 Event Vol Engine disabled (config not found)")
+    
+    # Initialize StatsEngine (needed by StrategyAllocator)
+    from packages.core.stats_engine import StatsEngine
+    from packages.core.metrics_wrapper import MetricsWrapper
+    
+    stats_engine = StatsEngine(
+        strategies=app_state.strategies,
+        position_store=app_state.position_store
+    )
+    logger.info("StatsEngine initialized")
+    
+    # Initialize StrategyAllocator
+    allocator_cfg_path = Path("configs/strategy_allocator.yaml")
+    if allocator_cfg_path.exists():
+        with open(allocator_cfg_path, "r") as f:
+            raw = yaml.safe_load(f) or {}
+        allocator_cfg = raw.get("strategy_allocator", {})
+        
+        app_state.strategy_allocator = StrategyAllocator(
+            cfg=allocator_cfg,
+            risk_engine=app_state.risk_manager,
+            stats_engine=stats_engine,
+            metrics=MetricsWrapper()
+        )
+        logger.info(
+            "StrategyAllocator initialized",
+            enabled=allocator_cfg.get("enabled", False)
+        )
+        
+        # Run initial allocation cycle if enabled
+        if allocator_cfg.get("enabled", False):
+            try:
+                # For now, we can start with simple defaults
+                current_regime = None
+                event_ctx = None
+                
+                allocations = app_state.strategy_allocator.run_allocation_cycle(
+                    current_regime=current_regime,
+                    event_ctx=event_ctx
+                )
+                logger.info(
+                    "Initial allocation cycle completed",
+                    num_allocations=len(allocations)
+                )
+            except Exception as e:
+                logger.warning(
+                    "Allocation cycle failed at startup",
+                    error=str(e)
+                )
+    else:
+        logger.warning("StrategyAllocator config not found, allocator disabled")
+        app_state.strategy_allocator = None
     
     # Initialize ranker
     app_state.ranker = SignalRanker(app_config.ranking)
@@ -385,6 +668,38 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("Crypto API credentials not found, crypto router not initialized")
     
+    # Initialize Delta Neutralizer (Phase-1 Safety Version)
+    delta_neutralizer = None
+    # Load delta_neutralizer config from YAML (it's not in AppConfig class yet)
+    import yaml
+    from pathlib import Path
+    config_path = Path(app_config.config_path) if hasattr(app_config, 'config_path') else Path("configs/kite_day1_live.yaml")
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            raw_config = yaml.safe_load(f)
+            dn_cfg_raw = raw_config.get("delta_neutralizer", {})
+            
+            if dn_cfg_raw:
+                dn_cfg = DeltaNeutralizerConfig(
+                    enabled=dn_cfg_raw.get("enabled", True),
+                    underlying=dn_cfg_raw.get("underlying", "NIFTY"),
+                    fut_symbol=dn_cfg_raw.get("fut_symbol", "NFO:NIFTY24NOVFUT"),
+                    rebalance_threshold=float(dn_cfg_raw.get("rebalance_threshold", 50.0)),
+                    max_hedge_lots=int(dn_cfg_raw.get("max_hedge_lots", 2)),
+                    lot_size=int(dn_cfg_raw.get("lot_size", 25)),
+                )
+                
+                delta_neutralizer = DeltaNeutralizer(
+                    kite_client=app_state.kite,
+                    position_store=app_state.position_store,
+                    cfg=dn_cfg,
+                )
+                logger.info("Delta Neutralizer initialized", enabled=dn_cfg.enabled)
+            else:
+                logger.info("Delta Neutralizer config not found in YAML, skipping initialization")
+    else:
+        logger.warning(f"Config file not found: {config_path}, skipping Delta Neutralizer initialization")
+    
     # Initialize orchestrator with Redis and OCO
     app_state.orchestrator = TradingOrchestrator(
         kite=app_state.kite,
@@ -395,9 +710,12 @@ async def lifespan(app: FastAPI):
         execution_engine=app_state.execution_engine,
         exit_manager=app_state.exit_manager,
         ranker=app_state.ranker,
+        position_store=app_state.position_store,
         redis_bus=redis_bus,
+        strategy_allocator=app_state.strategy_allocator,
         oco_manager=oco_manager,
-        crypto_router=app_state.crypto_router
+        crypto_router=app_state.crypto_router,
+        delta_neutralizer=delta_neutralizer
     )
     
     # Initialize OrderWatcher
@@ -633,6 +951,9 @@ class SystemStateResponse(BaseModel):
     trades_today: int
     win_rate: float
     daily_pnl: float
+    marketdata_connected: Optional[bool] = None
+    websocket_connected: Optional[bool] = None
+    subscription_count: Optional[int] = None
 
 
 # ===== Control Endpoints =====
@@ -1131,6 +1452,38 @@ async def resume_trading():
     }
 
 
+@app.post("/market-data/restart")
+async def restart_market_data():
+    """Restart market data WebSocket connection"""
+    try:
+        if app_state.market_data_stream:
+            logger.info("Restarting market data WebSocket connection")
+            app_state.market_data_stream.stop()
+            await asyncio.sleep(1)
+            app_state.market_data_stream.initialize()
+            app_state.market_data_stream.start()
+            await asyncio.sleep(2)  # Wait for connection
+            
+            # Resubscribe to universe
+            if app_state.orchestrator:
+                universe_tokens = app_state.instrument_manager.get_universe_tokens()
+                if universe_tokens:
+                    app_state.market_data_stream.subscribe(universe_tokens[:50])
+                    logger.info(f"Resubscribed to {len(universe_tokens[:50])} instruments")
+            
+            return {
+                "status": "success",
+                "message": "Market data WebSocket restarted",
+                "connected": app_state.market_data_stream.is_connected,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Market data stream not initialized")
+    except Exception as e:
+        logger.error(f"Failed to restart market data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/flatten")
 async def flatten_all(reason: str = "manual"):
     """
@@ -1252,6 +1605,16 @@ async def close_position(position_id: str):
 async def get_system_state():
     """Get current system state"""
     try:
+        # Get market data connection status
+        marketdata_connected = None
+        websocket_connected = None
+        subscription_count = None
+        
+        if app_state.market_data_stream:
+            marketdata_connected = app_state.market_data_stream.is_connected
+            websocket_connected = app_state.market_data_stream.is_connected
+            subscription_count = len(app_state.market_data_stream.subscribed_tokens) if hasattr(app_state.market_data_stream, 'subscribed_tokens') else None
+        
         if app_state.orchestrator:
             system_state = app_state.orchestrator.get_system_state()
             return SystemStateResponse(
@@ -1262,13 +1625,26 @@ async def get_system_state():
                 positions_count=system_state.portfolio.total_positions,
                 trades_today=system_state.trades_today,
                 win_rate=system_state.win_rate,
-                daily_pnl=system_state.portfolio.daily_pnl
+                daily_pnl=system_state.portfolio.daily_pnl,
+                marketdata_connected=marketdata_connected,
+                websocket_connected=websocket_connected,
+                subscription_count=subscription_count
             )
         else:
             # Fallback if orchestrator not initialized
             win_rate = 0.0
             if app_state.trades_today > 0:
                 win_rate = (app_state.wins_today / app_state.trades_today) * 100
+            
+            # Get market data connection status
+            marketdata_connected = None
+            websocket_connected = None
+            subscription_count = None
+            
+            if app_state.market_data_stream:
+                marketdata_connected = app_state.market_data_stream.is_connected
+                websocket_connected = app_state.market_data_stream.is_connected
+                subscription_count = len(app_state.market_data_stream.subscribed_tokens) if hasattr(app_state.market_data_stream, 'subscribed_tokens') else None
             
             return SystemStateResponse(
                 timestamp=datetime.now().isoformat(),
@@ -1278,7 +1654,10 @@ async def get_system_state():
                 positions_count=len([p for p in app_state.positions if p.is_open]),
                 trades_today=app_state.trades_today,
                 win_rate=win_rate,
-                daily_pnl=app_state.realized_pnl_today
+                daily_pnl=app_state.realized_pnl_today,
+                marketdata_connected=marketdata_connected,
+                websocket_connected=websocket_connected,
+                subscription_count=subscription_count
             )
     except Exception as e:
         logger.error(f"Error getting system state: {e}", exc_info=True)
@@ -1445,6 +1824,19 @@ async def run_backtest(request: BacktestRequest):
     except Exception as e:
         logger.error(f"Backtest failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/execution/stats")
+async def get_execution_stats():
+    """Get execution alpha telemetry stats"""
+    try:
+        if app_state.execution_engine:
+            stats = app_state.execution_engine.get_limit_chase_stats()
+            return stats
+        return {}
+    except Exception as e:
+        logger.error(f"Error fetching execution stats: {e}", exc_info=True)
+        return {}
 
 
 @app.get("/metrics")

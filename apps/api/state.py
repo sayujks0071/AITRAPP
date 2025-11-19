@@ -82,7 +82,7 @@ class AppState:
         self.strategies: List[Strategy] = self._initialize_strategies()
         self.ranking_engine = SignalRanker(config.ranking)
         self.risk_manager = RiskManager(config.risk)
-        self.execution_engine = ExecutionEngine(self.kite, config.execution, settings)
+        self.execution_engine = ExecutionEngine(self.kite, config.execution)
         self.exit_manager = ExitManager(config.exits)
 
         # Positions & universe

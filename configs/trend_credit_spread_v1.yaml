@@ -1,0 +1,38 @@
+# configs/trend_credit_spread_v1.yaml
+# Trend Credit Spread V1 - Regime and Trend-Aware Vertical Spreads
+#
+# This strategy uses EMA + ADX to confirm trend strength and deploys:
+# - Bull Put Spread in UP trends (EMA fast > EMA slow, ADX >= threshold)
+# - Bear Call Spread in DOWN trends (EMA fast < EMA slow, ADX >= threshold)
+#
+# Day-4+: Tiny live size (1 lot, ₹5k daily loss cap)
+
+trend_credit_spread_v1:
+  enabled: true
+  underlying: "NIFTY"
+  underlying_token: 256265
+  priority: 4
+
+  # Selection
+  lot_size: 25
+  target_delta_short: 0.25
+  wing_width_pts: 100.0
+  expiry_kind: "nearest"
+
+  # Trend Filters
+  ema_fast: 21
+  ema_slow: 55
+  adx_threshold: 22.0
+  adx_period: 14
+
+  # Execution
+  entry_time: "10:00"
+  exit_time: "15:10"
+  use_limit_chase: true
+
+  # Risk
+  min_credit: 1000.0
+  target_profit_pct: 0.5
+  max_loss_rs: 5000.0
+  max_portfolio_heat: 0.02
+  max_margin_util: 0.30

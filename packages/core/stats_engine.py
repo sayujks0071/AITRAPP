@@ -64,6 +64,9 @@ class StatsEngine:
                 max_drawdown_perc=stats_dict.get("max_drawdown_perc", 0.0),
                 recent_loss_streak=stats_dict.get("recent_loss_streak", 0),
                 num_trades_window=stats_dict.get("num_trades_window", 0),
+                total_pnl=stats_dict.get("total_pnl", 0.0),
+                avg_win=stats_dict.get("avg_win", 0.0),
+                avg_loss=stats_dict.get("avg_loss", 0.0),
             )
         
         # Fallback: get stats from strategy instance

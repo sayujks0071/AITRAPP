@@ -9,6 +9,7 @@ from kiteconnect import KiteConnect
 
 from packages.core.config import Settings, UniverseConfig
 from packages.core.models import Instrument, InstrumentType
+from packages.core.utils.retry import retry_api_call
 
 logger = structlog.get_logger(__name__)
 
@@ -30,6 +31,26 @@ class InstrumentManager:
         # Metadata
         self.last_sync: Optional[datetime] = None
         
+    @retry_api_call(retries=3, delay=1.0, backoff=2.0, exceptions=(Exception,))
+    def _fetch_instruments_with_retry(self, exchange: str) -> List[Dict]:
+        """
+        Fetch instruments from an exchange with retry logic.
+        
+        Critical for strategy initialization - if this fails, strategies can't find options.
+        This is the "oxygen" of delta-based strategies.
+        """
+        return self.kite.instruments(exchange)
+    
+    @retry_api_call(retries=3, delay=1.0, backoff=2.0, exceptions=(Exception,))
+    def _fetch_quote_with_retry(self, instrument_key: str) -> Dict:
+        """
+        Fetch quote from Kite API with retry on network errors.
+        
+        Critical for spot price detection and strike capping.
+        If this fails at 09:19:59, strategy is blind at critical entry moment.
+        """
+        return self.kite.quote(instrument_key)
+    
     async def sync_instruments(self) -> bool:
         """
         Synchronize instrument data from Kite Connect.
@@ -44,11 +65,13 @@ class InstrumentManager:
             
             for exchange in exchanges:
                 try:
-                    instruments = self.kite.instruments(exchange)
-                    all_instruments.extend(instruments)
-                    logger.info(f"Fetched {len(instruments)} instruments from {exchange}")
+                    # Use retry decorator for robust instrument fetching
+                    instruments = self._fetch_instruments_with_retry(exchange)
+                    if instruments:
+                        all_instruments.extend(instruments)
+                        logger.info(f"Fetched {len(instruments)} instruments from {exchange}")
                 except Exception as e:
-                    logger.error(f"Failed to fetch instruments from {exchange}: {e}")
+                    logger.error(f"Failed to fetch instruments from {exchange} after retries: {e}")
             
             # Parse and cache instruments
             self._parse_instruments(all_instruments)
@@ -145,11 +168,11 @@ class InstrumentManager:
             
             universe_tokens = set()
             
-            # 1. Add index futures
+            # 1. Add index instruments (futures + options)
             for index_name in self.config.indices:
                 tokens = self._get_index_instruments(index_name)
                 universe_tokens.update(tokens)
-                logger.info(f"Added {len(tokens)} instruments for {index_name}")
+                # Detailed logging is done inside _get_index_instruments()
             
             # 2. Add liquid F&O stocks
             if self.config.fo_stocks_liquidity_rank_top_n > 0:
@@ -160,7 +183,12 @@ class InstrumentManager:
                 logger.info(f"Added {len(fo_tokens)} liquid F&O stocks")
             
             self._universe_tokens = universe_tokens
-            logger.info(f"Universe built with {len(universe_tokens)} instruments")
+            
+            # Summary log (detailed per-index logging done in _get_index_instruments)
+            indices_str = ", ".join(self.config.indices)
+            logger.info(
+                f"Universe built: {len(universe_tokens)} tokens for {indices_str} (fut+opts)"
+            )
             
             return list(universe_tokens)
             
@@ -171,6 +199,8 @@ class InstrumentManager:
     def _get_index_instruments(self, index_name: str) -> Set[int]:
         """Get instruments for a specific index"""
         tokens = set()
+        fut_count = 0
+        opt_count = 0
         
         # Map index names to tradingsymbols
         index_map = {
@@ -184,14 +214,54 @@ class InstrumentManager:
             logger.warning(f"Unknown index: {index_name}")
             return tokens
         
-        # Get spot index token
+        # Get current time (used for expiry filtering)
+        now = datetime.now()
+        
+        # Get spot index token and try to get current spot price
+        spot_token = None
+        spot_price = None
+        
         for token, inst in self._instruments.items():
             if inst.symbol == base_symbol and inst.exchange == "NSE" and inst.instrument_type == InstrumentType.EQ:
                 tokens.add(token)
+                spot_token = token
                 break
         
-        # Get current month and next month futures
-        now = datetime.now()
+        # Try to get spot price from Kite API (for strike capping)
+        # This is best-effort; if it fails, we use defaults
+        if spot_token and self.kite:
+            try:
+                # Try spot index first (with retry)
+                quote = self._fetch_quote_with_retry(f"NSE:{base_symbol}")
+                if quote and 'NSE' in quote and quote['NSE'].get('last_price'):
+                    spot_price = quote['NSE']['last_price']
+                    logger.debug(f"Got spot price for {base_symbol} from NSE: {spot_price}")
+            except Exception as e:
+                logger.debug(f"Could not get spot price from NSE for {base_symbol}: {e}")
+                # If quote fails, try nearest future as proxy
+                try:
+                    for token, inst in self._instruments.items():
+                        if (inst.symbol == base_symbol and inst.exchange == "NFO" and 
+                            inst.is_future and inst.expiry and 
+                            inst.expiry >= now):
+                            fut_quote = self._fetch_quote_with_retry(f"NFO:{inst.tradingsymbol}")
+                            if fut_quote and 'NFO' in fut_quote and fut_quote['NFO'].get('last_price'):
+                                spot_price = fut_quote['NFO']['last_price']
+                                logger.debug(f"Got spot price for {base_symbol} from future: {spot_price}")
+                                break
+                except Exception as e2:
+                    logger.debug(f"Could not get spot price from futures for {base_symbol}: {e2}")
+        
+        # If still no spot price, use a reasonable default based on index
+        if not spot_price:
+            default_spots = {"NIFTY": 20000, "BANKNIFTY": 45000, "FINNIFTY": 20000}
+            spot_price = default_spots.get(base_symbol, 20000)
+            logger.debug(f"Using default spot price for {base_symbol}: {spot_price}")
+        
+        # Strike range: ±12% of spot (covers ±10-15% requirement)
+        strike_range_pct = 0.12
+        min_strike = spot_price * (1 - strike_range_pct)
+        max_strike = spot_price * (1 + strike_range_pct)
         
         for token, inst in self._instruments.items():
             if inst.symbol == base_symbol and inst.exchange == "NFO":
@@ -199,6 +269,20 @@ class InstrumentManager:
                     # Include futures expiring within next 60 days
                     if inst.expiry <= now + timedelta(days=60):
                         tokens.add(token)
+                        fut_count += 1
+                elif inst.is_option and inst.expiry:
+                    # Include options expiring within next 30 days (for OptionsRanker)
+                    # Only include strikes within ±12% of spot to limit universe size
+                    if inst.expiry <= now + timedelta(days=30):
+                        if inst.strike and min_strike <= inst.strike <= max_strike:
+                            tokens.add(token)
+                            opt_count += 1
+        
+        logger.info(
+            f"Universe built: {len(tokens)} tokens for {index_name} "
+            f"(spot={spot_price:.0f}, fut={fut_count}, opts={opt_count}, "
+            f"strikes={min_strike:.0f}-{max_strike:.0f})"
+        )
         
         return tokens
     

@@ -2,6 +2,9 @@
 
 strategy_allocator:
   enabled: true
+  
+  # Periodic refresh configuration
+  refresh_interval_seconds: 90        # Run allocator every 90 seconds (regime-aware refresh)
 
   # Global risk envelope for all strategies controlled by allocator
   global_max_capital_pct: 0.60        # 60% of capital under allocator control
@@ -27,42 +30,53 @@ strategy_allocator:
     risk_aversion: 0.5                # 0=aggressive, 1=conservative
 
   # Strategies under allocator control
+  # Day-4: Updated weights for premium strategies (G1, T1, D1) + OptionsRanker
   strategies:
+    # PRIMARY: OptionsRanker (Debit Spreads)
+    - name: "OptionsRanker"
+      base_weight: 0.45              # Day-4: 45% (primary workhorse)
+      role: "directional_debit"
+
+    # SECONDARY: Expiry Short Strangle
     - name: "expiry_short_strangle"
-      base_weight: 0.20
+      base_weight: 0.10              # Day-4: Reduced from 0.20 (still active)
       role: "income_short_vol"
 
+    # PREMIUM: G1 Gamma Scalper
+    - name: "gamma_scalper"
+      base_weight: 0.15              # Day-4: 15% (promoted to LIVE)
+      role: "long_gamma"
+
+    # PREMIUM: T1 Calendar Arbitrage
+    - name: "calendar_arb"
+      base_weight: 0.15              # Day-4: 15% (promoted to LIVE)
+      role: "term_structure"
+
+    # PREMIUM: D1 Dispersion Arbitrage
+    - name: "dispersion_arb"
+      base_weight: 0.10              # Day-4: 10% (promoted to LIVE)
+      role: "dispersion"
+
+    # SHADOW: Other strategies (disabled or minimal weight)
     - name: "intraday_short_strangle"
-      base_weight: 0.10
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
       role: "intraday_short_vol"
 
     - name: "index_sniper"
-      base_weight: 0.15
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
       role: "directional_trend"
 
     - name: "drifting_credit_spread"
-      base_weight: 0.15
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
       role: "directional_income"
 
     - name: "vscore_credit_spread"
-      base_weight: 0.10
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
       role: "vol_surface"
 
     - name: "kurtosis_straddle"
-      base_weight: 0.05
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
       role: "long_vol"
-
-    - name: "gamma_scalper"
-      base_weight: 0.10
-      role: "long_gamma"
-
-    - name: "calendar_arb"
-      base_weight: 0.10
-      role: "term_structure"
-
-    - name: "dispersion_arb"
-      base_weight: 0.05
-      role: "dispersion"
 
   # Integration with R1 regimes (optional rule overlay)
   regime_overlays:

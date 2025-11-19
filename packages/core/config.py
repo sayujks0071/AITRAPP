@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     # Application
     app_mode: AppMode = Field(default=AppMode.PAPER, alias="APP_MODE")
     app_timezone: str = Field(default="Asia/Kolkata", alias="APP_TIMEZONE")
+    app_config_path: Optional[str] = Field(default=None, alias="APP_CONFIG")
     
     # SEBI/NSE Compliance (Feb 2025)
     compliance_sebi_2025: bool = Field(default=False, alias="COMPLIANCE_SEBI_2025")
@@ -209,6 +210,12 @@ class ExecutionConfig:
     """Order execution configuration"""
     def __init__(self, config: Dict[str, Any]):
         self.default_order_type = config.get("default_order_type", "LIMIT")
+        # Level 4: Limit Chase Execution Alpha
+        self.use_limit_chase = config.get("use_limit_chase", False)
+        self.limit_chase_max_slippage_bps = config.get("limit_chase_max_slippage_bps", 5.0)
+        self.limit_chase_timeout_ms = config.get("limit_chase_timeout_ms", 500)
+        self.limit_chase_max_chases = config.get("limit_chase_max_chases", 10)
+        self.tick_size = config.get("tick_size", 0.05)
         self.limit_chase_ticks = config.get("limit_chase_ticks", 2)
         self.limit_timeout_sec = config.get("limit_timeout_sec", 5)
         self.ioc_for_exits = config.get("ioc_for_exits", True)
@@ -275,4 +282,26 @@ class AppConfig:
 # Global configuration instances
 # Settings are loaded with defaults to handle crypto mode where Kite credentials aren't needed
 settings = Settings()
-app_config = AppConfig()
+
+# Determine config path based on environment or mode
+def _get_config_path() -> str:
+    """Determine which config file to load"""
+    # Explicit APP_CONFIG takes precedence
+    if settings.app_config_path:
+        return settings.app_config_path
+    
+    # Auto-select based on APP_MODE
+    if settings.app_mode == AppMode.LIVE:
+        # For LIVE mode, prefer NSE config if it exists
+        nse_config = Path("configs/kite_day1_live.yaml")
+        if nse_config.exists():
+            return str(nse_config)
+        # Fallback to canary if day1 doesn't exist
+        canary_config = Path("configs/kite_canary_live.yaml")
+        if canary_config.exists():
+            return str(canary_config)
+    
+    # Default to app.yaml
+    return "configs/app.yaml"
+
+app_config = AppConfig(config_path=_get_config_path())

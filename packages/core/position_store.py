@@ -318,6 +318,9 @@ class PositionStore:
                 "max_drawdown_perc": 0.0,
                 "recent_loss_streak": 0,
                 "num_trades_window": 0,
+                "total_pnl": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
             }
         
         # Filter by window (simplified - would use actual dates in production)
@@ -330,6 +333,9 @@ class PositionStore:
                 "max_drawdown_perc": 0.0,
                 "recent_loss_streak": 0,
                 "num_trades_window": 0,
+                "total_pnl": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
             }
         
         # Calculate stats
@@ -368,12 +374,20 @@ class PositionStore:
             else:
                 break
         
+        # Calculate total PnL, avg win, avg loss
+        total_pnl = sum(t["pnl"] for t in recent_trades)
+        avg_win = sum(t["pnl"] for t in wins) / len(wins) if wins else 0.0
+        avg_loss = sum(t["pnl"] for t in losses) / len(losses) if losses else 0.0
+        
         return {
             "hit_rate": hit_rate,
             "expectancy_perc": expectancy_perc,
             "max_drawdown_perc": max_drawdown_perc,
             "recent_loss_streak": recent_loss_streak,
             "num_trades_window": len(recent_trades),
+            "total_pnl": total_pnl,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
         }
 
 

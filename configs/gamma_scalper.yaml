@@ -7,12 +7,12 @@ gamma_scalper:
     - "NIFTY"
     - "BANKNIFTY"
 
-  mode: "PAPER"          # start with PAPER; later LIVE with tight caps
+  mode: "LIVE"
 
   entry:
     entry_window:
-      start: "09:20"
-      end: "11:00"
+      start: "09:45"           # Day-4: Conservative start (was 09:20)
+      end: "15:15"              # Day-4: Extended to 15:15 (was 11:00)
     expiry_selector: "nearest_weekly"
     max_days_to_expiry: 4      # avoid ultra-long tails
     min_days_to_expiry: 1      # avoid pure expiry decay at first
@@ -21,7 +21,8 @@ gamma_scalper:
     rv_iv_min: 0.9             # prefer regime where realised ~ implied or higher
     min_liquidity_score: 7
     max_bid_ask_spread_pct: 0.80
-    lots_per_underlying: 1
+    lots_per_underlying: 1      # Day-4: 1 lot only
+    max_positions: 1            # Day-4: Max 1 position per underlying
 
   hedging:
     target_abs_delta: 0.10     # keep |Δ| below this
@@ -38,8 +39,9 @@ gamma_scalper:
     vol_collapse_rv_iv_max: 0.7     # if RV/IV drops below this → exit, vol not realising
 
   risk:
-    max_capital_pct: 0.05           # 5% of total capital per gamma book
-    max_daily_loss_pct: 0.7         # cap for this strategy, % of capital used
+    max_capital_pct: 0.10           # Day-4: 10% of total capital (₹100k max)
+    max_daily_loss_pct: 0.5         # Day-4: 0.5% of capital = ₹5,000 daily loss cap
+    max_daily_loss_absolute: 5000   # Day-4: Hard cap ₹5,000 per day
     max_rebalances: 25              # protect from churn/slippage
 
   integration:

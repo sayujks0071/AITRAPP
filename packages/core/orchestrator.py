@@ -1,5 +1,6 @@
 """Main trading orchestrator - connects all components"""
 import asyncio
+import os
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -54,11 +55,15 @@ class TradingOrchestrator:
         execution_engine: ExecutionEngine,
         exit_manager: ExitManager,
         ranker: SignalRanker,
+        position_store: Optional[Any] = None,
         redis_bus: Optional[RedisBus] = None,
+        strategy_allocator: Optional[Any] = None,
         oco_manager: Optional[OCOManager] = None,
-        crypto_router: Optional[Any] = None
+        crypto_router: Optional[Any] = None,
+        delta_neutralizer: Optional[Any] = None
     ):
         self.kite = kite
+        self.position_store = position_store
         self.strategies = strategies
         self.instrument_manager = instrument_manager
         self.market_data_stream = market_data_stream
@@ -67,8 +72,10 @@ class TradingOrchestrator:
         self.exit_manager = exit_manager
         self.ranker = ranker
         self.redis_bus = redis_bus
+        self.strategy_allocator = strategy_allocator
         self.oco_manager = oco_manager
         self.crypto_router = crypto_router
+        self.delta_neutralizer = delta_neutralizer
         self.leader_lock: Optional[LeaderLock] = None
         
         # State
@@ -92,11 +99,35 @@ class TradingOrchestrator:
         # Scan supervisor
         self._stop = asyncio.Event()
         self._scan_task: Optional[asyncio.Task] = None
+        self._scan_ticks = 0  # Counter for periodic delta neutralizer checks
+        
+        # Configurable token limit per scan (Patch 1)
+        self.max_tokens_per_scan = int(
+            os.getenv("MAX_TOKENS_PER_SCAN", "80")  # Default 80 (was hardcoded 20)
+        )
+        logger.info(
+            "Orchestrator token limit configured",
+            max_tokens_per_scan=self.max_tokens_per_scan
+        )
         
         # Performance tracking
         self.signals_generated_today = 0
         self.orders_placed_today = 0
         self.trades_completed_today = 0
+        
+        # NEW: Allocator refresh config (Patch: Periodic, Regime-Aware Allocator)
+        allocator_cfg = getattr(strategy_allocator, "cfg", {}) if strategy_allocator else {}
+        default_interval = 90  # seconds
+        self.allocator_refresh_interval = int(
+            allocator_cfg.get("refresh_interval_seconds", default_interval)
+        )
+        self._last_allocator_run_ts: Optional[float] = None
+        
+        logger.info(
+            "Orchestrator allocator refresh configured",
+            refresh_interval_seconds=self.allocator_refresh_interval,
+            allocator_enabled=bool(strategy_allocator)
+        )
         
     async def start(self) -> None:
         """Start the trading orchestrator"""
@@ -124,6 +155,27 @@ class TradingOrchestrator:
         
         self.is_running = True
         self.is_paused = False
+        
+        # Run initial allocation cycle if allocator is available
+        if self.strategy_allocator:
+            try:
+                # Get current regime from R1 if available (best effort)
+                current_regime = None
+                r1_strategy = next((s for s in self.strategies if s.name == "RegimeVolEngine"), None)
+                if r1_strategy and hasattr(r1_strategy, 'last_classified_regime'):
+                    current_regime = r1_strategy.last_classified_regime
+                
+                # Get event context - we'll need to pass event_engine to orchestrator or get it another way
+                # For now, pass None and we can enhance later
+                event_ctx = None
+                
+                allocations = self.strategy_allocator.run_allocation_cycle(
+                    current_regime=current_regime,
+                    event_ctx=event_ctx
+                )
+                logger.info("Initial allocation cycle completed", num_allocations=len(allocations))
+            except Exception as e:
+                logger.warning("Allocation cycle failed at startup", error=str(e))
         
         # Initialize crypto venue if in crypto mode
         if settings.app_mode.value in ("CRYPTO_PAPER", "CRYPTO_LIVE") and self.crypto_router:
@@ -629,6 +681,362 @@ class TradingOrchestrator:
         
         logger.info("Main trading loop exiting (scan supervisor)")
     
+    def _sorted_strategies(self) -> List[Strategy]:
+        """
+        Returns strategies sorted by priority (lower number = higher priority).
+        
+        If a strategy doesn't define .priority, default = 100.
+        This ensures premium strategies (OptionsRanker, IntradayStrangle, etc.) run first.
+        """
+        return sorted(
+            self.strategies,
+            key=lambda s: getattr(s, "priority", 100),
+        )
+    
+    async def _run_strategy_on_tokens(
+        self,
+        strategy: Strategy,
+        tokens: List[int],
+        current_time: datetime,
+        regime_snapshot: Optional[Dict[str, Any]],
+        event_snapshot: Optional[Dict[str, Any]],
+        all_signals: List[Signal]
+    ) -> None:
+        """
+        Run a strategy on a list of tokens, building StrategyContext with regime/event data.
+        
+        Enhanced with bulk LTP fetching and async execute() support.
+        
+        This is the core loop that:
+        1. Bulk fetches LTP for all tokens (efficiency)
+        2. Iterates through tokens
+        3. Builds StrategyContext with market data + regime/event snapshots
+        4. Calls strategy.execute() (async) or generate_signals() (sync)
+        5. Collects signals
+        """
+        # Bulk fetch LTP for all tokens (efficiency improvement)
+        ltp_map = await self._bulk_fetch_ltp(tokens)
+        
+        # Build shared context data (once per strategy, not per token)
+        net_liquid = self._get_net_liquid()
+        available_margin = self._get_available_margin()
+        open_positions_list = [p for p in self.positions if p.is_open]
+        
+        # Extract simplified regime string from snapshot
+        regime_string = None
+        if regime_snapshot:
+            # Try to extract regime for first available symbol
+            for symbol, data in regime_snapshot.items():
+                if isinstance(data, dict) and "regime" in data:
+                    regime_string = data["regime"]
+                    break
+        
+        # Build margins dict (shared across all tokens)
+        margins_dict = {
+            "net_liquid": net_liquid,
+            "available_margin": available_margin,
+            "used_margin": net_liquid - available_margin,
+            "margin_usage_pct": ((net_liquid - available_margin) / net_liquid * 100) if net_liquid > 0 else 0.0
+        }
+        
+        # Import StrategyContext (needed for both paths)
+        from packages.core.strategies.base import StrategyContext
+        
+        # Check if strategy supports async execute()
+        supports_async = hasattr(strategy, 'execute') and callable(getattr(strategy, 'execute'))
+        
+        if supports_async:
+            # New strategy: Use async execute() with bulk context
+            try:
+                # Build multi-instrument context (StatGeist-style)
+                bulk_context = StrategyContext(
+                    timestamp=current_time,
+                    instrument=None,  # Multi-instrument context
+                    # Legacy fields (minimal for bulk context)
+                    latest_tick=None,
+                    bars_1s=[],
+                    bars_5s=[],
+                    net_liquid=net_liquid,
+                    available_margin=available_margin,
+                    open_positions=len(open_positions_list),
+                    # New fields (StatGeist-style) - bulk data
+                    ltp=ltp_map,  # Bulk LTP map
+                    ohlc={},  # Can be bulk-fetched if needed
+                    positions=open_positions_list,
+                    margins=margins_dict,
+                    # Patch 3: Regime and event snapshots
+                    regime_snapshot=regime_snapshot,
+                    regime=regime_string,
+                    event_snapshot=event_snapshot,
+                    universe_size=len(tokens),
+                    token_count=len(tokens)
+                )
+                
+                # Call async execute()
+                signals = await strategy.execute(bulk_context)
+                if signals:
+                    all_signals.extend(signals)
+            except Exception as e:
+                logger.error(
+                    f"Error in async execute() for strategy {strategy.name}: {e}",
+                    exc_info=True
+                )
+        else:
+            # Legacy strategy: Per-instrument generate_signals() (backward compatible)
+            for token in tokens:
+                instrument = self.instrument_manager.get_instrument(token)
+                if not instrument:
+                    continue
+                
+                # Get market data
+                tick = self.market_data_stream.get_latest_tick(token)
+                bars_1s = self.market_data_stream.get_bars(token, 1, n=60)
+                bars_5s = self.market_data_stream.get_bars(token, 5, n=100)
+                
+                if not tick or not bars_5s:
+                    continue
+                
+                # Build per-instrument context (legacy format)
+                # StrategyContext already imported above
+                
+                # Extract regime for this instrument's underlying
+                instrument_regime = regime_string
+                if regime_snapshot and instrument.symbol in regime_snapshot:
+                    regime_data = regime_snapshot[instrument.symbol]
+                    if isinstance(regime_data, dict) and "regime" in regime_data:
+                        instrument_regime = regime_data["regime"]
+                
+                # Build LTP dict (add current instrument to bulk map)
+                ltp_dict = ltp_map.copy()
+                if tick:
+                    ltp_dict[instrument.tradingsymbol] = tick.last_price
+                    ltp_dict[instrument.symbol] = tick.last_price
+                
+                # Build OHLC dict (add current instrument)
+                ohlc_dict = {}
+                if bars_5s and len(bars_5s) > 0:
+                    latest_bar = bars_5s[-1]
+                    ohlc_dict[instrument.tradingsymbol] = {
+                        "open": latest_bar.open,
+                        "high": latest_bar.high,
+                        "low": latest_bar.low,
+                        "close": latest_bar.close,
+                        "volume": latest_bar.volume,
+                        "timestamp": latest_bar.timestamp
+                    }
+                
+                context = StrategyContext(
+                    # Legacy fields (backward compatible)
+                    timestamp=current_time,
+                    instrument=instrument,
+                    latest_tick=tick,
+                    bars_1s=bars_1s,
+                    bars_5s=bars_5s,
+                    net_liquid=net_liquid,
+                    available_margin=available_margin,
+                    open_positions=len(open_positions_list),
+                    # New fields (StatGeist-style)
+                    ltp=ltp_dict,
+                    ohlc=ohlc_dict,
+                    positions=open_positions_list,
+                    margins=margins_dict,
+                    # Patch 3: Regime and event snapshots
+                    regime_snapshot=regime_snapshot,
+                    regime=instrument_regime,
+                    event_snapshot=event_snapshot,
+                    universe_size=len(tokens),
+                    token_count=len(tokens)
+                )
+                
+                # Generate signals (sync, per-instrument)
+                try:
+                    signals = strategy.generate_signals(context)
+                    all_signals.extend(signals)
+                except Exception as e:
+                    logger.error(
+                        f"Error in generate_signals() for strategy {strategy.name} on {instrument.tradingsymbol}: {e}",
+                        exc_info=True
+                    )
+    
+    async def _bulk_fetch_ltp(self, tokens: List[int]) -> Dict[str, float]:
+        """
+        Bulk fetch LTP for all tokens (efficiency improvement).
+        
+        Returns dict mapping tradingsymbol -> last_price.
+        Falls back to market_data_stream if Kite API not available.
+        """
+        ltp_map = {}
+        
+        try:
+            # Try to use Kite API for bulk LTP (if available)
+            if self.kite and hasattr(self.kite, 'ltp'):
+                # Build instrument keys for bulk fetch
+                instrument_keys = []
+                symbol_map = {}  # Map instrument_key -> tradingsymbol
+                
+                for token in tokens:
+                    instrument = self.instrument_manager.get_instrument(token)
+                    if not instrument:
+                        continue
+                    
+                    # Build Kite instrument key (e.g., "NFO:NIFTY24NOV24000CE")
+                    exchange = instrument.exchange
+                    tradingsymbol = instrument.tradingsymbol
+                    instrument_key = f"{exchange}:{tradingsymbol}"
+                    
+                    instrument_keys.append(instrument_key)
+                    symbol_map[instrument_key] = tradingsymbol
+                    symbol_map[instrument_key] = instrument.symbol  # Also map by symbol
+                
+                if instrument_keys:
+                    try:
+                        # Bulk fetch LTP from Kite
+                        bulk_ltp = self.kite.ltp(instrument_keys)
+                        
+                        # Convert to our format
+                        for key, price_data in bulk_ltp.items():
+                            if isinstance(price_data, dict):
+                                price = price_data.get("last_price", 0.0)
+                            else:
+                                price = float(price_data) if price_data else 0.0
+                            
+                            # Map to both tradingsymbol and symbol
+                            if key in symbol_map:
+                                tradingsymbol = symbol_map[key]
+                                ltp_map[tradingsymbol] = price
+                                # Also add by symbol (find instrument by tradingsymbol)
+                                for token, inst in self.instrument_manager._instruments.items():
+                                    if inst.tradingsymbol == tradingsymbol:
+                                        ltp_map[inst.symbol] = price
+                                        break
+                    except Exception as e:
+                        logger.debug(f"Bulk LTP fetch failed, falling back to market data stream: {e}")
+            
+            # Fallback: Use market_data_stream (per-token)
+            if not ltp_map:
+                for token in tokens:
+                    instrument = self.instrument_manager.get_instrument(token)
+                    if not instrument:
+                        continue
+                    
+                    tick = self.market_data_stream.get_latest_tick(token)
+                    if tick:
+                        ltp_map[instrument.tradingsymbol] = tick.last_price
+                        ltp_map[instrument.symbol] = tick.last_price
+        
+        except Exception as e:
+            logger.warning(f"Error in bulk LTP fetch: {e}, using market data stream fallback")
+            # Fallback to per-token fetching
+            for token in tokens:
+                instrument = self.instrument_manager.get_instrument(token)
+                if instrument:
+                    tick = self.market_data_stream.get_latest_tick(token)
+                    if tick:
+                        ltp_map[instrument.tradingsymbol] = tick.last_price
+                        ltp_map[instrument.symbol] = tick.last_price
+        
+        return ltp_map
+    
+    async def _maybe_run_allocator(
+        self,
+        regime_snapshot: Optional[Dict[str, Any]],
+        event_snapshot: Optional[Dict[str, Any]]
+    ) -> None:
+        """
+        Periodically recompute strategy caps based on realized PnL + regime/event.
+        
+        Runs at most once every allocator_refresh_interval seconds.
+        This makes the allocator a "living organism" that adapts to:
+        - Realized PnL changes
+        - Regime shifts (R1)
+        - Event changes (E1)
+        
+        Args:
+            regime_snapshot: Current regime snapshot from R1 (e.g., {"NIFTY": {"regime": "LOW_MEAN_REVERT", ...}})
+            event_snapshot: Current event snapshot from E1 (e.g., {"today": {"is_event_day": False, ...}})
+        """
+        if not self.strategy_allocator:
+            return
+        
+        now_ts = time_module.time()
+        
+        # Check if we should run (throttle by interval)
+        if self._last_allocator_run_ts is None:
+            should_run = True
+        else:
+            elapsed = now_ts - self._last_allocator_run_ts
+            should_run = elapsed >= self.allocator_refresh_interval
+        
+        if not should_run:
+            return
+        
+        self._last_allocator_run_ts = now_ts
+        
+        try:
+            # Extract current regime from snapshot
+            current_regime = None
+            if regime_snapshot:
+                # Try to extract regime for NIFTY (primary underlying)
+                if "NIFTY" in regime_snapshot:
+                    regime_data = regime_snapshot["NIFTY"]
+                    if isinstance(regime_data, dict) and "regime" in regime_data:
+                        current_regime = regime_data["regime"]
+                # Fallback: try first available regime
+                elif regime_snapshot:
+                    for symbol, data in regime_snapshot.items():
+                        if isinstance(data, dict) and "regime" in data:
+                            current_regime = data["regime"]
+                            break
+            
+            # Extract event context from snapshot
+            event_ctx = event_snapshot
+            
+            # Run allocation cycle
+            allocations = self.strategy_allocator.run_allocation_cycle(
+                current_regime=current_regime,
+                event_ctx=event_ctx,
+            )
+            
+            # Apply new caps into risk engine
+            if allocations and self.risk_manager:
+                for name, alloc in allocations.items():
+                    if not isinstance(alloc, dict):
+                        # If alloc is StrategyAlloc dataclass, convert to dict
+                        if hasattr(alloc, 'name') and hasattr(alloc, 'max_capital_pct'):
+                            strategy_name = alloc.name
+                            cap_pct = alloc.max_capital_pct
+                        else:
+                            continue
+                    else:
+                        strategy_name = alloc.get("name") or name
+                        cap_pct = alloc.get("max_capital_pct") or alloc.get("capital_pct")
+                    
+                    if strategy_name and cap_pct is not None:
+                        # Update risk engine caps
+                        if hasattr(self.risk_manager, 'set_strategy_cap'):
+                            self.risk_manager.set_strategy_cap(
+                                strategy_name=strategy_name,
+                                capital_pct=float(cap_pct),
+                            )
+                        elif hasattr(self.risk_manager, 'update_strategy_allocation'):
+                            # Alternative method name
+                            self.risk_manager.update_strategy_allocation(
+                                strategy_name=strategy_name,
+                                max_capital_pct=float(cap_pct),
+                            )
+            
+            logger.info(
+                "StrategyAllocator refresh completed",
+                num_allocations=len(allocations),
+                regime=current_regime,
+                refresh_interval=self.allocator_refresh_interval
+            )
+        except Exception as e:
+            logger.error(
+                f"StrategyAllocator refresh failed: {e}",
+                exc_info=True
+            )
+    
     async def _main_loop(self) -> None:
         """Main trading loop (deprecated - use _scan_supervisor instead)"""
         logger.warning("_main_loop called - this should not happen, using _scan_supervisor instead")
@@ -653,50 +1061,79 @@ class TradingOrchestrator:
         
         logger.debug("Running scan cycle", timestamp=current_time.isoformat())
         
-        # 1. Generate signals from all strategies
+        # 1. Get universe tokens with configurable limit (Patch 1)
+        universe_tokens = self.instrument_manager.get_universe_tokens()
+        universe_size = len(universe_tokens) if universe_tokens else 0
+        
+        if universe_size == 0:
+            logger.warning("[Orchestrator] Universe is empty in _scan_cycle")
+            return
+        
+        # Apply token limit
+        if universe_size > self.max_tokens_per_scan:
+            tokens_to_scan = universe_tokens[:self.max_tokens_per_scan]
+            logger.debug(
+                f"[Orchestrator] Scan cycle at {current_time.isoformat()}, "
+                f"universe={universe_size}, using={len(tokens_to_scan)} tokens"
+            )
+        else:
+            tokens_to_scan = universe_tokens
+            logger.debug(
+                f"[Orchestrator] Scan cycle at {current_time.isoformat()}, "
+                f"universe={universe_size}, using all tokens"
+            )
+        
+        # 2. Get regime and event snapshots ONCE per scan (Patch 3)
+        regime_snapshot = None
+        event_snapshot = None
+        
+        # Get R1 regime snapshot
+        r1_strategy = next((s for s in self.strategies if s.name == "RegimeVolEngine"), None)
+        if r1_strategy and hasattr(r1_strategy, 'get_snapshot'):
+            try:
+                regime_snapshot = r1_strategy.get_snapshot()
+            except Exception as e:
+                logger.error(f"[Orchestrator] Error getting regime snapshot: {e}", exc_info=True)
+        
+        # Get E1 event snapshot
+        e1_strategy = next((s for s in self.strategies if hasattr(s, 'get_today_classification')), None)
+        if e1_strategy and hasattr(e1_strategy, 'get_today_classification'):
+            try:
+                event_snapshot = e1_strategy.get_today_classification()
+            except Exception as e:
+                logger.error(f"[Orchestrator] Error getting event snapshot: {e}", exc_info=True)
+        
+        # NEW: Run allocator periodically (Patch: Periodic, Regime-Aware Allocator)
+        await self._maybe_run_allocator(regime_snapshot, event_snapshot)
+        
+        # Increment scan counter for periodic delta neutralizer checks
+        self._scan_ticks += 1
+        
+        # NEW: Delta neutralizer every M scans (e.g., once/min if 5s scans)
+        if self.delta_neutralizer and (self._scan_ticks % 12 == 0):  # 12 * 5s = 60s = 1 minute
+            try:
+                await self.delta_neutralizer.maybe_rebalance()
+            except Exception as e:
+                logger.error(f"[Orchestrator] Delta neutralizer error: {e}", exc_info=True)
+        
+        # 3. Generate signals from all strategies (sorted by priority - Patch 2)
         all_signals = []
         
-        for strategy in self.strategies:
+        for strategy in self._sorted_strategies():
             if not strategy.enabled:
                 continue
             
             try:
-                # Get market data for each instrument in universe
-                universe_tokens = self.instrument_manager.get_universe_tokens()
-                
-                for token in universe_tokens[:20]:  # Limit for performance
-                    instrument = self.instrument_manager.get_instrument(token)
-                    if not instrument:
-                        continue
-                    
-                    # Get market data
-                    tick = self.market_data_stream.get_latest_tick(token)
-                    bars_1s = self.market_data_stream.get_bars(token, 1, n=60)
-                    bars_5s = self.market_data_stream.get_bars(token, 5, n=100)
-                    
-                    if not tick or not bars_5s:
-                        continue
-                    
-                    # Create strategy context
-                    from packages.core.strategies.base import StrategyContext
-                    
-                    context = StrategyContext(
-                        timestamp=current_time,
-                        instrument=instrument,
-                        latest_tick=tick,
-                        bars_1s=bars_1s,
-                        bars_5s=bars_5s,
-                        net_liquid=self._get_net_liquid(),
-                        available_margin=self._get_available_margin(),
-                        open_positions=len([p for p in self.positions if p.is_open])
-                    )
-                    
-                    # Generate signals
-                    signals = strategy.generate_signals(context)
-                    all_signals.extend(signals)
-            
+                # Run strategy on tokens
+                await self._run_strategy_on_tokens(
+                    strategy, tokens_to_scan, current_time,
+                    regime_snapshot, event_snapshot, all_signals
+                )
             except Exception as e:
-                logger.error(f"Strategy {strategy.name} failed", error=str(e))
+                logger.error(
+                    f"[Orchestrator] Error in strategy {getattr(strategy, 'name', str(strategy))}: {e}",
+                    exc_info=True
+                )
         
         if not all_signals:
             return
@@ -865,6 +1302,11 @@ class TradingOrchestrator:
                 )
                 
                 self.positions.append(position)
+                
+                # Sync to PositionStore (canonical source)
+                if self.position_store:
+                    self.position_store.add_position(position)
+                
                 self.orders_placed_today += 1
                 
                 # Notify strategy
@@ -897,6 +1339,10 @@ class TradingOrchestrator:
             if tick:
                 position.current_price = tick.last_price
                 position.update_pnl()
+                
+                # Sync price updates to PositionStore
+                if self.position_store and position.position_id:
+                    self.position_store.update_position(position.position_id, position.current_price)
         
         # Get market data for exit manager
         market_data = {}
@@ -954,6 +1400,10 @@ class TradingOrchestrator:
                 
                 position.realized_pnl = gross_pnl - fees
                 self.trades_completed_today += 1
+                
+                # Sync to PositionStore (canonical source)
+                if self.position_store:
+                    self.position_store.close_position(position.position_id, exit_order.average_price, datetime.now())
                 
                 # Notify strategy
                 for strategy in self.strategies:

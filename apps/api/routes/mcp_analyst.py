@@ -240,6 +240,7 @@ async def get_strategy_summary(lookback_days: int = 60):
             # Get basic info
             strategy_info = {
                 "name": name,
+                "enabled": getattr(strategy, 'enabled', True),  # Strategy enabled status
                 "role": getattr(strategy, 'role', 'unknown'),  # e.g., 'income_short_vol', 'long_gamma'
                 "regime_usage": getattr(strategy, 'regime_usage', {}),  # Which regimes it's active in
                 "realised_pnl": 0.0,

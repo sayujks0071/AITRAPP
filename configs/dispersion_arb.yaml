@@ -12,12 +12,12 @@ dispersion_arb:
     - parent: "NIFTY"
       sector: "MIDCAPNIFTY"
 
-  mode: "PAPER"                        # start here
+  mode: "LIVE"
 
   entry:
     entry_window:
-      start: "10:00"
-      end: "14:00"
+      start: "10:30"              # Day-4: Midday only (was 10:00)
+      end: "14:00"                # Day-4: Unchanged
 
     # Volatility lookbacks (intraday, minutes)
     rv_lookback_minutes: 60            # realised vol window
@@ -35,7 +35,8 @@ dispersion_arb:
     # Structures & sizing
     lots_sector_long_vol: 1
     lots_parent_short_vol: 1
-    max_pair_books_per_pair: 1         # keep it simple initially
+    max_pair_books_per_pair: 1         # Day-4: 1 pair book max
+    max_positions: 1                    # Day-4: Max 1 dispersion pair
 
   exits:
     hard_exit_time: "15:10"
@@ -49,8 +50,9 @@ dispersion_arb:
     vol_ratio_normalise_max: 1.2       # if RV_sector/RV_parent < 1.2, exit (dispersion faded)
 
   risk:
-    max_capital_pct: 0.05              # capital allocation to dispersion per pair
-    max_daily_loss_pct: 0.8
+    max_capital_pct: 0.10              # Day-4: 10% of total capital (₹100k max)
+    max_daily_loss_pct: 0.5            # Day-4: 0.5% of capital = ₹5,000 daily loss cap
+    max_daily_loss_absolute: 5000      # Day-4: Hard cap ₹5,000 per day
 
   integration:
     require_r1_regime: true

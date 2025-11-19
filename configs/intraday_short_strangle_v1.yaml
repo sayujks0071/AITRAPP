@@ -1,0 +1,24 @@
+# Intraday Short Strangle V1 Configuration
+
+intraday_short_strangle_v1:
+  enabled: true
+  underlying: "NIFTY"
+  underlying_token: 256265
+  priority: 3
+
+  # --- Execution Knob ---
+  use_limit_chase: true
+
+  # Selection
+  lot_size: 25
+  target_delta: 0.25
+  expiry_kind: "nearest"
+
+  # Execution
+  entry_time: "09:20"
+  exit_time: "15:15"
+
+  # Risk
+  sl_premium_pct: 0.25
+  max_loss_rs: 5000.0
+  max_portfolio_heat: 0.02
