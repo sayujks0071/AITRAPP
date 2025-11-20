@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, ConfigDict
 from pydantic_settings import BaseSettings
 
 
@@ -40,6 +40,9 @@ class ProductType(str, Enum):
 
 class Settings(BaseSettings):
     """Application settings from environment"""
+    
+    # Configure Pydantic to ignore extra fields (like KITE_TOKEN_REFRESHED_AT)
+    model_config = ConfigDict(extra="ignore")
     
     # Kite Connect (optional for crypto mode)
     kite_api_key: Optional[str] = Field(default=None, alias="KITE_API_KEY")
@@ -107,9 +110,12 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     reload: bool = Field(default=False, alias="RELOAD")
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    # Pydantic v2 configuration (replaces old Config class)
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"  # Ignore extra fields like KITE_TOKEN_REFRESHED_AT
+    )
 
 
 class RiskConfig:

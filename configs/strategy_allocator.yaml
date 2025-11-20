@@ -1,7 +1,7 @@
 # configs/strategy_allocator.yaml
 
 strategy_allocator:
-  enabled: true
+  enabled: false  # Disabled for Day-1 bootstrap (no trading history yet)
   
   # Periodic refresh configuration
   refresh_interval_seconds: 90        # Run allocator every 90 seconds (regime-aware refresh)
@@ -37,29 +37,39 @@ strategy_allocator:
       base_weight: 0.45              # Day-4: 45% (primary workhorse)
       role: "directional_debit"
 
-    # SECONDARY: Expiry Short Strangle
-    - name: "expiry_short_strangle"
-      base_weight: 0.10              # Day-4: Reduced from 0.20 (still active)
+    # SECONDARY: Expiry Short Strangle V2
+    - name: "expiry_short_strangle_v2"
+      base_weight: 0.10              # Day-4: 10% (V2 upgrade)
       role: "income_short_vol"
 
     # PREMIUM: G1 Gamma Scalper
-    - name: "gamma_scalper"
+    - name: "GammaScalper"
       base_weight: 0.15              # Day-4: 15% (promoted to LIVE)
       role: "long_gamma"
 
     # PREMIUM: T1 Calendar Arbitrage
-    - name: "calendar_arb"
+    - name: "CalendarArb"
       base_weight: 0.15              # Day-4: 15% (promoted to LIVE)
       role: "term_structure"
 
     # PREMIUM: D1 Dispersion Arbitrage
-    - name: "dispersion_arb"
+    - name: "DispersionArb"
       base_weight: 0.10              # Day-4: 10% (promoted to LIVE)
       role: "dispersion"
 
-    # SHADOW: Other strategies (disabled or minimal weight)
+    # PREMIUM: Intraday Short Strangle V1
+    - name: "intraday_short_strangle_v1"
+      base_weight: 0.05              # Day-4: 5% (small size, intraday only)
+      role: "intraday_short_vol"
+
+    # PREMIUM: Trend Credit Spread V1
+    - name: "trend_credit_spread_v1"
+      base_weight: 0.05              # Day-4: 5% (small size, trend-based)
+      role: "directional_income"
+
+    # SHADOW: Legacy strategies (disabled)
     - name: "intraday_short_strangle"
-      base_weight: 0.0               # Day-4: Disabled (shadow mode)
+      base_weight: 0.0               # Day-4: Disabled (replaced by v1)
       role: "intraday_short_vol"
 
     - name: "index_sniper"

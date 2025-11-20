@@ -55,7 +55,8 @@ class StrategyAllocator:
         self.metrics = metrics
         
         self.strategy_cfgs = cfg.get("strategies", [])
-        
+        self._last_allocations: Dict[str, StrategyAlloc] = {}
+
         logger.info(
             "StrategyAllocator initialized",
             num_strategies=len(self.strategy_cfgs),
@@ -80,8 +81,36 @@ class StrategyAllocator:
             Dict mapping strategy name to StrategyAlloc
         """
         if not self.cfg.get("enabled", True):
-            logger.debug("StrategyAllocator disabled")
-            return {}
+            logger.debug("StrategyAllocator disabled - using base allocations")
+            # When disabled, return base allocations directly
+            allocs = {}
+            global_cap = self.cfg.get("global_max_capital_pct", 0.60)
+
+            for sc in self.strategy_cfgs:
+                name = sc.get("name")
+                if not name:
+                    continue
+
+                base_weight = sc.get("base_weight", 0.0)
+                # Convert base_weight to capital percentage
+                max_capital_pct = base_weight * global_cap
+
+                allocs[name] = StrategyAlloc(
+                    name=name,
+                    enabled=True,
+                    base_weight=base_weight,
+                    raw_score=1.0,
+                    final_weight=base_weight,
+                    max_capital_pct=max_capital_pct,
+                )
+
+                # Update risk engine with base allocations
+                if hasattr(self.risk_engine, 'set_strategy_cap'):
+                    self.risk_engine.set_strategy_cap(name, max_capital_pct)
+
+            self._last_allocations = allocs
+            logger.info("Base allocations applied", num_strategies=len(allocs))
+            return allocs
         
         stats_window_trades = self.stats_cfg.get("trade_window", 50)
         stats_window_days = self.stats_cfg.get("day_window", 30)
@@ -145,9 +174,24 @@ class StrategyAllocator:
             num_strategies=len(allocs),
             regime=current_regime or "UNKNOWN"
         )
-        
+
+        # Store for get_current_allocations()
+        self._last_allocations = allocs
+
         return allocs
-    
+
+    def get_current_allocations(self) -> Dict[str, float]:
+        """
+        Get current capital allocations as percentages.
+
+        Returns:
+            Dict mapping strategy name to max_capital_pct
+        """
+        return {
+            name: alloc.max_capital_pct
+            for name, alloc in self._last_allocations.items()
+        }
+
     def _get_stats(
         self,
         strategy_name: str,

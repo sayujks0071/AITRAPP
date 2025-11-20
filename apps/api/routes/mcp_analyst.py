@@ -266,11 +266,15 @@ async def get_strategy_summary(lookback_days: int = 60):
                 strategy_info.update(metrics)
 
             # Get allocation from allocator if available
+            allocator = None
             if 'StrategyAllocator' in app_state.strategies:
                 allocator = app_state.strategies['StrategyAllocator']
-                if hasattr(allocator, 'get_current_allocations'):
-                    allocations = allocator.get_current_allocations()
-                    strategy_info['current_allocation_pct'] = allocations.get(name, 0.0)
+            elif app_state.orchestrator and hasattr(app_state.orchestrator, 'strategy_allocator'):
+                allocator = app_state.orchestrator.strategy_allocator
+
+            if allocator and hasattr(allocator, 'get_current_allocations'):
+                allocations = allocator.get_current_allocations()
+                strategy_info['current_allocation_pct'] = allocations.get(name, 0.0)
 
             strategies_data.append(strategy_info)
 

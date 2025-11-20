@@ -28,7 +28,7 @@ from packages.core.position_store import PositionStore
 from packages.core.models import Position, PositionStatus, SystemState
 from packages.core.orchestrator import TradingOrchestrator
 from packages.core.risk import PortfolioRisk, RiskManager
-from packages.core.risk.delta_neutralizer import DeltaNeutralizer, DeltaNeutralizerConfig
+from packages.core.hedging.delta_neutralizer import DeltaNeutralizer, DeltaNeutralizerConfig
 from packages.core.ranker import SignalRanker
 from packages.core.strategies import (
     ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy, Strategy,
@@ -620,8 +620,25 @@ async def lifespan(app: FastAPI):
     # Initialize ranker
     app_state.ranker = SignalRanker(app_config.ranking)
     
-    # Initialize market data stream
+    # Initialize and start market data stream
     app_state.market_data_stream.initialize()
+    app_state.market_data_stream.start()
+    
+    # Subscribe to universe tokens after a short delay to allow connection
+    async def subscribe_to_universe_delayed():
+        await asyncio.sleep(3)  # Wait for WebSocket connection to establish
+        if app_state.market_data_stream.is_connected:
+            universe_tokens = app_state.instrument_manager.get_universe_tokens()
+            if universe_tokens:
+                # Subscribe to first 50 tokens (or all if less than 50)
+                tokens_to_subscribe = universe_tokens[:50]
+                app_state.market_data_stream.subscribe(tokens_to_subscribe)
+                logger.info(f"Subscribed to {len(tokens_to_subscribe)} instruments for market data")
+        else:
+            logger.warning("Market data stream not connected, skipping subscription")
+    
+    # Start subscription task
+    asyncio.create_task(subscribe_to_universe_delayed())
     
     # Initialize Redis bus
     redis_bus = RedisBus()
@@ -1458,29 +1475,61 @@ async def restart_market_data():
     try:
         if app_state.market_data_stream:
             logger.info("Restarting market data WebSocket connection")
+            
+            # Reload token from .env file
+            from dotenv import load_dotenv
+            import os
+            load_dotenv()
+            new_token = os.getenv("KITE_ACCESS_TOKEN")
+            if new_token:
+                # Update settings with new token
+                settings.kite_access_token = new_token
+                # Also update KiteConnect instance
+                app_state.kite.set_access_token(new_token)
+                logger.info("Token reloaded from .env file")
+            
+            # Stop existing connection
             app_state.market_data_stream.stop()
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)  # Give it time to fully stop
+            
+            # Reinitialize with fresh token
             app_state.market_data_stream.initialize()
             app_state.market_data_stream.start()
-            await asyncio.sleep(2)  # Wait for connection
             
-            # Resubscribe to universe
-            if app_state.orchestrator:
-                universe_tokens = app_state.instrument_manager.get_universe_tokens()
-                if universe_tokens:
-                    app_state.market_data_stream.subscribe(universe_tokens[:50])
-                    logger.info(f"Resubscribed to {len(universe_tokens[:50])} instruments")
+            # Wait longer for connection (WebSocket can take 5-10 seconds)
+            max_wait = 20  # Increased to 20 seconds
+            waited = 0
+            while not app_state.market_data_stream.is_connected and waited < max_wait:
+                await asyncio.sleep(1)
+                waited += 1
+                if waited % 5 == 0:  # Log every 5 seconds
+                    logger.info(f"Waiting for WebSocket connection... ({waited}/{max_wait}s)")
+            
+            if not app_state.market_data_stream.is_connected:
+                logger.warning(
+                    f"WebSocket not connected after {waited} seconds. "
+                    "This may indicate a token issue or WebSocket streaming not enabled in Kite app settings."
+                )
+            
+            # Resubscribe to universe if connected
+            if app_state.market_data_stream.is_connected:
+                if app_state.orchestrator:
+                    universe_tokens = app_state.instrument_manager.get_universe_tokens()
+                    if universe_tokens:
+                        app_state.market_data_stream.subscribe(universe_tokens[:50])
+                        logger.info(f"Resubscribed to {len(universe_tokens[:50])} instruments")
             
             return {
                 "status": "success",
                 "message": "Market data WebSocket restarted",
                 "connected": app_state.market_data_stream.is_connected,
+                "waited_seconds": waited,
                 "timestamp": datetime.now().isoformat()
             }
         else:
             raise HTTPException(status_code=500, detail="Market data stream not initialized")
     except Exception as e:
-        logger.error(f"Failed to restart market data: {e}")
+        logger.error(f"Failed to restart market data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

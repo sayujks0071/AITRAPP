@@ -28,6 +28,12 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
 try:
+    from dotenv import load_dotenv
+except ImportError:
+    print("❌ python-dotenv not installed. Run: pip install python-dotenv")
+    sys.exit(1)
+
+try:
     from kiteconnect import KiteConnect
 except ImportError:
     print("❌ kiteconnect not installed. Run: pip install kiteconnect")
@@ -35,25 +41,43 @@ except ImportError:
 
 
 def get_credentials() -> Tuple[str, str]:
-    """Get API key and secret from env."""
+    """Get API key and secret from .env file."""
+    # Load .env file from project root
+    repo_root = Path(__file__).parent.parent
+    env_file = repo_root / '.env'
+    
+    if not env_file.exists():
+        print(f"❌ .env file not found at {env_file}")
+        print("\nPlease create .env file with:")
+        print("  KITE_API_KEY=your_api_key")
+        print("  KITE_API_SECRET=your_api_secret")
+        sys.exit(1)
+    
+    # Load environment variables from .env
+    load_dotenv(env_file)
+    
     api_key = os.getenv("KITE_API_KEY")
     api_secret = os.getenv("KITE_API_SECRET")
     
     if not api_key or not api_secret:
-        print("❌ KITE_API_KEY and KITE_API_SECRET not set in environment")
-        print("\nSet them in .env file or export:")
-        print("  export KITE_API_KEY=\"***\"")
-        print("  export KITE_API_SECRET=\"***\"")
+        print("❌ KITE_API_KEY and KITE_API_SECRET not found in .env file")
+        print(f"\nPlease add them to {env_file}:")
+        print("  KITE_API_KEY=your_api_key")
+        print("  KITE_API_SECRET=your_api_secret")
         sys.exit(1)
     
     return api_key, api_secret
 
 
-def open_login_url(api_key: str) -> None:
-    """Open Kite login URL in browser."""
-    login_url = f"https://kite.trade/connect/login?api_key={api_key}&v=3"
+def open_login_url(api_key: str, redirect_url: str = "http://localhost:8080/callback") -> None:
+    """Open Kite login URL in browser with redirect URL."""
+    from urllib.parse import quote
+    # Kite Connect requires redirect_uri parameter
+    encoded_redirect = quote(redirect_url, safe='')
+    login_url = f"https://kite.trade/connect/login?api_key={api_key}&v=3&redirect_uri={encoded_redirect}"
     print(f"\n🌐 Opening Kite login page...")
-    print(f"   {login_url}\n")
+    print(f"   Redirect URL: {redirect_url}")
+    print(f"   Login URL: {login_url}\n")
     
     try:
         webbrowser.open(login_url)
@@ -213,8 +237,11 @@ def main():
     request_token = args.request_token
     
     if not request_token:
+        # Get redirect URL from env or use default
+        redirect_url = os.getenv("KITE_REDIRECT_URL", "http://localhost:8080/callback")
+        
         # Open browser
-        open_login_url(api_key)
+        open_login_url(api_key, redirect_url)
         
         # Prompt for token
         request_token = prompt_for_token()
@@ -243,6 +270,19 @@ def main():
     
     # Cleanup old tokens
     cleanup_old_tokens()
+    
+    # Verify session by fetching user profile
+    print("\n🔍 Verifying session...")
+    try:
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+        profile = kite.profile()
+        print(f"✅ Session verified!")
+        print(f"   User: {profile.get('user_name', 'N/A')} ({profile.get('user_id', 'N/A')})")
+        print(f"   Email: {profile.get('email', 'N/A')}")
+    except Exception as e:
+        print(f"⚠️  Session verification failed: {e}")
+        print("   Token was saved, but verification failed. Please check manually.")
     
     # Success message
     print("\n" + "="*60)

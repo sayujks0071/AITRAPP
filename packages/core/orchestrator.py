@@ -1,6 +1,7 @@
 """Main trading orchestrator - connects all components"""
 import asyncio
 import os
+import time as time_module
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -1016,7 +1017,7 @@ class TradingOrchestrator:
                         if hasattr(self.risk_manager, 'set_strategy_cap'):
                             self.risk_manager.set_strategy_cap(
                                 strategy_name=strategy_name,
-                                capital_pct=float(cap_pct),
+                                max_capital_pct=float(cap_pct),
                             )
                         elif hasattr(self.risk_manager, 'update_strategy_allocation'):
                             # Alternative method name

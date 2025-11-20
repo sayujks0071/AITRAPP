@@ -165,9 +165,16 @@ class MarketDataStream:
         self.is_connected = True
         self.reconnect_attempts = 0
         
+        # Touch heartbeat immediately on connection
+        from packages.core.heartbeats import touch_marketdata
+        touch_marketdata()
+        
         # Resubscribe to tokens if any
         if self.subscribed_tokens:
+            logger.info(f"Resubscribing to {len(self.subscribed_tokens)} tokens after reconnection")
             self.subscribe(self.subscribed_tokens)
+        else:
+            logger.info("No tokens to resubscribe (will subscribe on next universe update)")
     
     def _on_ticks(self, ws: Any, ticks: List[Dict]) -> None:
         """Callback when ticks are received"""
@@ -274,6 +281,12 @@ class MarketDataStream:
     def _on_error(self, ws: Any, code: int, reason: str) -> None:
         """Callback on error"""
         logger.error("WebSocket error", code=code, reason=reason)
+        if code == 403:
+            logger.critical(
+                "❌ WebSocket 403 Forbidden - This usually means WebSocket streaming is not enabled for your Kite app. "
+                "Go to https://developers.kite.trade/apps and enable 'Websocket streaming' for API key: %s",
+                self.settings.kite_api_key
+            )
     
     def _on_reconnect(self, ws: Any, attempts: int) -> None:
         """Callback on reconnection attempt"""
@@ -359,10 +372,34 @@ class MarketDataStream:
         if not self.kws:
             self.initialize()
         
-        logger.info("Starting WebSocket connection")
+        # Verify token is set
+        if not self.settings.kite_access_token:
+            logger.error("Cannot start WebSocket: KITE_ACCESS_TOKEN not set")
+            self.is_connected = False
+            return
         
-        # Run in separate thread
-        self.kws.connect(threaded=True)
+        if not self.settings.kite_api_key:
+            logger.error("Cannot start WebSocket: KITE_API_KEY not set")
+            self.is_connected = False
+            return
+        
+        logger.info(
+            "Starting WebSocket connection",
+            api_key=self.settings.kite_api_key[:10] + "...",
+            token_set=bool(self.settings.kite_access_token)
+        )
+        
+        try:
+            # Run in separate thread
+            self.kws.connect(threaded=True)
+            logger.info("WebSocket connect() called, waiting for connection callback...")
+            
+            # Note: Connection is asynchronous, is_connected will be set by _on_connect callback
+            # We can't block here, but we log that we've initiated the connection
+        except Exception as e:
+            logger.error(f"Failed to start WebSocket connection: {e}", exc_info=True)
+            self.is_connected = False
+            raise
     
     def stop(self) -> None:
         """Stop WebSocket connection"""

@@ -89,7 +89,7 @@ class ExecutionEngine:
             step_seconds=self.cfg.limit_chase_step_seconds,
             max_modifications=self.cfg.limit_chase_max_mods,
             fallback_to_market=self.cfg.limit_chase_fallback_market,
-            verbose=True
+            verbose_logging=True
         )
         self.limit_chaser = LimitChaseExecutor(self.kite, chase_cfg)
         logger.info("Limit Chase Executor Initialized")

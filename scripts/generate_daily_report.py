@@ -57,21 +57,49 @@ def get_regime_timeline(metrics_text: str, underlying: str = "NIFTY") -> List[Di
     }]
 
 
-def generate_strategy_report(metrics_text: str, strategy_name: str) -> Dict[str, any]:
+def generate_strategy_report(metrics_text: str, strategy_name: str, strategy_summary: Optional[Dict] = None) -> Dict[str, any]:
     """Generate report for a strategy"""
     books_opened = parse_metric(metrics_text, f'{strategy_name}_books_opened')
     books_closed = parse_metric(metrics_text, f'{strategy_name}_books_closed')
     pnl_pct = parse_metric(metrics_text, f'{strategy_name}_pnl_pct')
     
-    # In production, would get from position store
+    # Try to get real data from API summary
+    strategy_data = None
+    if strategy_summary and "strategies" in strategy_summary:
+        strategy_data = next(
+            (s for s in strategy_summary["strategies"] if s.get("name") == strategy_name),
+            None
+        )
+    
+    # Use API data if available, otherwise fall back to metrics
+    if strategy_data:
+        return {
+            "trades": int(books_opened) if books_opened > 0 else 0,
+            "wins": 0,  # Would need to calculate from positions
+            "losses": 0,  # Would need to calculate from positions
+            "pnl": strategy_data.get("realised_pnl", 0.0) + strategy_data.get("unrealised_pnl", 0.0),
+            "pnl_pct": pnl_pct if pnl_pct > 0 else 0.0,
+            "realised_pnl": strategy_data.get("realised_pnl", 0.0),
+            "unrealised_pnl": strategy_data.get("unrealised_pnl", 0.0),
+            "hit_rate": strategy_data.get("hit_rate_20d", 0.0),
+            "max_drawdown": strategy_data.get("max_dd_60d", 0.0),
+            "enabled": strategy_data.get("enabled", True),
+            "allocation_pct": strategy_data.get("current_allocation_pct", 0.0),
+        }
+    
+    # Fallback to metrics-only data
     return {
         "trades": int(books_opened),
-        "wins": 0,  # Would calculate from position store
-        "losses": 0,  # Would calculate from position store
-        "pnl": 0.0,  # Would get from position store
+        "wins": 0,
+        "losses": 0,
+        "pnl": 0.0,
         "pnl_pct": pnl_pct,
-        "hit_rate": 0.0,  # Would calculate
-        "max_drawdown": 0.0,  # Would calculate
+        "realised_pnl": 0.0,
+        "unrealised_pnl": 0.0,
+        "hit_rate": 0.0,
+        "max_drawdown": 0.0,
+        "enabled": True,
+        "allocation_pct": 0.0,
     }
 
 
@@ -141,6 +169,18 @@ def fetch_execution_alpha() -> Dict[str, any]:
         return {}
 
 
+def fetch_strategy_summary() -> Dict[str, any]:
+    """Fetch strategy summary from API (includes real PnL, hit rates, etc.)"""
+    try:
+        response = requests.get(f"{API_BASE}/api/strategies/summary", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return {}
+    except Exception as e:
+        print(f"⚠️  Could not fetch strategy summary: {e}")
+        return {}
+
+
 def generate_daily_report() -> Dict[str, any]:
     """Generate complete daily report"""
     print("Generating daily report...")
@@ -152,8 +192,9 @@ def generate_daily_report() -> Dict[str, any]:
     
     date = datetime.now().strftime("%Y-%m-%d")
     
-    # Fetch execution alpha stats
+    # Fetch execution alpha stats and strategy summary from API
     execution_alpha = fetch_execution_alpha()
+    strategy_summary = fetch_strategy_summary()
     
     report = {
         "date": date,
@@ -165,10 +206,13 @@ def generate_daily_report() -> Dict[str, any]:
         "execution_alpha": execution_alpha,
     }
     
-    # Add strategy reports
-    strategies = ["gamma_scalper", "calendar_arb", "dispersion_arb"]
+    # Add strategy reports (use API summary if available)
+    strategies = ["gamma_scalper", "calendar_arb", "dispersion_arb", "OptionsRanker", 
+                  "expiry_short_strangle_v2", "intraday_short_strangle_v1", "trend_credit_spread_v1"]
     for strategy in strategies:
-        report["strategies"][strategy] = generate_strategy_report(metrics_text, strategy)
+        report["strategies"][strategy] = generate_strategy_report(
+            metrics_text, strategy, strategy_summary
+        )
     
     return report
 
@@ -193,9 +237,15 @@ def save_report(report: Dict[str, any]) -> None:
         f.write("## Strategies\n\n")
         for strategy, data in report.get("strategies", {}).items():
             f.write(f"### {strategy}\n")
+            f.write(f"- Enabled: {data.get('enabled', True)}\n")
             f.write(f"- Trades: {data.get('trades', 0)}\n")
+            f.write(f"- Realised PnL: ₹{data.get('realised_pnl', 0.0):.2f}\n")
+            f.write(f"- Unrealised PnL: ₹{data.get('unrealised_pnl', 0.0):.2f}\n")
+            f.write(f"- Total PnL: ₹{data.get('pnl', 0.0):.2f}\n")
             f.write(f"- PnL %: {data.get('pnl_pct', 0):.2f}%\n")
-            f.write(f"- Hit Rate: {data.get('hit_rate', 0):.2f}\n\n")
+            f.write(f"- Hit Rate: {data.get('hit_rate', 0.0):.2f}%\n")
+            f.write(f"- Max Drawdown: {data.get('max_drawdown', 0.0):.2f}%\n")
+            f.write(f"- Allocation: {data.get('allocation_pct', 0.0):.2f}%\n\n")
         
         f.write("## Allocator\n\n")
         for strategy, data in report.get("allocator", {}).items():
