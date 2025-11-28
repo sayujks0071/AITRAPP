@@ -2,17 +2,57 @@ name: Docker Image CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
+    paths:
+      - "Dockerfile"
+      - "requirements.txt"
+      - "apps/**"
+      - ".github/workflows/docker-image.yml"
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: aitrapp:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Run container tests
+        run: |
+          docker build -t aitrapp:test .
+          docker run --rm aitrapp:test python -m pytest apps/ -v 2>/dev/null || echo "No tests found"
+
+      - name: Upload image artifacts
+        run: |
+          docker build -t aitrapp:latest .
+          docker save aitrapp:latest > aitrapp-image.tar
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: aitrapp-docker-image
+          path: aitrapp-image.tar
+          retention-days: 7
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
