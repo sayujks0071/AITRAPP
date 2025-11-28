@@ -2,8 +2,7 @@
 # Pin base images to immutable SHA256 digests for reproducibility and security
 
 # Build stage: Compile Python dependencies
-FROM python:3.11-slim@sha256:eb57ea7b01fd5cd6fa8a44038ab0abb1c4e04e46c32d21269dfd3d3a29868e5a AS builder
-LABEL maintainer="AITRAPP Trading Bot"
+FROM python:3.11-slim AS builderLABEL maintainer="AITRAPP Trading Bot"
 LABEL description="Multi-stage Docker image for AITRAPP - Autonomous Trading Application"
 
 # Set environment variables
@@ -28,8 +27,7 @@ COPY requirements.txt .
 RUN pip install --user --no-warn-script-location -r requirements.txt
 
 # Runtime stage: Lean production image
-FROM python:3.11-slim@sha256:eb57ea7b01fd5cd6fa8a44038ab0abb1c4e04e46c32d21269dfd3d3a29868e5a
-ENV PYTHONUNBUFFERED=1 \
+FROM python:3.11-slimENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/root/.local/bin:$PATH \
     DEBIAN_FRONTEND=noninteractive
