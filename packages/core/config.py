@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # Risk Management
     risk_per_trade_pct: float = Field(default=0.5, alias="RISK_PER_TRADE_PCT")
     risk_max_portfolio_heat_pct: float = Field(default=2.0, alias="RISK_MAX_PORTFOLIO_HEAT_PCT")
-    risk_daily_loss_stop_pct: float = Field(default=2.5, alias="RISK_DAILY_LOSS_STOP_PCT")
+    risk_daily_loss_stop_pct: float = Field(default=-2.5, alias="RISK_DAILY_LOSS_STOP_PCT")
     
     # Market Hours
     market_open_time: str = Field(default="09:15", alias="MARKET_OPEN_TIME")
@@ -123,11 +123,25 @@ class RiskConfig:
     def __init__(self, config: Dict[str, Any]):
         self.per_trade_risk_pct = config.get("per_trade_risk_pct", 0.5)
         self.max_portfolio_heat_pct = config.get("max_portfolio_heat_pct", 2.0)
-        self.daily_loss_stop_pct = config.get("daily_loss_stop_pct", 2.5)
+        self.daily_loss_stop_pct = config.get("daily_loss_stop_pct", -2.5)
         self.slippage_bps = config.get("slippage_bps", 5)
         self.fees_per_order = config.get("fees_per_order", 20)
         self.fees_per_option_leg = config.get("fees_per_option_leg", 2)
         self.max_position_size_multiplier = config.get("max_position_size_multiplier", 3)
+
+        # SEBI Compliance: Strategy-wise loss limits (per strategy max loss %)
+        self.max_loss_per_strategy_pct = config.get("max_loss_per_strategy_pct", -5.0)
+        
+        # MCX-specific overrides (phase 3)
+        self.mcx_slippage_bps = config.get("mcx_slippage_bps", self.slippage_bps)
+        self.mcx_fees_per_order = config.get("mcx_fees_per_order", self.fees_per_order)
+        self.mcx_fees_per_option_leg = config.get("mcx_fees_per_option_leg", self.fees_per_option_leg)
+        
+        # Liquidity guards (applied when signal carries spread/volume)
+        self.nse_max_spread_pct = config.get("nse_max_spread_pct", 0.8)
+        self.nse_min_volume = config.get("nse_min_volume", 100)
+        self.mcx_max_spread_pct = config.get("mcx_max_spread_pct", 1.2)
+        self.mcx_min_volume = config.get("mcx_min_volume", 50)
 
 
 class UniverseConfig:
@@ -138,6 +152,13 @@ class UniverseConfig:
         self.exclude_fo_ban = config.get("exclude_fo_ban", True)
         self.exclude_illiquid_threshold_turnover = config.get("exclude_illiquid_threshold_turnover", 10000000)
         self.sync_time = config.get("sync_time", "08:30")
+        
+        # MCX universe (Phase 1)
+        self.mcx_symbols = config.get("mcx_symbols", [])
+        self.mcx_include_options = config.get("mcx_include_options", False)
+        self.mcx_strikes_from_atm = config.get("mcx_strikes_from_atm", 4)
+        self.mcx_strike_range_pct = config.get("mcx_strike_range_pct", 0.08)
+        self.mcx_max_dte_days = config.get("mcx_max_dte_days", 45)
 
 
 class OptionsFiltersConfig:
@@ -210,12 +231,18 @@ class MarketConfig:
         self.premarket_sync_time = config.get("premarket_sync_time", "08:30")
         self.event_aware = config.get("event_aware", True)
         self.event_stop_mult = config.get("event_stop_mult", 1.5)
+        
+        # MCX extended session (phase 2)
+        self.mcx_open_time = config.get("mcx_open_time", "09:00")
+        self.mcx_close_time = config.get("mcx_close_time", "23:30")
+        self.mcx_eod_squareoff_time = config.get("mcx_eod_squareoff_time", "23:20")
 
 
 class ExecutionConfig:
     """Order execution configuration"""
     def __init__(self, config: Dict[str, Any]):
         self.default_order_type = config.get("default_order_type", "LIMIT")
+        self.dry_run = config.get("dry_run", False)  # Dry-run mode: log signals without executing
         # Level 4: Limit Chase Execution Alpha
         self.use_limit_chase = config.get("use_limit_chase", False)
         self.limit_chase_max_slippage_bps = config.get("limit_chase_max_slippage_bps", 5.0)
@@ -228,6 +255,9 @@ class ExecutionConfig:
         self.max_order_retries = config.get("max_order_retries", 3)
         self.retry_backoff_ms = config.get("retry_backoff_ms", 500)
         self.tops_cap_per_sec = config.get("tops_cap_per_sec", 10)  # Orders per second cap
+        
+        # Exchange-specific defaults
+        self.mcx_product = config.get("mcx_product", "NRML")
 
 
 class AppConfig:

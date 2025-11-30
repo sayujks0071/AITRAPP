@@ -12,12 +12,33 @@ from packages.storage.database import get_db_session
 from packages.core.models import Signal as CoreSignal
 from packages.core.config import app_config
 
+
+def _to_float(val):
+    """Safely convert numpy/pydantic/Decimal to built-in float where possible."""
+    try:
+        return float(val)
+    except Exception:
+        return val
+
+
+def _clean_numeric_mapping(data: Optional[dict]) -> dict:
+    """Convert mapping values to plain floats for JSON/DB compatibility."""
+    if not data:
+        return {}
+    return {k: _to_float(v) for k, v in data.items()}
+
 logger = structlog.get_logger(__name__)
 
 
 def get_config_sha() -> str:
     """Get SHA256 hash of current config for reproducibility"""
-    config_str = str(app_config.dict())
+    try:
+        # Hash the raw YAML to avoid object serialization issues
+        with open(app_config.config_path, "r") as f:
+            config_str = f.read()
+    except Exception:
+        # Fallback to object repr if file unavailable
+        config_str = repr(app_config.__dict__)
     return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
 
@@ -28,8 +49,8 @@ def persist_signal(
     features: Optional[dict] = None,
     feature_scores: Optional[dict] = None,
     penalties: Optional[dict] = None
-) -> Signal:
-    """Persist a signal to database"""
+) -> int:
+    """Persist a signal to database and return the signal ID"""
     with get_db_session() as db:
         signal_model = Signal(
             ts=datetime.utcnow(),
@@ -37,29 +58,29 @@ def persist_signal(
             instrument_token=signal.instrument.token,
             side=SideEnum.LONG if signal.side.value == "LONG" else SideEnum.SHORT,
             strategy=signal.strategy_name,
-            entry_price=signal.entry_price,
-            stop_loss=signal.stop_loss,
-            take_profit_1=signal.take_profit_1,
-            take_profit_2=signal.take_profit_2,
-            score=score,
-            rank=rank,
-            confidence=signal.confidence,
-            features=features or {},
-            feature_scores=feature_scores or {},
-            penalties=penalties or {},
+            entry_price=_to_float(signal.entry_price),
+            stop_loss=_to_float(signal.stop_loss),
+            take_profit_1=_to_float(signal.take_profit_1),
+            take_profit_2=_to_float(signal.take_profit_2),
+            score=_to_float(score) if score is not None else None,
+            rank=int(rank) if rank is not None else None,
+            confidence=_to_float(signal.confidence),
+            features=_clean_numeric_mapping(features),
+            feature_scores=_clean_numeric_mapping(feature_scores),
+            penalties=_clean_numeric_mapping(penalties),
             rationale=signal.rationale,
             config_sha=get_config_sha()
         )
         db.add(signal_model)
-        db.commit()
-        db.refresh(signal_model)
-        
-        logger.debug("Signal persisted", signal_id=signal_model.id, strategy=signal.strategy_name)
-        return signal_model
+        db.flush()  # Flush to get ID without committing (commit handled by context manager)
+
+        signal_id = signal_model.id  # Extract ID after flush
+        logger.debug("Signal persisted", signal_id=signal_id, strategy=signal.strategy_name)
+        return signal_id  # Return ID, not the ORM object
 
 
 def persist_decision(
-    signal_model: Signal,
+    signal_id: int,
     approved: bool,
     risk_pct: float,
     risk_amount: float,
@@ -68,15 +89,15 @@ def persist_decision(
     portfolio_heat_before: Optional[float] = None,
     portfolio_heat_after: Optional[float] = None,
     rejection_reasons: Optional[list] = None
-) -> Decision:
-    """Persist a decision to database"""
+) -> int:
+    """Persist a decision to database and return the decision ID"""
     with get_db_session() as db:
         # Generate deterministic client_plan_id
-        client_plan_id = f"PLAN_{signal_model.id}_{datetime.utcnow().isoformat()}"
-        
+        client_plan_id = f"PLAN_{signal_id}_{datetime.utcnow().isoformat()}"
+
         decision_model = Decision(
             ts=datetime.utcnow(),
-            signal_id=signal_model.id,
+            signal_id=signal_id,
             client_plan_id=client_plan_id,
             mode=app_config.mode,
             status=DecisionStatusEnum.PLANNED if approved else DecisionStatusEnum.REJECTED,
@@ -89,18 +110,18 @@ def persist_decision(
             rejection_reasons=rejection_reasons or []
         )
         db.add(decision_model)
-        db.commit()
-        db.refresh(decision_model)
-        
-        logger.debug("Decision persisted", 
-                    decision_id=decision_model.id,
+        db.flush()  # Flush to get ID without committing (commit handled by context manager)
+
+        decision_id = decision_model.id  # Extract ID after flush
+        logger.debug("Decision persisted",
+                    decision_id=decision_id,
                     approved=approved,
                     client_plan_id=client_plan_id)
-        return decision_model
+        return decision_id  # Return ID, not the ORM object
 
 
 def persist_order(
-    decision_model: Decision,
+    decision_id: int,
     symbol: str,
     instrument_token: int,
     side: str,  # "BUY" or "SELL"
@@ -115,12 +136,22 @@ def persist_order(
 ) -> Order:
     """Persist an order to database"""
     with get_db_session() as db:
+        # Query decision to get client_plan_id (within the session)
+        from sqlalchemy.orm import selectinload
+        decision = db.query(Decision).options(selectinload(Decision.signal)).filter_by(id=decision_id).first()
+        if not decision:
+            raise ValueError(f"Decision {decision_id} not found")
+
         # Generate deterministic client_order_id
-        client_order_id = f"{decision_model.client_plan_id}_{tag}_{datetime.utcnow().timestamp()}"
-        
+        client_order_id = f"{decision.client_plan_id}_{tag}_{datetime.utcnow().timestamp()}"
+
+        # Use provided strategy_name or query from decision's signal
+        if not strategy_name and decision.signal:
+            strategy_name = decision.signal.strategy
+
         order_model = Order(
             ts=datetime.utcnow(),
-            decision_id=decision_model.id,
+            decision_id=decision_id,
             client_order_id=client_order_id,
             broker_order_id=broker_order_id,
             symbol=symbol,
@@ -134,14 +165,13 @@ def persist_order(
             parent_group=parent_group,
             is_stop_loss=(tag == "STOP"),
             is_take_profit=(tag in ["TP1", "TP2"]),
-            strategy_name=strategy_name or decision_model.signal.strategy,
+            strategy_name=strategy_name,
             status=OrderStatusEnum.PLACED if broker_order_id else OrderStatusEnum.PLACED
         )
         db.add(order_model)
-        db.commit()
-        db.refresh(order_model)
-        
-        logger.debug("Order persisted", 
+        db.flush()  # Flush to get ID without committing (commit handled by context manager)
+
+        logger.debug("Order persisted",
                     order_id=order_model.id,
                     client_order_id=client_order_id,
                     tag=tag)
@@ -178,4 +208,3 @@ def update_order_status(
                     client_order_id=client_order_id,
                     status=status.value if status else None)
         return order
-

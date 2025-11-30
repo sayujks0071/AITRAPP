@@ -85,3 +85,6 @@ htmlcov/
 # Config overrides (may contain secrets)
 configs/*_local.yaml
 configs/*_secrets.yaml
+
+configs/*_local.yaml
+configs/*_secrets.yaml

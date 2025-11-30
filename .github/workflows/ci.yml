@@ -71,4 +71,3 @@ jobs:
             exit 1
           fi
           echo "✅ No sensitive files found"
-

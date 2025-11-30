@@ -16,6 +16,7 @@ intraday_short_strangle_v1:
 
   # Execution
   entry_time: "09:20"
+  entry_window_end: "15:00"  # EXTENDED: Allow entry until 15:00 (was implicit 13:30)
   exit_time: "15:15"
 
   # Risk

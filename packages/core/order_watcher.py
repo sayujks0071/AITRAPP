@@ -156,7 +156,7 @@ class OrderWatcher:
             logger.info("Entry order filled, placing stop/TP orders",
                       group_id=order.parent_group,
                       order_id=order.client_order_id)
-            self.oco_manager.on_entry_fill(order.parent_group)
+            await self.oco_manager.on_entry_fill(order.parent_group)
             
             # Create position
             position = Position(
@@ -193,7 +193,7 @@ class OrderWatcher:
                       group_id=order.parent_group,
                       order_id=order.client_order_id,
                       tag=order.tag)
-            self.oco_manager.on_child_fill(order.parent_group, order)
+            await self.oco_manager.on_child_fill(order.parent_group, order)
             
             # Update position
             position = db.query(Position).filter_by(oco_group=order.parent_group).first()
@@ -234,7 +234,7 @@ class OrderWatcher:
         
         # If entry order rejected, cancel the whole group
         if order.tag == "ENTRY" and order.parent_group:
-            self.oco_manager.cancel_all_in_group(order.parent_group)
+            await self.oco_manager.cancel_all_in_group(order.parent_group)
         
         # Create risk event
         from packages.storage.models import RiskEvent

@@ -17,6 +17,7 @@ from packages.core.execution import ExecutionEngine, OrderResult
 from packages.core.exits import ExitManager, ExitSignal
 from packages.core.instruments import InstrumentManager
 from packages.core.market_data import MarketDataStream
+from packages.core.rate_limiter import LeakyBucketLimiter
 from packages.core.models import (
     AppMode,
     Bar,
@@ -82,7 +83,24 @@ class AppState:
         self.strategies: List[Strategy] = self._initialize_strategies()
         self.ranking_engine = SignalRanker(config.ranking)
         self.risk_manager = RiskManager(config.risk)
-        self.execution_engine = ExecutionEngine(self.kite, config.execution)
+        
+        # Compliance: Rate limiter for SEBI <10 OPS requirement
+        order_rate_limiter = LeakyBucketLimiter(
+            rate_per_second=10.0,  # SEBI retail algo limit
+            rate_per_minute=300.0,  # 5 OPS average over minute
+            bucket_size=20  # Allow small burst
+        )
+        
+        # Compliance: Kill switch checker
+        def is_trading_paused() -> bool:
+            return self.is_paused
+        
+        self.execution_engine = ExecutionEngine(
+            self.kite, 
+            config.execution,
+            rate_limiter=order_rate_limiter,
+            kill_switch_checker=is_trading_paused
+        )
         self.exit_manager = ExitManager(config.exits)
 
         # Positions & universe

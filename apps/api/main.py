@@ -1,9 +1,12 @@
 """FastAPI main application"""
 import asyncio
 import os
+import json
+import subprocess
+from pathlib import Path
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, date
+from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -20,6 +23,7 @@ from packages.storage.database import SessionLocal
 from pydantic import BaseModel
 
 from packages.core.config import app_config, settings
+from packages.core.mock_adapter import MockKite
 from packages.core.execution import ExecutionEngine
 from packages.core.exits import ExitManager, ExitSignal
 from packages.core.instruments import InstrumentManager
@@ -28,15 +32,36 @@ from packages.core.position_store import PositionStore
 from packages.core.models import Position, PositionStatus, SystemState
 from packages.core.orchestrator import TradingOrchestrator
 from packages.core.risk import PortfolioRisk, RiskManager
+from packages.core.health_sidecar import start_sidecar
+from packages.core.reconciliation import reconcile_orders
+from packages.core.notification import NotificationService
+from packages.core.rms_monitor import RMSMonitor
 from packages.core.hedging.delta_neutralizer import DeltaNeutralizer, DeltaNeutralizerConfig
+from packages.core.compliance import (
+    ComplianceGuard,
+    check_static_ip,
+    check_oauth_fresh,
+    check_family_only,
+    tops_cap_ok,
+    algo_id_present,
+)
+from packages.core.rate_limiter import LeakyBucketLimiter
 from packages.core.ranker import SignalRanker
 from packages.core.strategies import (
     ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy, Strategy,
     RegimeVolEngine, GammaScalper, CalendarArb, DispersionArb, TailShortVolOverlay,
-    ExpiryShortStrangleV2, IntradayShortStrangleV1
+    ExpiryShortStrangleV2, IntradayShortStrangleV1,
+    SMAMomentumStrategy, MeanReversionStrategy, RSIMeanReversionStrategy,
+    MACDStrategy, BollingerBandsStrategy, VWAPStrategy, BreakoutStrategy,
+    PremiumAdaptiveTrendStrategy, MLPremiumAlphaStrategy,
+    CCIStrategy, ParabolicSARStrategy
 )
 from packages.core.strategies.trend_credit_spread_v1 import TrendCreditSpreadV1
 from packages.core.strategies.strategy_allocator import StrategyAllocator
+from packages.core.reflex import MAD1, EmergencyBrake, ReflexSystem
+from packages.core.allocation import AllocationVeto, AutonomousCapitalAllocator
+from packages.core.intelligence.sme import StrategicMemoryEngine
+from packages.core.portfolio import PortfolioManager
 
 # Configure structured logging
 structlog.configure(
@@ -48,6 +73,27 @@ structlog.configure(
 )
 
 logger = structlog.get_logger(__name__)
+
+HOLIDAYS_PATH = Path("configs/market_holidays.json")
+
+
+def _is_market_holiday(today: date) -> bool:
+    """Check if today is an NSE holiday; logs and returns False on errors."""
+    try:
+        if not HOLIDAYS_PATH.exists():
+            return False
+        with HOLIDAYS_PATH.open() as f:
+            data = json.load(f)
+        holidays = set()
+        for entry in data:
+            try:
+                holidays.add(date.fromisoformat(entry.split("T")[0]))
+            except Exception:
+                continue
+        return today in holidays
+    except Exception as e:
+        logger.warning("Holiday check failed", error=str(e))
+        return False
 
 # Global state
 class AppState:
@@ -67,6 +113,12 @@ class AppState:
     # Strategy allocator (capital allocation meta-layer)
     strategy_allocator: StrategyAllocator = None
     
+    # Level 9: Autonomous Capital Allocator (ACA)
+    autonomous_capital_allocator: AutonomousCapitalAllocator = None
+    
+    # Level 12: Portfolio Management Engine (PME)
+    portfolio_manager: PortfolioManager = None
+    
     # Strategies
     strategies: Dict = {}
     strategy_list: List[Strategy] = []
@@ -79,6 +131,14 @@ class AppState:
     
     # Positions
     positions: List[Position] = []
+    
+    # Reflex System (Level 8)
+    reflex_engine: ReflexSystem = None
+    # Observability: sidecar heartbeat updater
+    sidecar_beat: Optional[Callable[[], None]] = None
+    reconcile_task: Optional[asyncio.Task] = None
+    notification_service: Optional[NotificationService] = None
+    rms_task: Optional[asyncio.Task] = None
     
     # Control flags
     is_paused: bool = False
@@ -98,6 +158,44 @@ app_state = AppState()
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     logger.info("Starting AITRAPP", mode=settings.app_mode.value)
+    
+    # Skip if crypto modes; holiday-aware startup for NSE
+    if settings.app_mode.value not in ("CRYPTO_PAPER", "CRYPTO_LIVE"):
+        if _is_market_holiday(datetime.now().date()):
+            logger.warning("Market holiday detected - startup aborted", date=str(datetime.now().date()))
+            raise SystemExit("Market closed for holiday")
+        
+        # Enforce static IP check only when required (skip in PAPER to avoid blocking paper sessions)
+        expected_ip = os.getenv("REGISTERED_STATIC_IP") or os.getenv("EXPECTED_EGRESS_IP")
+        require_static_ip = (
+            settings.app_mode.value == "LIVE"
+            or settings.require_static_ip
+            or os.getenv("REQUIRE_STATIC_IP", "0") == "1"
+        )
+        if require_static_ip and settings.app_mode.value == "PAPER":
+            require_static_ip = False  # paper mode: do not block on IP mismatch
+        if require_static_ip and expected_ip:
+            try:
+                import requests
+                resp = requests.get("https://api.ipify.org?format=json", timeout=5)
+                resp.raise_for_status()
+                actual_ip = resp.json().get("ip")
+                if actual_ip != expected_ip:
+                    logger.critical(
+                        "Egress IP mismatch - aborting startup",
+                        expected=expected_ip,
+                        actual=actual_ip
+                    )
+                    raise SystemExit(f"Egress IP mismatch: expected {expected_ip}, got {actual_ip}")
+                logger.info("Static IP verified", ip=actual_ip)
+            except SystemExit:
+                raise
+            except Exception as e:
+                logger.warning("Static IP check failed", error=str(e))
+        elif require_static_ip and not expected_ip:
+            logger.warning("Static IP enforcement requested but EXPECTED_EGRESS_IP not set; skipping check")
+        elif settings.app_mode.value == "PAPER" and expected_ip:
+            logger.info("Paper mode detected - skipping static IP enforcement", expected_ip=expected_ip)
     
     # CRITICAL: Validate config coherence for LIVE mode
     if settings.app_mode.value == "LIVE":
@@ -157,9 +255,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not check clock drift: {e}")
     
-    # Initialize Kite Connect
-    app_state.kite = KiteConnect(api_key=settings.kite_api_key)
-    app_state.kite.set_access_token(settings.kite_access_token)
+    # Initialize Kite Connect (use mock if requested in PAPER)
+    use_mock = os.getenv("MOCK_KITE", "0") == "1" and settings.app_mode.value == "PAPER"
+    if use_mock:
+        logger.warning("Using MockKite adapter (paper/shadow mode)")
+        app_state.kite = MockKite()
+    else:
+        app_state.kite = KiteConnect(api_key=settings.kite_api_key)
+        app_state.kite.set_access_token(settings.kite_access_token)
     
     # Initialize managers
     app_state.instrument_manager = InstrumentManager(
@@ -175,16 +278,123 @@ async def lifespan(app: FastAPI):
     app_state.position_store = PositionStore()
     logger.info("PositionStore initialized")
     
+    # Compliance: Create shared rate limiter and compliance guard
+    # SEBI requirement: <10 orders/second
+    shared_rate_limiter = LeakyBucketLimiter(
+        rate_per_second=10.0,  # SEBI retail algo limit
+        rate_per_minute=300.0,  # 5 OPS average over minute
+        bucket_size=20  # Allow small burst
+    )
+    
+    # Kill switch checker (checks app_state.is_paused)
+    def is_trading_paused() -> bool:
+        return app_state.is_paused
+    
+    def refresh_access_token() -> None:
+        """
+        Token refresh callback for Kite client:
+        - Runs optional TOKEN_REFRESH_CMD (e.g., headless login script)
+        - Reloads .env and sets new access token on Kite instance
+        """
+        cmd = os.getenv("TOKEN_REFRESH_CMD")
+        if cmd:
+            try:
+                subprocess.run(cmd, shell=True, check=True, timeout=120)
+            except Exception as e:
+                logger.error("TOKEN_REFRESH_CMD failed", error=str(e))
+                raise
+        else:
+            # Fallback: run headless login if secrets are present
+            if os.getenv("KITE_API_KEY") and os.getenv("KITE_API_SECRET") and os.getenv("KITE_PASSWORD") and os.getenv("KITE_TOTP_SECRET"):
+                try:
+                    subprocess.run("python3 scripts/kite_headless_login.py", shell=True, check=True, timeout=120)
+                except Exception as e:
+                    logger.error("Headless login fallback failed", error=str(e))
+                    raise
+        
+        try:
+            from dotenv import load_dotenv
+            env_path = Path(".env")
+            if env_path.exists():
+                load_dotenv(env_path, override=True)
+        except Exception as e:
+            logger.warning("Failed to reload .env during token refresh", error=str(e))
+        
+        new_token = os.getenv("KITE_ACCESS_TOKEN")
+        if not new_token:
+            raise RuntimeError("KITE_ACCESS_TOKEN not set after token refresh")
+        app_state.kite.set_access_token(new_token)
+        logger.info("Access token refreshed and applied")
+    
+    # Shared compliance guard for all order paths
+    shared_compliance_guard = ComplianceGuard(
+        rate_limiter=shared_rate_limiter,
+        kill_switch_checker=is_trading_paused
+    )
+    logger.info("✅ Shared compliance guard initialized (rate limit: 10 OPS, kill switch: enabled)")
+
+    # Notification service (Telegram/Slack)
+    notification_service = NotificationService()
+    app_state.notification_service = notification_service
+    if notification_service.is_configured():
+        logger.info("Notification service enabled", channels=notification_service.channels())
+    else:
+        logger.info("Notification service disabled - set TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID or SLACK_WEBHOOK_URL to enable alerts")
+    
+    # Start health sidecar (logic heartbeat, not just PID liveness)
+    sidecar_port = int(os.getenv("SIDECAR_PORT", "8080"))
+    sidecar_stale = float(os.getenv("SIDECAR_STALE_SECONDS", "10"))
+    heartbeat = start_sidecar(port=sidecar_port, stale_after=sidecar_stale)
+    app_state.sidecar_beat = heartbeat
+    logger.info("Health sidecar started", port=sidecar_port, stale_after=sidecar_stale)
+    
     app_state.execution_engine = ExecutionEngine(
         app_state.kite,
         app_config.execution,
+        rate_limiter=shared_rate_limiter,
+        kill_switch_checker=is_trading_paused,
+        compliance_guard=shared_compliance_guard,
+        token_refresh_callback=refresh_access_token,
+        notification_service=notification_service
     )
+    
+    # Initialize Reflex System (Level 10) - Market Anomaly Detection
+    # Now that we have execution_engine, we can initialize the brake
+    mad1_config = {
+        "crash_threshold_pct": 1.0,  # 1% move triggers crash (legacy)
+        "window_seconds": 30,  # 30 second rolling window
+        "liquidity_drop_pct": 0.60,  # 60% liquidity drop triggers
+        "spread_sigma_threshold": 3.0  # 3-sigma spread blowout triggers
+    }
+    mad1 = MAD1(config=mad1_config)
+    
+    emergency_brake = EmergencyBrake(
+        kite_client=app_state.kite,
+        execution_engine=app_state.execution_engine,
+        compliance_guard=shared_compliance_guard
+    )
+    
+    app_state.reflex_engine = ReflexSystem(
+        mad1=mad1,
+        brake=emergency_brake,
+        enabled=True
+    )
+    
+    logger.info("✅ Reflex System (Level 8) initialized - Emergency crash protection active")
     
     # Initialize market data stream
     app_state.market_data_stream = MarketDataStream(
         settings=settings,
         window_seconds=[1, 5]
     )
+    # wire sidecar heartbeat into market data ticks
+    app_state.market_data_stream.heartbeat_callback = heartbeat
+    
+    # Initialize Reflex System (Level 8) - Emergency crash protection
+    # Note: EmergencyBrake requires ExecutionEngine, which is initialized later
+    # We'll initialize it after execution_engine is created
+    app_state.reflex_engine = None  # Will be initialized after execution_engine
+    logger.info("Reflex System will be initialized after ExecutionEngine is ready")
     
     # Sync instruments
     await app_state.instrument_manager.sync_instruments()
@@ -204,10 +414,54 @@ async def lifespan(app: FastAPI):
             strategy = ORBStrategy(strategy_config.name, strategy_config.params)
             app_state.strategies["ORB"] = strategy
             strategy_registry["ORB"] = strategy
+        elif strategy_config.name == "MLPremiumAlpha":
+            strategy = MLPremiumAlphaStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["MLPremiumAlpha"] = strategy
+            strategy_registry["MLPremiumAlpha"] = strategy
+        elif strategy_config.name == "PremiumAdaptiveTrend":
+            strategy = PremiumAdaptiveTrendStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["PremiumAdaptiveTrend"] = strategy
+            strategy_registry["PremiumAdaptiveTrend"] = strategy
         elif strategy_config.name == "TrendPullback":
             strategy = TrendPullbackStrategy(strategy_config.name, strategy_config.params)
             app_state.strategies["TrendPullback"] = strategy
             strategy_registry["TrendPullback"] = strategy
+        elif strategy_config.name == "SMAMomentum":
+            strategy = SMAMomentumStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["SMAMomentum"] = strategy
+            strategy_registry["SMAMomentum"] = strategy
+        elif strategy_config.name == "MeanReversion":
+            strategy = MeanReversionStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["MeanReversion"] = strategy
+            strategy_registry["MeanReversion"] = strategy
+        elif strategy_config.name == "RSIMeanReversion":
+            strategy = RSIMeanReversionStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["RSIMeanReversion"] = strategy
+            strategy_registry["RSIMeanReversion"] = strategy
+        elif strategy_config.name == "MACD":
+            strategy = MACDStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["MACD"] = strategy
+            strategy_registry["MACD"] = strategy
+        elif strategy_config.name == "BollingerBands":
+            strategy = BollingerBandsStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["BollingerBands"] = strategy
+            strategy_registry["BollingerBands"] = strategy
+        elif strategy_config.name == "VWAP":
+            strategy = VWAPStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["VWAP"] = strategy
+            strategy_registry["VWAP"] = strategy
+        elif strategy_config.name == "Breakout":
+            strategy = BreakoutStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["Breakout"] = strategy
+            strategy_registry["Breakout"] = strategy
+        elif strategy_config.name == "CCI":
+            strategy = CCIStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["CCI"] = strategy
+            strategy_registry["CCI"] = strategy
+        elif strategy_config.name == "ParabolicSAR":
+            strategy = ParabolicSARStrategy(strategy_config.name, strategy_config.params)
+            app_state.strategies["ParabolicSAR"] = strategy
+            strategy_registry["ParabolicSAR"] = strategy
         elif strategy_config.name == "OptionsRanker":
             strategy = OptionsRankerStrategy(strategy_config.name, strategy_config.params)
             app_state.strategies["OptionsRanker"] = strategy
@@ -409,8 +663,7 @@ async def lifespan(app: FastAPI):
             from pathlib import Path
             from packages.core.metrics_wrapper import MetricsWrapper
             from packages.core.options.delta_selector import DeltaOptionSelector
-            from packages.core.kite_client import KiteClient
-            
+
             # Create shared delta selector (if not already created)
             if not hasattr(app_state, 'delta_selector') or app_state.delta_selector is None:
                 kite_client_wrapper = KiteClient(app_state.kite) if app_state.kite else None
@@ -464,9 +717,8 @@ async def lifespan(app: FastAPI):
             import yaml
             from pathlib import Path
             from packages.core.metrics_wrapper import MetricsWrapper
-            from packages.core.kite_client import KiteClient
             from packages.core.options.delta_selector import DeltaOptionSelector
-            
+
             # Create shared delta selector (if not already created)
             if not hasattr(app_state, 'delta_selector') or app_state.delta_selector is None:
                 kite_client_wrapper = KiteClient(app_state.kite) if app_state.kite else None
@@ -517,6 +769,31 @@ async def lifespan(app: FastAPI):
                 )
                 app_state.strategies["trend_credit_spread_v1"] = strategy
                 strategy_registry["trend_credit_spread_v1"] = strategy
+        elif strategy_config.name == "FinRLStrategy":
+            # Load FinRL Strategy config from separate YAML file
+            import yaml
+            from pathlib import Path
+            from packages.core.strategies.finrl_strategy import FinRLStrategy
+            
+            finrl_config_path = Path("configs/finrl_strategy.yaml")
+            if finrl_config_path.exists():
+                with open(finrl_config_path, "r") as f:
+                    finrl_config = yaml.safe_load(f)
+                    strategy = FinRLStrategy(
+                        strategy_config.name,
+                        finrl_config.get("finrl_strategy", {})
+                    )
+                    app_state.strategies["FinRLStrategy"] = strategy
+                    strategy_registry["FinRLStrategy"] = strategy
+                    logger.info("Strategy Loaded: FinRL DRL Strategy")
+            else:
+                logger.warning("FinRL Strategy config not found, using default params")
+                strategy = FinRLStrategy(
+                    strategy_config.name,
+                    strategy_config.params
+                )
+                app_state.strategies["FinRLStrategy"] = strategy
+                strategy_registry["FinRLStrategy"] = strategy
         
         if strategy:
             # Patch 2: Set priority from config (default 100 if not specified)
@@ -617,6 +894,69 @@ async def lifespan(app: FastAPI):
         logger.warning("StrategyAllocator config not found, allocator disabled")
         app_state.strategy_allocator = None
     
+    # Initialize Level 9: Autonomous Capital Allocator (ACA)
+    # ACA takes precedence over StrategyAllocator if enabled
+    aca_enabled = os.getenv("ACA_ENABLED", "false").lower() == "true"
+    if aca_enabled:
+        try:
+            # Initialize Strategic Memory Engine (SME) for ACA
+            sme = StrategicMemoryEngine()
+            logger.info("✅ Strategic Memory Engine (SME) initialized for ACA")
+            
+            # Initialize ACA (requires risk_engine, which is initialized earlier)
+            aca_config = {
+                "global_capital_limit": float(os.getenv("ACA_GLOBAL_CAPITAL_LIMIT", "0.80")),
+                "min_allocation_pct": float(os.getenv("ACA_MIN_ALLOCATION_PCT", "0.05")),
+                "max_allocation_pct": float(os.getenv("ACA_MAX_ALLOCATION_PCT", "0.40")),
+                "veto_max_drawdown": float(os.getenv("ACA_VETO_MAX_DRAWDOWN", "5000.0")),
+                "veto_min_win_rate": float(os.getenv("ACA_VETO_MIN_WIN_RATE", "0.35")),
+                "veto_probation_days": int(os.getenv("ACA_VETO_PROBATION_DAYS", "3"))
+            }
+            app_state.autonomous_capital_allocator = AutonomousCapitalAllocator(
+                risk_engine=app_state.risk_manager,
+                sme_engine=sme,
+                config=aca_config
+            )
+            logger.info("✅ Level 9: Autonomous Capital Allocator (ACA) initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize ACA: {e}", exc_info=True)
+            app_state.autonomous_capital_allocator = None
+    else:
+        app_state.autonomous_capital_allocator = None
+        logger.info("Level 9: ACA disabled (set ACA_ENABLED=true to enable)")
+    
+    # Initialize Level 12: Portfolio Management Engine (PME)
+    # PME takes precedence over ACA if enabled (quantitative CIO vs Treasurer)
+    pme_enabled = os.getenv("PME_ENABLED", "false").lower() == "true"
+    if pme_enabled:
+        try:
+            # Initialize Strategic Memory Engine (SME) for PME
+            # Always create new instance (SME is lightweight and stateless)
+            sme = StrategicMemoryEngine()
+            logger.info("✅ Strategic Memory Engine (SME) initialized for PME")
+            
+            # Initialize PME (creates Veto internally)
+            pme_config = {
+                "target_vol": float(os.getenv("PME_TARGET_VOL", "0.15")),
+                "max_leverage": float(os.getenv("PME_MAX_LEVERAGE", "2.0")),
+                "max_single_allocation": float(os.getenv("PME_MAX_SINGLE_ALLOCATION", "0.40")),
+                "veto_max_drawdown": float(os.getenv("PME_VETO_MAX_DRAWDOWN", "5000.0")),
+                "veto_min_win_rate": float(os.getenv("PME_VETO_MIN_WIN_RATE", "0.35")),
+                "veto_probation_days": int(os.getenv("PME_VETO_PROBATION_DAYS", "3"))
+            }
+            app_state.portfolio_manager = PortfolioManager(
+                risk_engine=app_state.risk_manager,
+                sme_engine=sme,
+                config=pme_config
+            )
+            logger.info("✅ Level 12: Portfolio Management Engine (PME) initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize PME: {e}", exc_info=True)
+            app_state.portfolio_manager = None
+    else:
+        app_state.portfolio_manager = None
+        logger.info("Level 12: PME disabled (set PME_ENABLED=true to enable)")
+    
     # Initialize ranker
     app_state.ranker = SignalRanker(app_config.ranking)
     
@@ -630,8 +970,10 @@ async def lifespan(app: FastAPI):
         if app_state.market_data_stream.is_connected:
             universe_tokens = app_state.instrument_manager.get_universe_tokens()
             if universe_tokens:
-                # Subscribe to first 50 tokens (or all if less than 50)
-                tokens_to_subscribe = universe_tokens[:50]
+                # Subscribe to more tokens to ensure scan coverage (Day-1: 300 tokens)
+                # For 703 NIFTY options, subscribing to 300 ensures good coverage
+                max_subscriptions = min(300, len(universe_tokens))
+                tokens_to_subscribe = universe_tokens[:max_subscriptions]
                 app_state.market_data_stream.subscribe(tokens_to_subscribe)
                 logger.info(f"Subscribed to {len(tokens_to_subscribe)} instruments for market data")
         else:
@@ -646,11 +988,11 @@ async def lifespan(app: FastAPI):
     logger.info("Redis bus connected")
     
     # Initialize Kite client wrapper (if needed)
-    kite_client = KiteClient(app_state.kite)
+    kite_client = KiteClient(app_state.kite, token_refresh_callback=refresh_access_token)
     
-    # Initialize OCO manager
-    oco_manager = OCOManager(kite_client)
-    logger.info("OCO manager initialized")
+    # Initialize OCO manager with compliance guard
+    oco_manager = OCOManager(kite_client, compliance_guard=shared_compliance_guard)
+    logger.info("OCO manager initialized with compliance guard")
     
     # Initialize crypto router if in crypto mode
     app_state.crypto_router = None
@@ -710,6 +1052,7 @@ async def lifespan(app: FastAPI):
                     kite_client=app_state.kite,
                     position_store=app_state.position_store,
                     cfg=dn_cfg,
+                    compliance_guard=shared_compliance_guard
                 )
                 logger.info("Delta Neutralizer initialized", enabled=dn_cfg.enabled)
             else:
@@ -732,8 +1075,19 @@ async def lifespan(app: FastAPI):
         strategy_allocator=app_state.strategy_allocator,
         oco_manager=oco_manager,
         crypto_router=app_state.crypto_router,
-        delta_neutralizer=delta_neutralizer
+        delta_neutralizer=delta_neutralizer,
+        autonomous_capital_allocator=app_state.autonomous_capital_allocator,
+        portfolio_manager=app_state.portfolio_manager,
+        logic_heartbeat=heartbeat,
+        notification_service=notification_service
     )
+    
+    # Wire Reflex Engine into market data stream
+    if app_state.reflex_engine and app_state.market_data_stream:
+        app_state.market_data_stream.reflex_engine = app_state.reflex_engine
+        # Update brake with orchestrator reference
+        app_state.reflex_engine.brake.orchestrator = app_state.orchestrator
+        logger.info("✅ Reflex Engine wired into market data stream")
     
     # Initialize OrderWatcher
     order_watcher = OrderWatcher(
@@ -751,6 +1105,33 @@ async def lifespan(app: FastAPI):
     app_state.hb_stop = hb_stop
     app_state.hb_task = hb_task
     logger.info("Heartbeat updater started")
+
+    # RMS monitor (PnL-based kill switch guardrail)
+    rms_max_loss = float(os.getenv("MAX_DAILY_LOSS", "-5000"))
+    rms_max_profit_env = os.getenv("MAX_DAILY_PROFIT")
+    rms_max_profit = float(rms_max_profit_env) if rms_max_profit_env else None
+    rms_poll = int(os.getenv("RMS_POLL_INTERVAL", "15"))
+
+    async def _rms_kill(reason: str) -> None:
+        hb_stop.set()  # stop auxiliary tasks promptly
+        await app_state.orchestrator.flatten_all(reason=reason)
+
+    rms_monitor = RMSMonitor(
+        kite_client=app_state.kite,
+        kill_switch=_rms_kill,
+        notifier=notification_service,
+        max_daily_loss=rms_max_loss,
+        max_daily_profit=rms_max_profit,
+        poll_interval=rms_poll,
+        app_state=app_state,
+    )
+    app_state.rms_task = rms_monitor.start(stop_event=hb_stop)
+    logger.info(
+        "RMS monitor initialized",
+        max_daily_loss=rms_max_loss,
+        max_daily_profit=rms_max_profit,
+        poll_interval=rms_poll,
+    )
     
     # Start paper tick simulator if in PAPER mode and market data not connected
     if settings.app_mode.value == "PAPER" and not app_state.market_data_stream.is_connected:
@@ -808,6 +1189,12 @@ async def lifespan(app: FastAPI):
     app_state.prelive_metrics_task = prelive_metrics_task
     logger.info("Pre-live metrics refresh task started")
     
+    # Start reconciliation task (orders vs broker)
+    reconcile_task = asyncio.create_task(
+        reconcile_orders(app_state.kite, interval_seconds=60, stop=hb_stop)
+    )
+    app_state.reconcile_task = reconcile_task
+    
     # Start background tasks
     logger.info("Starting background tasks...")
     tasks = [
@@ -831,6 +1218,22 @@ async def lifespan(app: FastAPI):
             await app_state.hb_task
         except Exception as e:
             logger.warning(f"Error stopping heartbeat updater: {e}")
+    
+    # Stop reconciliation task
+    if hasattr(app_state, 'reconcile_task') and app_state.reconcile_task:
+        try:
+            app_state.reconcile_task.cancel()
+            await app_state.reconcile_task
+        except Exception as e:
+            logger.warning(f"Error stopping reconciliation task: {e}")
+    
+    # Stop RMS monitor
+    if hasattr(app_state, 'rms_task') and app_state.rms_task:
+        try:
+            app_state.rms_task.cancel()
+            await app_state.rms_task
+        except Exception as e:
+            logger.warning(f"Error stopping RMS monitor: {e}")
     
     # Stop pre-live metrics refresh task
     if hasattr(app_state, 'prelive_metrics_task') and app_state.prelive_metrics_task:
@@ -894,6 +1297,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://172.20.10.4:3000",  # Network IP for Ops Browser
+        "http://localhost:8080",  # Mission Control Dashboard
+        "http://127.0.0.1:8080",  # Mission Control Dashboard
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],  # Only methods we actually use
@@ -909,7 +1314,7 @@ async def unhandled_exception_handler(request, exc):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     origin = request.headers.get("origin", "*")
     # Use exact origin if it's in allowed list, otherwise use the origin from request
-    allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8080", "http://127.0.0.1:8080"]
     if origin not in allowed_origins and origin != "*":
         origin = "*"  # Fallback to wildcard for unknown origins in dev
     return JSONResponse(
@@ -938,6 +1343,13 @@ app.include_router(debug_supervisor.router, tags=["debug"])
 # Include MCP analyst router
 from apps.api.routes import mcp_analyst
 app.include_router(mcp_analyst.router, tags=["mcp-analyst"])
+
+from apps.api.routes import portfolio
+app.include_router(portfolio.router, tags=["portfolio"])
+
+# SEBI Compliance routes
+from apps.api.routes import compliance
+app.include_router(compliance.router, prefix="/api/compliance", tags=["compliance"])
 
 
 # ===== API Models =====
@@ -1144,15 +1556,15 @@ def compliance_status():
     # broker session created_at iso if you persist it, else env fallback:
     oauth_created_iso = os.getenv("KITE_TOKEN_CREATED_AT_ISO")
     # active client ids: if you have multiple mapped, load from your config/session
-    active_clients = [app_state.get("kite_user_id")] if app_state.get("kite_user_id") else []
+    active_clients = []
     if settings.kite_user_id:
-        active_clients = list(set(active_clients + [settings.kite_user_id]))
+        active_clients = [settings.kite_user_id]
     
-    ip_ok, ip_msg, curr_ip = compliance.check_static_ip(expected_ip)
-    oauth_ok, oauth_msg = compliance.check_oauth_fresh(oauth_created_iso, 24)
-    tops_ok, tops_msg = compliance.tops_cap_ok(tops_cap)
-    algo_ok, algo_msg = compliance.algo_id_present(algo_id)
-    fam_ok, fam_msg = (True, "provider mode") if mode_profile != "PERSONAL" else compliance.check_family_only(active_clients, wl)
+    ip_ok, ip_msg, curr_ip = check_static_ip(expected_ip)
+    oauth_ok, oauth_msg = check_oauth_fresh(oauth_created_iso, 24)
+    tops_ok, tops_msg = tops_cap_ok(tops_cap)
+    algo_ok, algo_msg = algo_id_present(algo_id)
+    fam_ok, fam_msg = (True, "provider mode") if mode_profile != "PERSONAL" else check_family_only(active_clients, wl)
     
     return {
         "mode": os.getenv("APP_MODE", "PAPER"),
@@ -1713,6 +2125,98 @@ async def get_system_state():
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@app.get("/quotes")
+async def get_quotes(symbols: str = "NIFTY 50,NIFTY BANK"):
+    """
+    Get live quotes for symbols.
+    
+    Args:
+        symbols: Comma-separated list of trading symbols (e.g., "NIFTY 50,NIFTY BANK")
+    
+    Returns:
+        Dictionary with symbol as key and quote data as value
+    """
+    from fastapi.responses import JSONResponse
+    
+    if not app_state.instrument_manager:
+        raise HTTPException(status_code=503, detail="Instrument manager not initialized")
+    
+    if not app_state.market_data_stream:
+        raise HTTPException(status_code=503, detail="Market data stream not initialized")
+    
+    symbol_list = [s.strip() for s in symbols.split(",")]
+    quotes = {}
+    
+    for symbol in symbol_list:
+        try:
+            # Get instrument by trading symbol
+            instrument = app_state.instrument_manager.get_instrument_by_symbol(symbol)
+            if not instrument:
+                quotes[symbol] = {
+                    "error": f"Instrument not found: {symbol}",
+                    "price": 0.0,
+                    "change": 0.0,
+                    "change_pct": 0.0,
+                    "volume": 0
+                }
+                continue
+            
+            # Get latest tick from market data stream
+            tick = app_state.market_data_stream.get_latest_tick(instrument.token)
+            
+            if tick:
+                # Calculate change (assuming we need previous close - for now use 0)
+                # In production, you'd track previous close or use OHLC data
+                change = 0.0
+                change_pct = 0.0
+                
+                # Try to get previous close from instrument or use current price
+                if hasattr(instrument, 'last_price') and instrument.last_price:
+                    prev_close = instrument.last_price
+                    change = tick.last_price - prev_close
+                    change_pct = (change / prev_close * 100) if prev_close > 0 else 0.0
+                
+                quotes[symbol] = {
+                    "symbol": symbol,
+                    "price": tick.last_price,
+                    "change": change,
+                    "change_pct": change_pct,
+                    "volume": tick.last_quantity,
+                    "timestamp": tick.timestamp.isoformat() if tick.timestamp else None
+                }
+            else:
+                # No tick data yet
+                quotes[symbol] = {
+                    "symbol": symbol,
+                    "price": 0.0,
+                    "change": 0.0,
+                    "change_pct": 0.0,
+                    "volume": 0,
+                    "note": "No tick data available (market may be closed or instrument not subscribed)"
+                }
+        except Exception as e:
+            logger.error(f"Error fetching quote for {symbol}: {e}")
+            quotes[symbol] = {
+                "error": str(e),
+                "price": 0.0,
+                "change": 0.0,
+                "change_pct": 0.0,
+                "volume": 0
+            }
+    
+    return JSONResponse(
+        content={
+            "quotes": quotes,
+            "timestamp": datetime.now().isoformat()
+        },
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
+
+
 @app.get("/orders")
 async def get_orders():
     """Get all orders"""
@@ -1875,6 +2379,64 @@ async def run_backtest(request: BacktestRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/market/indices")
+async def get_indices_ltp():
+    """
+    Get Last Traded Price (LTP) for NIFTY 50 and BANKNIFTY indices.
+    Returns real-time data from Kite API.
+    """
+    try:
+        if not app_state.kite:
+            raise HTTPException(status_code=503, detail="Kite client not initialized")
+        
+        # Fetch LTP for NIFTY 50 and BANKNIFTY
+        instruments = ["NSE:NIFTY 50", "NSE:NIFTY BANK"]
+        
+        try:
+            ltp_data = app_state.kite.ltp(instruments)
+        except Exception as e:
+            logger.error(f"Failed to fetch LTP from Kite: {e}", exc_info=True)
+            # Return cached or default values on error
+            return {
+                "nifty": {"ltp": 0, "change": 0, "change_pct": 0},
+                "banknifty": {"ltp": 0, "change": 0, "change_pct": 0},
+                "error": str(e)
+            }
+        
+        # Parse NIFTY data
+        nifty_key = "NSE:NIFTY 50"
+        nifty_data = ltp_data.get(nifty_key, {})
+        nifty_ltp = float(nifty_data.get("last_price", 0))
+        nifty_net_change = float(nifty_data.get("net_change", 0))
+        nifty_change_pct = (nifty_net_change / (nifty_ltp - nifty_net_change) * 100) if (nifty_ltp - nifty_net_change) > 0 else 0
+        
+        # Parse BANKNIFTY data
+        bank_key = "NSE:NIFTY BANK"
+        bank_data = ltp_data.get(bank_key, {})
+        bank_ltp = float(bank_data.get("last_price", 0))
+        bank_net_change = float(bank_data.get("net_change", 0))
+        bank_change_pct = (bank_net_change / (bank_ltp - bank_net_change) * 100) if (bank_ltp - bank_net_change) > 0 else 0
+        
+        return {
+            "nifty": {
+                "ltp": nifty_ltp,
+                "change": nifty_net_change,
+                "change_pct": nifty_change_pct
+            },
+            "banknifty": {
+                "ltp": bank_ltp,
+                "change": bank_net_change,
+                "change_pct": bank_change_pct
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching indices LTP: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch indices LTP: {str(e)}")
+
+
 @app.get("/api/execution/stats")
 async def get_execution_stats():
     """Get execution alpha telemetry stats"""
@@ -1935,6 +2497,232 @@ async def get_risk_state():
         raise
     except Exception as e:
         logger.error(f"Error getting risk state: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/self-healing/diagnostics")
+async def get_diagnostics():
+    """Run self-diagnostics and return results"""
+    try:
+        from packages.core.self_healing import SelfDiagnostics
+        
+        diagnostics = SelfDiagnostics()
+        
+        # Get current state
+        state = {}
+        if app_state.orchestrator:
+            portfolio_risk = app_state.orchestrator._get_portfolio_risk()
+            state = {
+                "win_rate": app_state.wins_today / max(app_state.trades_today, 1),
+                "trades_today": app_state.trades_today,
+                "daily_pnl": portfolio_risk.daily_pnl,
+                "margin_utilization": portfolio_risk.used_margin / max(portfolio_risk.net_liquid, 1) if portfolio_risk.net_liquid > 0 else 0.0,
+            }
+        
+        # Run diagnostics
+        results = diagnostics.run_diagnostics(state)
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "anomalies_detected": len(results),
+            "results": [
+                {
+                    "anomaly_type": r.anomaly_type.value,
+                    "severity": r.severity,
+                    "detected": r.detected,
+                    "score": r.score,
+                    "message": r.message,
+                    "metrics": r.metrics,
+                    "recommended_actions": r.recommended_actions
+                }
+                for r in results
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error running diagnostics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/self-healing/heal")
+async def apply_healing(dry_run: bool = False):
+    """Apply self-healing actions based on diagnostics"""
+    try:
+        from packages.core.self_healing import SelfDiagnostics, SelfHealing
+        from packages.core.rag_memory import RAGMemory
+        from pathlib import Path
+        
+        # Initialize components
+        config_path = Path(app_config.config_path) if hasattr(app_config, 'config_path') else Path("configs/kite_day1_live.yaml")
+        memory = RAGMemory()
+        diagnostics = SelfDiagnostics()
+        healing = SelfHealing(config_path=str(config_path), memory=memory, healing_enabled=not dry_run)
+        
+        # Get current state
+        state = {}
+        if app_state.orchestrator:
+            portfolio_risk = app_state.orchestrator._get_portfolio_risk()
+            state = {
+                "win_rate": app_state.wins_today / max(app_state.trades_today, 1),
+                "trades_today": app_state.trades_today,
+                "daily_pnl": portfolio_risk.daily_pnl,
+                "margin_utilization": portfolio_risk.used_margin / max(portfolio_risk.net_liquid, 1) if portfolio_risk.net_liquid > 0 else 0.0,
+            }
+        
+        # Run diagnostics
+        diagnostic_results = diagnostics.run_diagnostics(state)
+        
+        # Apply healing
+        healing_results = []
+        for diagnostic in diagnostic_results:
+            if diagnostic.severity in ["HIGH", "CRITICAL"]:
+                result = healing.apply_healing(diagnostic)
+                if result:
+                    healing_results.append({
+                        "action": result.action.value,
+                        "success": result.success,
+                        "message": result.message,
+                        "config_changes": result.config_changes,
+                        "timestamp": result.timestamp.isoformat()
+                    })
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "dry_run": dry_run,
+            "anomalies_detected": len(diagnostic_results),
+            "healing_actions_applied": len(healing_results),
+            "healing_results": healing_results
+        }
+    except Exception as e:
+        logger.error(f"Error applying healing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/self-healing/history")
+async def get_healing_history(limit: int = 10):
+    """Get healing history"""
+    try:
+        from packages.core.self_healing import SelfHealing
+        from packages.core.rag_memory import RAGMemory
+        from pathlib import Path
+        
+        config_path = Path(app_config.config_path) if hasattr(app_config, 'config_path') else Path("configs/kite_day1_live.yaml")
+        memory = RAGMemory()
+        healing = SelfHealing(config_path=str(config_path), memory=memory)
+        
+        history = healing.get_healing_history(limit=limit)
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "history": [
+                {
+                    "action": h.action.value,
+                    "success": h.success,
+                    "message": h.message,
+                    "config_changes": h.config_changes,
+                    "timestamp": h.timestamp.isoformat(),
+                    "anomaly_type": h.diagnostic.anomaly_type.value,
+                    "severity": h.diagnostic.severity
+                }
+                for h in history
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting healing history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Reflex System Endpoints (Level 8)
+@app.get("/reflex/status")
+async def get_reflex_status():
+    """Get Reflex System status and statistics."""
+    try:
+        if not app_state.reflex_engine:
+            raise HTTPException(status_code=503, detail="Reflex System not initialized")
+        
+        stats = app_state.reflex_engine.get_stats()
+        return stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching reflex status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/reflex/enable")
+async def enable_reflex():
+    """Enable the Reflex System."""
+    try:
+        if not app_state.reflex_engine:
+            raise HTTPException(status_code=503, detail="Reflex System not initialized")
+        
+        app_state.reflex_engine.enable()
+        return {
+            "status": "enabled",
+            "timestamp": datetime.now().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error enabling reflex: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/reflex/disable")
+async def disable_reflex():
+    """Disable the Reflex System."""
+    try:
+        if not app_state.reflex_engine:
+            raise HTTPException(status_code=503, detail="Reflex System not initialized")
+        
+        app_state.reflex_engine.disable()
+        return {
+            "status": "disabled",
+            "timestamp": datetime.now().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error disabling reflex: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/reflex/brake/pull")
+async def pull_emergency_brake(reason: str = "MANUAL"):
+    """Manually pull the emergency brake (emergency liquidation)."""
+    try:
+        if not app_state.reflex_engine:
+            raise HTTPException(status_code=503, detail="Reflex System not initialized")
+        
+        await app_state.reflex_engine.brake.pull(reason=reason)
+        return {
+            "status": "brake_pulled",
+            "reason": reason,
+            "timestamp": datetime.now().isoformat(),
+            "message": "SYSTEM HALTED. MANUAL RESTART REQUIRED."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error pulling emergency brake: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/reflex/reset")
+async def reset_reflex():
+    """Reset the Reflex System (clear history, reset brake)."""
+    try:
+        if not app_state.reflex_engine:
+            raise HTTPException(status_code=503, detail="Reflex System not initialized")
+        
+        app_state.reflex_engine.reset()
+        return {
+            "status": "reset",
+            "timestamp": datetime.now().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resetting reflex: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

@@ -1,0 +1,62 @@
+{
+  "strategy": "MACD",
+  "symbol": "NIFTY",
+  "optimization_date": "2025-11-25",
+  "oos_metrics": {
+    "sharpe_mean": 0.8234,
+    "sharpe_std": 0.1234,
+    "return_mean": 0.1523,
+    "return_std": 0.0234,
+    "win_rate_mean": 0.4567,
+    "win_rate_std": 0.0345,
+    "max_drawdown_mean": -0.0891,
+    "max_drawdown_std": 0.0123
+  },
+  "pbo": 0.15,
+  "consensus_params": {
+    "fast_period": 12,
+    "slow_period": 26,
+    "signal_period": 9,
+    "rsi_period": 14,
+    "rsi_min": 30,
+    "rsi_max": 70
+  },
+  "windows": [
+    {
+      "window": 1,
+      "train_start": "2024-01-01",
+      "train_end": "2024-03-01",
+      "test_start": "2024-03-02",
+      "test_end": "2024-04-01",
+      "oos_sharpe": 0.7891,
+      "oos_return": 0.1234,
+      "win_rate": 0.4567
+    },
+    {
+      "window": 2,
+      "train_start": "2024-03-02",
+      "train_end": "2024-05-01",
+      "test_start": "2024-05-02",
+      "test_end": "2024-06-01",
+      "oos_sharpe": 0.8123,
+      "oos_return": 0.1456,
+      "win_rate": 0.4789
+    },
+    {
+      "window": 3,
+      "train_start": "2024-05-02",
+      "train_end": "2024-07-01",
+      "test_start": "2024-07-02",
+      "test_end": "2024-08-01",
+      "oos_sharpe": 0.8678,
+      "oos_return": 0.1856,
+      "win_rate": 0.4345
+    }
+  ],
+  "acceptance_criteria": {
+    "min_sharpe": 0.5,
+    "min_return": 0.1,
+    "min_win_rate": 0.4,
+    "max_pbo": 0.3
+  }
+}

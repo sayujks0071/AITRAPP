@@ -1,0 +1,129 @@
+# MCX Evening Session Configuration
+# Extended trading hours: 5:00 PM - 11:30 PM IST
+# Optimized for Gold, Silver, and Crude Oil futures
+
+app:
+  mode: PAPER
+  timezone: Asia/Kolkata
+
+venue:
+  name: MCX
+  api_key_env: KITE_API_KEY
+  api_secret_env: KITE_API_SECRET
+  access_token_env: KITE_ACCESS_TOKEN
+
+# Risk Management - Conservative for commodities
+risk:
+  per_trade_risk_pct: 0.30      # 0.30% per trade
+  max_portfolio_heat_pct: 1.0    # 1.0% portfolio heat
+  daily_loss_stop_pct: -1.50     # -1.50% daily loss cap
+  max_positions: 2                # Max 2 concurrent positions
+  max_position_size_multiplier: 1 # 1x lot size
+  slippage_bps: 10               # 10 bps for commodities
+  fees_per_order: 20             # ₹20 per order
+
+# MCX Evening Hours
+market:
+  open_time: "17:00"             # Evening session start
+  close_time: "23:25"            # Last entry time
+  eod_squareoff_time: "23:28"    # Hard flatten time
+  eod_squareoff_enabled: true    # Force flatten at 11:28 PM
+  premarket_sync_time: "16:55"   # Pre-evening sync
+  event_aware: true
+  event_stop_mult: 1.5
+
+# Entry Window - Evening Session
+entry:
+  window_start: "17:05"          # First entry at 5:05 PM
+  window_end: "23:00"            # Last entry at 11:00 PM
+  max_entries_per_day: 3         # 3 entries allowed
+  cooldown_minutes: 45           # 45 min cooldown
+
+# Execution Settings
+execution:
+  engine_gap_ms: 300
+  instrument_gap_ms: 300
+  price_band_bps: 50             # Wider bands for commodities
+  burst: 2
+  fanout_per_sec: 4
+  use_native_oco: false
+  default_order_type: LIMIT
+  limit_chase_ticks: 3           # Chase 3 ticks for commodities
+  limit_timeout_sec: 8           # Longer timeout (8s)
+  ioc_for_exits: true
+  max_order_retries: 3
+  retry_backoff_ms: 500
+
+# Universe - MCX Liquid Commodities
+universe:
+  mcx_instruments:
+    - GOLDM         # Gold Mini (100g)
+    - GOLD          # Gold (1kg)
+    - SILVER        # Silver (30kg)
+    - CRUDEOIL      # Crude Oil
+    - NATURALGAS    # Natural Gas
+  exclude_illiquid_threshold_turnover: 5000000
+  sync_time: "16:55"
+
+# MCX-Specific Filters
+commodities:
+  max_spread_mid_pct: 0.8        # 0.8% bid-ask spread tolerance
+  min_volume: 500                # Min volume: 500 contracts
+  max_dte: 30                    # Max 30 days to expiry
+  prefer_near_month: true        # Trade near-month contracts
+
+# Strategies - Trend-Following for Commodities
+strategies:
+  # Priority 0: Premium Adaptive Trend (Perfect for commodities!)
+  - name: PremiumAdaptiveTrend
+    enabled: true
+    priority: 0
+    params:
+      ema_fast: 34
+      ema_slow: 89
+      adx_threshold: 20          # Lower ADX for commodities
+      backtest_relaxed_adx: 16
+      atr_vol_cap_pct: 1.5       # Higher cap for commodity volatility
+      atr_stop_mult: 1.5
+      pullback_lookback: 15
+      pullback_tolerance_pct: 0.5
+      breakout_lookback: 12
+      rr_min: 2.0
+
+  # Priority 1: SMA Momentum
+  - name: SMAMomentum
+    enabled: true
+    priority: 1
+    params:
+      fast_period: 20
+      slow_period: 50
+      rr_min: 2.0
+
+  # Priority 2: MACD
+  - name: MACD
+    enabled: true
+    priority: 2
+    params:
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+
+# Exits - Commodity-specific
+exits:
+  hard_stop_atr_mult: 2.5        # Wider stops for commodities
+  trail_enabled: true
+  trail_atr_mult: 1.8
+  time_stop_enabled: true
+  time_stop_min: 30              # 30 min time stop
+
+# Database
+database:
+  url: "sqlite:///data/aitrapp_mcx.db"
+
+# Compliance
+compliance:
+  exchange_algo_id_env: EXCHANGE_ALGO_ID
+  kill_switch_enabled: true
+  order_rate_limit_per_sec: 10
+  daily_order_limit: 500
+  max_notional_per_day: 500000

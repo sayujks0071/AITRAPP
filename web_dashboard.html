@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AITRAPP Mission Control v6.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: #09090b;
+            color: #e4e4e7;
+        }
+
+        .glass-panel {
+            background: rgba(24, 24, 27, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid #27272a;
+        }
+
+        .pulse-green {
+            animation: pulse-green 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0% {
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+            }
+        }
+
+        .pulse-red {
+            animation: pulse-red 1s infinite;
+        }
+
+        @keyframes pulse-red {
+            0% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+            }
+
+            70% {
+                box-shadow: 0 0 0 15px rgba(239, 68, 68, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+            }
+        }
+
+        .metric-label {
+            color: #a1a1aa;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Radar Scan Animation (Blue for SCANNING) */
+        .radar-scan {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .radar-scan::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.4), transparent);
+            animation: radar-sweep 3s infinite;
+        }
+
+        @keyframes radar-sweep {
+            0% {
+                left: -100%;
+            }
+
+            100% {
+                left: 100%;
+            }
+        }
+
+        /* Strategy Card Styles */
+        .strategy-card {
+            transition: all 0.3s ease;
+            border: 1px solid #3f3f46;
+        }
+
+        .strategy-card:hover {
+            border-color: #8b5cf6;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .strategy-card.scanning {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .strategy-card.deployed {
+            border-color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.1);
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
+        }
+
+        .status-pulse {
+            animation: status-pulse 2s infinite;
+        }
+
+        @keyframes status-pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        /* Kill Switch Button */
+        .kill-switch-btn {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            border: 2px solid #991b1b;
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+            transition: all 0.2s ease;
+        }
+
+        .kill-switch-btn:hover {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.8);
+            transform: scale(1.05);
+        }
+
+        .kill-switch-btn:active {
+            transform: scale(0.95);
+            box-shadow: 0 0 40px rgba(239, 68, 68, 1);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #18181b;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #3f3f46;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #52525b;
+        }
+    </style>
+</head>
+
+<body class="h-screen overflow-hidden flex flex-col p-4 gap-4 text-sm">
+
+    <!-- HEADER WITH KILL SWITCH -->
+    <header class="glass-panel p-3 rounded-lg flex justify-between items-center shrink-0">
+        <div class="flex items-center gap-4">
+            <div id="system-status-indicator" class="w-3 h-3 rounded-full bg-red-500"></div>
+            <div>
+                <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                    AITRAPP <span class="text-purple-500">MISSION CONTROL</span> v7.0
+                </h1>
+                <div class="flex gap-3 text-xs text-zinc-500 mt-0.5">
+                    <span>L4 EXECUTION</span> • <span>L5 CORTEX</span> • <span>L7 HIVEMIND</span> • <span>L12
+                        PORTFOLIO</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- LIVE MARKET TICKER (NIFTY & BANKNIFTY) -->
+        <div class="flex gap-6 px-6 border-l border-r border-zinc-800">
+            <div class="flex flex-col items-end">
+                <span class="text-[10px] text-zinc-500">NIFTY 50</span>
+                <div class="flex items-center gap-2">
+                    <span id="nifty-ltp" class="text-lg font-bold text-white">--.--</span>
+                    <span id="nifty-chg" class="text-xs font-mono">--%</span>
+                </div>
+            </div>
+            <div class="flex flex-col items-end">
+                <span class="text-[10px] text-zinc-500">BANKNIFTY</span>
+                <div class="flex items-center gap-2">
+                    <span id="bn-ltp" class="text-lg font-bold text-white">--.--</span>
+                    <span id="bn-chg" class="text-xs font-mono">--%</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-6">
+            <div class="flex gap-8 text-right">
+                <div>
+                    <div class="metric-label">Market Status</div>
+                    <div id="market-status" class="font-bold text-white">CLOSED</div>
+                </div>
+                <div>
+                    <div class="metric-label">Latency</div>
+                    <div id="api-latency" class="font-bold text-cyan-400">-- ms</div>
+                </div>
+                <div>
+                    <div class="metric-label">IST</div>
+                    <div id="clock" class="font-bold text-white">--:--:--</div>
+                </div>
+            </div>
+
+            <!-- HUMAN KILL SWITCH -->
+            <button id="kill-switch-btn"
+                class="kill-switch-btn px-6 py-3 rounded-lg text-white font-bold text-sm flex items-center gap-2 pulse-red">
+                <i data-lucide="power" class="w-5 h-5"></i>
+                KILL SWITCH
+            </button>
+        </div>
+    </header>
+
+    <!-- RETURNS SNAPSHOT (Realized vs Unrealized) -->
+    <div class="glass-panel p-4 rounded-lg shrink-0">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-bold text-purple-400 flex items-center gap-2">
+                <i data-lucide="trending-up" class="w-4 h-4"></i> RETURNS SNAPSHOT
+            </h2>
+            <div class="flex gap-6 text-xs">
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-green-500"></div>
+                    <span class="text-zinc-500">Realized</span>
+                    <span id="realized-total" class="font-bold text-green-400">₹0</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-blue-500"></div>
+                    <span class="text-zinc-500">Unrealized</span>
+                    <span id="unrealized-total" class="font-bold text-blue-400">₹0</span>
+                </div>
+                <div class="flex items-center gap-2 border-l border-zinc-800 pl-6">
+                    <span class="text-zinc-500">Total</span>
+                    <span id="returns-total" class="font-bold text-white text-base">₹0</span>
+                </div>
+            </div>
+        </div>
+        <div id="returns-snapshot" class="flex gap-6 text-xs">
+            <!-- Strategy returns injected here -->
+        </div>
+    </div>
+
+    <!-- MAIN LAYOUT -->
+    <main class="flex-1 grid grid-cols-12 gap-4 min-h-0">
+
+        <!-- LEFT: STRATEGY-CENTRIC VIEW (8 Cols) -->
+        <div class="col-span-8 flex flex-col gap-4 h-full">
+
+            <!-- TOP ROW: INTELLIGENCE METRICS -->
+            <div class="grid grid-cols-4 gap-4 h-24 shrink-0">
+                <!-- Regime -->
+                <div class="glass-panel p-3 rounded-lg border-l-2 border-yellow-500 flex flex-col justify-center">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="metric-label">Regime (L0)</span>
+                        <i data-lucide="activity" class="w-4 h-4 text-yellow-500"></i>
+                    </div>
+                    <div id="regime-display" class="text-lg font-bold text-yellow-400 truncate">DETECTING...</div>
+                </div>
+                <!-- Cortex -->
+                <div class="glass-panel p-3 rounded-lg border-l-2 border-purple-500 flex flex-col justify-center">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="metric-label">Cortex (L5)</span>
+                        <i data-lucide="brain-circuit" class="w-4 h-4 text-purple-500"></i>
+                    </div>
+                    <div class="text-lg font-bold text-purple-400">ACTIVE</div>
+                </div>
+                <!-- Reflex -->
+                <div class="glass-panel p-3 rounded-lg border-l-2 border-red-500 flex flex-col justify-center">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="metric-label">Reflex (L10)</span>
+                        <i data-lucide="shield-alert" class="w-4 h-4 text-red-500"></i>
+                    </div>
+                    <div id="reflex-status" class="text-lg font-bold text-red-400">ARMED</div>
+                </div>
+                <!-- Alpha -->
+                <div class="glass-panel p-3 rounded-lg border-l-2 border-green-500 flex flex-col justify-center">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="metric-label">Exec Alpha (L4)</span>
+                        <i data-lucide="zap" class="w-4 h-4 text-green-500"></i>
+                    </div>
+                    <div id="alpha-saved" class="text-lg font-bold text-green-400">₹0.00</div>
+                </div>
+            </div>
+
+            <!-- STRATEGY CARDS GRID (SCANNING vs DEPLOYED) -->
+            <div class="glass-panel p-4 rounded-lg flex-1 flex flex-col min-h-0">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="font-bold text-cyan-400 flex items-center gap-2">
+                        <i data-lucide="crosshair" class="w-5 h-5"></i> LIVE STRATEGY STATUS
+                    </h2>
+                    <div id="scan-status" class="flex items-center gap-2">
+                        <div class="w-2 h-2 rounded-full bg-blue-500 status-pulse"></div>
+                        <span class="text-xs text-zinc-500">SCANNING</span>
+                    </div>
+                </div>
+                <div id="strategies-container" class="grid grid-cols-2 gap-4 overflow-y-auto pr-1">
+                    <!-- Strategy cards injected here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: BROKER-GRADE COMMAND CENTER (4 Cols) -->
+        <div class="col-span-4 flex flex-col gap-4 h-full">
+            <!-- CAPITAL & MARGIN CARD -->
+            <div class="glass-panel p-4 rounded-lg shrink-0 border-l-2 border-emerald-500">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="font-bold text-emerald-400 flex items-center gap-2 text-sm">
+                        <i data-lucide="wallet" class="w-4 h-4"></i> CAPITAL & MARGIN
+                    </h2>
+                    <span
+                        class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                        KITE • LIVE
+                    </span>
+                </div>
+                <div class="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                        <div class="metric-label">Net Worth</div>
+                        <div id="funds-net" class="text-sm font-bold text-white">₹--</div>
+                    </div>
+                    <div>
+                        <div class="metric-label">Available Cash</div>
+                        <div id="funds-available" class="text-sm font-bold text-emerald-400">₹--</div>
+                    </div>
+                    <div>
+                        <div class="metric-label">Used Margin</div>
+                        <div id="funds-used" class="text-sm font-bold text-orange-400">₹--</div>
+                    </div>
+                    <div>
+                        <div class="metric-label">Utilisation</div>
+                        <div id="funds-util" class="text-sm font-bold text-yellow-400">--%</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BROKER VS ALGO RECONCILIATION -->
+            <div
+                class="glass-panel p-3 rounded-lg shrink-0 flex items-center justify-between border-l-2 border-blue-500">
+                <div>
+                    <div class="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">Broker vs Algo</div>
+                    <div class="text-sm text-white">
+                        <span id="broker-pos-count" class="font-bold">0</span> broker •
+                        <span id="algo-pos-count" class="font-bold">0</span> algo
+                    </div>
+                </div>
+                <div id="drift-badge"
+                    class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    MATCH
+                </div>
+            </div>
+
+            <!-- PORTFOLIO SNAPSHOT -->
+            <div class="glass-panel p-4 rounded-lg flex-1 flex flex-col min-h-0">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="font-bold text-zinc-300 flex items-center gap-2 text-sm">
+                        <i data-lucide="layers" class="w-4 h-4"></i> Portfolio
+                    </h2>
+                    <span id="positions-count" class="text-xs text-zinc-500">0 open</span>
+                </div>
+                <div class="overflow-y-auto flex-1">
+                    <table class="w-full text-xs text-left">
+                        <thead class="text-zinc-600 uppercase border-b border-zinc-800 sticky top-0 bg-[#18181b]">
+                            <tr>
+                                <th class="py-2">Instrument</th>
+                                <th class="py-2 text-right">Qty</th>
+                                <th class="py-2 text-right">PnL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="portfolio-positions-body" class="text-zinc-300 divide-y divide-zinc-800/50">
+                            <tr>
+                                <td colspan="3" class="py-8 text-center text-zinc-600 italic">No active positions</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- SESSION PNL -->
+            <div class="glass-panel p-4 rounded-lg shrink-0 text-center border-l-2 border-green-500">
+                <div class="metric-label mb-1">Session Net PnL</div>
+                <div id="total-pnl" class="text-3xl font-bold text-white tracking-tight">₹0.00</div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        lucide.createIcons();
+
+        const API_URL = 'http://localhost:8000';
+
+        const formatCurrency = (val) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val);
+        const formatPercent = (val) => `${val >= 0 ? '+' : ''}${val.toFixed(1)}%`;
+
+        const getPnLColor = (val) => val > 0 ? 'text-green-400' : (val < 0 ? 'text-red-400' : 'text-zinc-400');
+        const getStatusColor = (enabled) => enabled ? 'bg-green-500' : 'bg-zinc-600';
+
+        // Kill Switch Handler
+        let killSwitchConfirming = false;
+        document.getElementById('kill-switch-btn').addEventListener('click', async function () {
+            if (killSwitchConfirming) {
+                // Second click - execute kill switch
+                this.disabled = true;
+                this.innerHTML = '<i data-lucide="loader" class="w-5 h-5 animate-spin"></i> EXECUTING...';
+                lucide.createIcons();
+
+                try {
+                    // Call flatten endpoint to close all positions
+                    const response = await fetch(`${API_URL}/flatten`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+
+                    if (response.ok) {
+                        alert('🚨 KILL SWITCH ACTIVATED\n\nAll positions closed. Trading paused.');
+                        // Also pause trading
+                        await fetch(`${API_URL}/pause`, { method: 'POST' });
+                    } else {
+                        alert('⚠️ Kill switch failed. Check server logs.');
+                    }
+                } catch (e) {
+                    alert('❌ Error activating kill switch: ' + e.message);
+                }
+
+                this.disabled = false;
+                this.innerHTML = '<i data-lucide="power" class="w-5 h-5"></i> KILL SWITCH';
+                lucide.createIcons();
+                killSwitchConfirming = false;
+            } else {
+                // First click - require confirmation
+                killSwitchConfirming = true;
+                const originalText = this.innerHTML;
+                this.innerHTML = '<i data-lucide="alert-triangle" class="w-5 h-5"></i> CONFIRM?';
+                lucide.createIcons();
+
+                setTimeout(() => {
+                    if (killSwitchConfirming) {
+                        this.innerHTML = originalText;
+                        lucide.createIcons();
+                        killSwitchConfirming = false;
+                    }
+                }, 3000);
+            }
+        });
+
+        function getMockMarketData() {
+            const now = Date.now();
+            const baseNifty = 26100;
+            const baseBank = 48500;
+            const nifty = baseNifty + Math.sin(now / 5000) * 20 + (Math.random() * 5);
+            const bank = baseBank + Math.cos(now / 5000) * 50 + (Math.random() * 10);
+            return {
+                nifty: { ltp: nifty, chg: 0.45 },
+                bank: { ltp: bank, chg: -0.12 }
+            };
+        }
+
+        async function updateDashboard() {
+            const start = Date.now();
+            try {
+                const [health, state, regime, strategies, exec, portfolio, marketData] = await Promise.all([
+                    fetch(`${API_URL}/health`).then(r => r.json()).catch(() => null),
+                    fetch(`${API_URL}/state`).then(r => r.json()).catch(() => null),
+                    fetch(`${API_URL}/api/regime/current`).then(r => r.json()).catch(() => null),
+                    fetch(`${API_URL}/api/strategies/summary`).then(r => r.json()).catch(() => null),
+                    fetch(`${API_URL}/api/execution/stats`).then(r => r.json()).catch(() => null),
+                    fetch(`${API_URL}/api/portfolio/snapshot`).then(r => r.json()).catch(() => null),
+                    fetch(`${API_URL}/api/market/indices`).then(r => r.json()).catch(() => null)
+                ]);
+
+                // API Latency
+                const latency = Date.now() - start;
+                document.getElementById('api-latency').innerText = `${latency} ms`;
+
+                // Market Data (Real-time from API - Mission Control v7.0)
+                // Priority: 1) Direct indices API, 2) Portfolio snapshot indices, 3) Mock fallback
+                let niftyLtp = 0, niftyChg = 0, bankLtp = 0, bankChg = 0;
+
+                if (marketData && marketData.nifty && marketData.banknifty) {
+                    // Use direct indices API data (preferred)
+                    niftyLtp = marketData.nifty.ltp || 0;
+                    niftyChg = marketData.nifty.change_pct || 0;
+                    bankLtp = marketData.banknifty.ltp || 0;
+                    bankChg = marketData.banknifty.change_pct || 0;
+                } else if (portfolio && portfolio.indices) {
+                    // Fallback to portfolio snapshot indices (Mission Control v7.0)
+                    niftyLtp = portfolio.indices.nifty?.ltp || 0;
+                    niftyChg = portfolio.indices.nifty?.change_pct || 0;
+                    bankLtp = portfolio.indices.banknifty?.ltp || 0;
+                    bankChg = portfolio.indices.banknifty?.change_pct || 0;
+                }
+
+                if (niftyLtp > 0 || bankLtp > 0) {
+                    // Use real data
+                    document.getElementById('nifty-ltp').innerText = niftyLtp > 0 ? niftyLtp.toFixed(2) : '--.--';
+                    document.getElementById('nifty-chg').innerText = niftyLtp > 0 ? formatPercent(niftyChg) : '--%';
+                    document.getElementById('nifty-chg').className = `text-xs font-mono ${niftyChg >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+                    document.getElementById('bn-ltp').innerText = bankLtp > 0 ? bankLtp.toFixed(2) : '--.--';
+                    document.getElementById('bn-chg').innerText = bankLtp > 0 ? formatPercent(bankChg) : '--%';
+                    document.getElementById('bn-chg').className = `text-xs font-mono ${bankChg >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                } else {
+                    // Final fallback to mock data if all APIs fail
+                    const mkt = getMockMarketData();
+                    document.getElementById('nifty-ltp').innerText = mkt.nifty.ltp.toFixed(2);
+                    document.getElementById('nifty-chg').innerText = formatPercent(mkt.nifty.chg);
+                    document.getElementById('nifty-chg').className = `text-xs font-mono ${mkt.nifty.chg >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                    document.getElementById('bn-ltp').innerText = mkt.bank.ltp.toFixed(2);
+                    document.getElementById('bn-chg').innerText = formatPercent(mkt.bank.chg);
+                    document.getElementById('bn-chg').className = `text-xs font-mono ${mkt.bank.chg >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                }
+
+                // System Status
+                const isLive = health?.mode === 'LIVE' || state?.mode === 'LIVE';
+                const isMarketOpen = state?.is_market_open || false;
+                document.getElementById('system-status-indicator').className = `w-3 h-3 rounded-full ${isLive ? 'bg-green-500 pulse-green' : 'bg-red-500'}`;
+                document.getElementById('market-status').innerText = isMarketOpen ? "OPEN" : "CLOSED";
+                document.getElementById('market-status').className = `font-bold ${isMarketOpen ? 'text-green-400' : 'text-zinc-500'}`;
+
+                // Regime
+                const niftyRegime = regime?.NIFTY?.regime || regime?.underlyings?.NIFTY?.regime;
+                if (niftyRegime) {
+                    document.getElementById('regime-display').innerText = niftyRegime.replace(/_/g, ' ');
+                }
+
+                // Execution Alpha
+                if (exec?.saved_slippage_rs !== undefined) {
+                    document.getElementById('alpha-saved').innerText = formatCurrency(exec.saved_slippage_rs);
+                }
+
+                // RETURNS SNAPSHOT (Realized vs Unrealized)
+                let totalRealized = 0;
+                let totalUnrealized = 0;
+                const returnsSnapshot = document.getElementById('returns-snapshot');
+
+                if (strategies?.strategies) {
+                    const stratArray = Array.isArray(strategies.strategies) ? strategies.strategies : Object.values(strategies.strategies);
+
+                    stratArray.forEach(s => {
+                        totalRealized += s.realised_pnl || 0;
+                        totalUnrealized += s.unrealised_pnl || 0;
+                    });
+
+                    returnsSnapshot.innerHTML = stratArray.map(s => {
+                        const totalPnL = (s.realised_pnl || 0) + (s.unrealised_pnl || 0);
+                        const hitRate = (s.hit_rate_20d || 0) * 100;
+                        return `
+                            <div class="flex flex-col items-end">
+                                <div class="text-[10px] text-zinc-500">${s.name.replace('V1', '').replace('IntradayShortStrangle', 'IntraStrangle').replace('TrendCreditSpread', 'TrendSpread')}</div>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-bold ${getPnLColor(totalPnL)}">${formatCurrency(totalPnL)}</span>
+                                    <span class="text-[10px] ${hitRate >= 50 ? 'text-green-400' : 'text-red-400'}">${hitRate.toFixed(0)}%</span>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    returnsSnapshot.innerHTML = '<div class="text-zinc-600 text-xs">No strategies loaded</div>';
+                }
+
+                document.getElementById('realized-total').innerText = formatCurrency(totalRealized);
+                document.getElementById('unrealized-total').innerText = formatCurrency(totalUnrealized);
+                document.getElementById('returns-total').innerText = formatCurrency(totalRealized + totalUnrealized);
+                document.getElementById('returns-total').className = `font-bold text-white text-base ${getPnLColor(totalRealized + totalUnrealized)}`;
+
+                // STRATEGY CARDS (SCANNING vs DEPLOYED) - Mission Control v7.0
+                // True Strategy Status: Cross-reference with Open Positions
+                const stratContainer = document.getElementById('strategies-container');
+                let hasDeployed = false;
+
+                // Build strategy-to-positions mapping from portfolio snapshot
+                const strategyPositionsMap = {};
+                if (portfolio && portfolio.positions) {
+                    portfolio.positions.forEach(pos => {
+                        const strategy = pos.strategy || 'Manual';
+                        if (!strategyPositionsMap[strategy]) {
+                            strategyPositionsMap[strategy] = [];
+                        }
+                        strategyPositionsMap[strategy].push(pos);
+                    });
+                }
+
+                if (strategies?.strategies) {
+                    const stratArray = Array.isArray(strategies.strategies) ? strategies.strategies : Object.values(strategies.strategies);
+
+                    stratContainer.innerHTML = stratArray.map(s => {
+                        const totalPnL = (s.realised_pnl || 0) + (s.unrealised_pnl || 0);
+                        const hitRate = (s.hit_rate_20d || 0) * 100;
+                        const maxDD = s.max_dd_60d || 0;
+                        const allocation = (s.current_allocation_pct || 0) * 100;
+
+                        // Mission Control v7.0: True Strategy Status
+                        // Check if strategy has open positions in portfolio snapshot
+                        const strategyName = s.name;
+                        const positionsForStrategy = strategyPositionsMap[strategyName] || [];
+                        const hasOpenPositions = positionsForStrategy.length > 0;
+
+                        // Calculate live PnL from positions if deployed
+                        let livePnL = totalPnL;
+                        if (hasOpenPositions) {
+                            const positionPnL = positionsForStrategy.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
+                            livePnL = positionPnL; // Use live position PnL when deployed
+                        }
+
+                        // Status: DEPLOYED if enabled AND has open positions
+                        const isDeployed = s.enabled && hasOpenPositions;
+
+                        if (isDeployed) hasDeployed = true;
+
+                        // Determine status: SCANNING (blue) vs DEPLOYED (purple/green/red based on Live PnL)
+                        const statusClass = isDeployed ? 'deployed' : 'scanning';
+                        const statusIcon = isDeployed ?
+                            (livePnL >= 0 ? 'trending-up' : 'trending-down') :
+                            'radar';
+                        const statusColor = isDeployed ?
+                            (livePnL >= 0 ? 'text-green-400' : 'text-red-400') :
+                            'text-blue-400';
+
+                        return `
+                            <div class="strategy-card ${statusClass} bg-zinc-900/60 p-4 rounded-lg flex flex-col gap-3">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex-1">
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <i data-lucide="${statusIcon}" class="w-4 h-4 ${statusColor}"></i>
+                                            <span class="font-bold text-sm text-zinc-200">${s.name.replace('V1', '').replace('IntradayShortStrangle', 'IntraStrangle').replace('TrendCreditSpread', 'TrendSpread')}</span>
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isDeployed ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}">
+                                                ${isDeployed ? 'DEPLOYED' : 'SCANNING'}
+                                            </span>
+                                        </div>
+                                        <div class="text-[10px] text-zinc-500">${s.role || 'Strategy'}</div>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="text-lg font-bold ${getPnLColor(livePnL)}">${formatCurrency(livePnL)}</div>
+                                        <div class="text-[10px] text-zinc-500">${isDeployed ? 'Live PnL' : 'Total PnL'}</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="grid grid-cols-3 gap-2 text-xs">
+                                    <div>
+                                        <div class="text-zinc-500 mb-0.5">Hit Rate</div>
+                                        <div class="font-bold ${hitRate >= 50 ? 'text-green-400' : 'text-red-400'}">${hitRate.toFixed(1)}%</div>
+                                    </div>
+                                    <div>
+                                        <div class="text-zinc-500 mb-0.5">Max DD</div>
+                                        <div class="font-bold text-red-400">${formatCurrency(maxDD)}</div>
+                                    </div>
+                                    <div>
+                                        <div class="text-zinc-500 mb-0.5">Allocation</div>
+                                        <div class="font-bold text-cyan-400">${allocation.toFixed(1)}%</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="w-full bg-zinc-800 h-1 rounded-full overflow-hidden">
+                                    <div class="bg-cyan-500 h-full transition-all duration-300" style="width: ${allocation}%"></div>
+                                </div>
+                                
+                                <div class="flex justify-between text-[10px] text-zinc-600">
+                                    <span>Realized: ${formatCurrency(s.realised_pnl || 0)}</span>
+                                    <span>Unrealized: ${formatCurrency(s.unrealised_pnl || 0)}</span>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+
+                    // Update scan status indicator
+                    const scanStatus = document.getElementById('scan-status');
+                    if (hasDeployed) {
+                        scanStatus.innerHTML = `
+                            <div class="w-2 h-2 rounded-full bg-purple-500 status-pulse"></div>
+                            <span class="text-xs text-zinc-500">DEPLOYED</span>
+                        `;
+                    } else {
+                        scanStatus.innerHTML = `
+                            <div class="w-2 h-2 rounded-full bg-blue-500 status-pulse"></div>
+                            <span class="text-xs text-zinc-500">SCANNING</span>
+                        `;
+                    }
+                } else {
+                    stratContainer.innerHTML = '<div class="col-span-2 text-center text-zinc-600 py-8">No strategies loaded</div>';
+                }
+
+                // Portfolio Snapshot
+                if (portfolio) {
+                    const funds = portfolio.funds || {};
+                    document.getElementById('funds-net').innerText = formatCurrency(funds.net || 0);
+                    document.getElementById('funds-available').innerText = formatCurrency(funds.available_cash || 0);
+                    document.getElementById('funds-used').innerText = formatCurrency(funds.used_margin || 0);
+                    document.getElementById('funds-util').innerText = `${(funds.utilisation_pct || 0).toFixed(1)}%`;
+
+                    const brokerCount = portfolio.broker_positions_count || 0;
+                    const algoCount = portfolio.algo_positions_count || 0;
+                    const driftCount = portfolio.drift_count || 0;
+                    document.getElementById('broker-pos-count').innerText = brokerCount;
+                    document.getElementById('algo-pos-count').innerText = algoCount;
+
+                    const driftBadge = document.getElementById('drift-badge');
+                    if (driftCount === 0) {
+                        driftBadge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+                        driftBadge.innerText = 'MATCH';
+                    } else {
+                        driftBadge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30';
+                        driftBadge.innerText = `${driftCount} DRIFT`;
+                    }
+
+                    const portfolioPositions = portfolio.positions || [];
+                    document.getElementById('positions-count').innerText = `${portfolioPositions.length} open`;
+                    const portfolioBody = document.getElementById('portfolio-positions-body');
+                    let portfolioTotalPnL = 0;
+                    if (portfolioPositions.length > 0) {
+                        portfolioBody.innerHTML = portfolioPositions.map(p => {
+                            const pnl = parseFloat(p.pnl || 0);
+                            portfolioTotalPnL += pnl;
+
+                            // Mission Control v7.0: Improved Manual vs Algo tag display
+                            const strategyTag = p.strategy || 'Manual';
+                            const isAlgo = strategyTag !== 'Manual' && strategyTag !== 'Futures';
+                            const tagClass = isAlgo
+                                ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                                : 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30';
+                            const tagText = isAlgo ? 'ALGO' : 'MANUAL';
+                            return `
+                                <tr class="border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/30">
+                                    <td class="py-2 font-mono text-xs">
+                                        <div class="flex items-center gap-2">
+                                            <span>${p.instrument}</span>
+                                            <span class="px-1.5 py-0.5 rounded text-[9px] font-bold border ${tagClass}">${tagText}</span>
+                                        </div>
+                                    </td>
+                                    <td class="py-2 text-right font-mono text-xs ${p.qty > 0 ? 'text-green-400' : 'text-red-400'}">${p.qty}</td>
+                                    <td class="py-2 text-right font-mono text-xs ${getPnLColor(pnl)}">${formatCurrency(pnl)}</td>
+                                </tr>`;
+                        }).join('');
+                    } else {
+                        portfolioBody.innerHTML = '<tr><td colspan="3" class="py-8 text-center text-zinc-600 italic">No active positions</td></tr>';
+                    }
+
+                    document.getElementById('total-pnl').innerText = formatCurrency(portfolioTotalPnL);
+                    document.getElementById('total-pnl').className = `text-3xl font-bold tracking-tight ${getPnLColor(portfolioTotalPnL)}`;
+                }
+
+                lucide.createIcons();
+
+            } catch (e) {
+                console.error("Dashboard update failed:", e);
+            }
+        }
+
+        setInterval(() => {
+            document.getElementById('clock').innerText = new Date().toLocaleTimeString('en-IN');
+        }, 1000);
+
+        setInterval(updateDashboard, 2000);
+        updateDashboard();
+    </script>
+</body>
+
+</html>

@@ -12,6 +12,7 @@ import { ModeBadge } from '@/components/tiles/ModeBadge';
 import { MetricCard } from '@/components/tiles/MetricCard';
 import { PositionsTable } from '@/components/tables/PositionsTable';
 import { OrdersTable } from '@/components/tables/OrdersTable';
+import { PortfolioPanel } from '@/components/portfolio/PortfolioPanel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -249,6 +250,16 @@ export default function Dashboard() {
             />
           </div>
         )}
+
+        {/* Portfolio Panel - Broker State */}
+        <Card className="border-2 border-blue-500">
+          <CardHeader>
+            <CardTitle className="text-lg font-bold">📊 Broker Portfolio Cockpit</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <PortfolioPanel />
+          </CardContent>
+        </Card>
 
         {/* Exchange Panel (Crypto) */}
         {health?.crypto_venue && derived && (

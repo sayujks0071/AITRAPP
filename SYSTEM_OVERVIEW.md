@@ -1,12 +1,12 @@
 # AITRAPP System Overview
 
-## Multi-Venue Trading Platform
+## NSE Trading Platform
 
-AITRAPP is a **unified trading platform** that supports **both Indian markets AND crypto markets**.
+AITRAPP is a **trading platform focused on Indian markets (NSE)**.
 
 ---
 
-## 🏛️ Indian Markets (Original/Base System)
+## 🏛️ Indian Markets (NSE)
 
 ### Supported Venues
 - **NSE** (National Stock Exchange) - Equities, Futures, Options
@@ -35,142 +35,121 @@ AITRAPP is a **unified trading platform** that supports **both Indian markets AN
 ### Strategies
 - **ORB** (Opening Range Breakout)
 - **TrendPullback**
-- **OptionsRanker**
+- **SMAMomentum** (vectorbt-inspired)
+- **MeanReversion** (bt-inspired)
+- **RSIMeanReversion** (vectorbt-inspired)
+- **OptionsRanker** (options strategies)
 
 ### Configuration
-- `configs/app.yaml` - Main config for Indian markets
-- `configs/canary_live.yaml` - Canary live trading config
-
----
-
-## 🪙 Crypto Markets (Recently Added)
-
-### Supported Venues
-- **BINANCE_SPOT** (Primary - just switched from Kraken)
-- **KRAKEN_SPOT** (Still supported)
-
-### Trading Modes
-- `CRYPTO_PAPER` - Paper trading (simulation)
-- `CRYPTO_LIVE` - Live trading
-- `CRYPTO_CANARY_LIVE` - Canary live (limited symbols/risk)
-
-### Asset Types
-- **CRYPTO** - Spot trading only (no leverage)
-
-### API Integration
-- **Binance Spot API** (REST + WebSocket)
-- **Kraken Spot API** (REST + WebSocket)
-- Native OCO support (Binance)
-- Client-side OCO emulation (Kraken)
-
-### Market Hours
-- **24/7** - No market hours restrictions
-- Continuous trading
-
-### Strategies
-- Reuses same strategies (ORB, etc.)
-- Adapted for crypto symbol format
-
-### Configuration
-- `configs/crypto_paper.yaml` - Crypto paper trading
-- `configs/crypto_live.yaml` - Crypto live trading
-- `configs/crypto_canary_live.yaml` - Crypto canary (BTCUSDT only)
+- `configs/app.yaml` - Default NSE paper trading config
+- `configs/kite_paper.yaml` - NSE paper trading config
+- `configs/kite_day1_live.yaml` - NSE live trading config
+- `configs/kite_canary_live.yaml` - NSE canary live trading config
 
 ---
 
 ## 🔀 How It Works
 
-### Mode-Based Routing
+### Mode-Based Configuration
 
-The system routes to the appropriate venue based on `APP_MODE`:
+The system uses `APP_MODE` environment variable:
 
 ```python
 # Indian Markets
-APP_MODE=PAPER   → Uses KiteConnect, NSE/BSE
-APP_MODE=LIVE    → Uses KiteConnect, NSE/BSE
-
-# Crypto Markets
-APP_MODE=CRYPTO_PAPER  → Uses Binance/Kraken (paper mode)
-APP_MODE=CRYPTO_LIVE   → Uses Binance/Kraken (live mode)
+APP_MODE=PAPER   → Uses KiteConnect, NSE/BSE (paper trading)
+APP_MODE=LIVE    → Uses KiteConnect, NSE/BSE (live trading)
 ```
 
 ### Orchestrator Logic
 
 ```python
 # In orchestrator.start()
-if settings.app_mode.value in ("CRYPTO_PAPER", "CRYPTO_LIVE"):
-    # Initialize crypto router
-    await self.crypto_router.connect_ws()
-    # Subscribe to crypto symbols
-else:
-    # Initialize equity market data stream
-    self.market_data_stream.start()
-    # Subscribe to NSE/BSE instruments
+# Initialize equity market data stream
+self.market_data_stream.start()
+# Subscribe to NSE/BSE instruments
 ```
 
 ---
 
-## 📊 Key Differences
+## 📊 Key Features
 
-| Feature | Indian Markets | Crypto Markets |
-|---------|---------------|----------------|
-| **Venues** | NSE, BSE | Binance, Kraken |
-| **API** | KiteConnect | Binance/Kraken REST+WS |
-| **Hours** | 9:15 AM - 3:25 PM IST | 24/7 |
-| **Assets** | Equity, Futures, Options | Spot Crypto |
-| **OCO** | Native (Kite) | Native (Binance), Emulated (Kraken) |
-| **Timezone** | Asia/Kolkata | UTC |
-| **Risk** | Margin-based | Balance-based (spot) |
+| Feature | Indian Markets |
+|---------|---------------|
+| **Venues** | NSE, BSE |
+| **API** | KiteConnect |
+| **Hours** | 9:15 AM - 3:25 PM IST |
+| **Assets** | Equity, Futures, Options |
+| **OCO** | Native (Kite) |
+| **Timezone** | Asia/Kolkata |
+| **Risk** | Margin-based |
 
 ---
 
 ## 🚀 Usage Examples
 
-### Indian Markets (PAPER)
+### NSE Paper Trading (Default)
 ```bash
-cp configs/app.yaml configs/app.yaml  # Already configured
+# Default config is already set to PAPER mode
 export APP_MODE=PAPER
 make paper
 ```
 
-### Indian Markets (LIVE)
+### NSE Live Trading
 ```bash
-cp configs/canary_live.yaml configs/app.yaml
+cp configs/kite_day1_live.yaml configs/app.yaml
 export APP_MODE=LIVE
 make live
 ```
 
-### Crypto Markets (PAPER)
+### NSE Canary Live Trading
 ```bash
-cp configs/crypto_paper.yaml configs/app.yaml
-export APP_MODE=CRYPTO_PAPER
-export BINANCE_API_KEY="..."
-export BINANCE_API_SECRET="..."
-make crypto-paper
-```
-
-### Crypto Markets (LIVE)
-```bash
-cp configs/crypto_canary_live.yaml configs/app.yaml
-export APP_MODE=CRYPTO_LIVE
-export BINANCE_API_KEY="..."
-export BINANCE_API_SECRET="..."
-make crypto-canary-launch
+cp configs/kite_canary_live.yaml configs/app.yaml
+export APP_MODE=LIVE
+make kite-canary-launch
 ```
 
 ---
 
 ## 🎯 Summary
 
-**AITRAPP is a unified platform that handles:**
-- ✅ **Indian Markets** (NSE/BSE) - Equities, Futures, Options
-- ✅ **Crypto Markets** (Binance/Kraken) - Spot trading
+**AITRAPP is a trading platform focused on:**
+- **Indian Markets (NSE/BSE)** only
+- **Paper Trading** by default (safe for research)
+- **Live Trading** with proper safety gates
+- **Multiple Strategies** for different market conditions
+- **Risk Management** with position limits and daily stops
 
-**You can run either:**
-- Indian markets only (PAPER/LIVE)
-- Crypto markets only (CRYPTO_PAPER/CRYPTO_LIVE)
-- **But NOT both simultaneously** (single APP_MODE at a time)
+---
 
-The recent work has been focused on **adding crypto support** to the existing Indian markets platform, making it a true multi-venue system.
+## 📝 Configuration Files
 
+### Paper Trading
+- `configs/app.yaml` - Default NSE paper trading (loaded by default)
+- `configs/kite_paper.yaml` - NSE paper trading with all strategies
 
+### Live Trading
+- `configs/kite_day1_live.yaml` - Full NSE live trading config
+- `configs/kite_canary_live.yaml` - Conservative canary live config
+
+### Strategy-Specific
+- `configs/regime_vol_engine.yaml` - Regime classification
+- `configs/options/` - Options strategy configs
+- `configs/strategies/` - Individual strategy configs
+
+---
+
+## 🔒 Safety Features
+
+1. **Paper Trading Default**: System defaults to PAPER mode
+2. **Live Mode Gates**: Multiple safety checks before allowing LIVE mode
+3. **Risk Limits**: Position limits, portfolio heat, daily loss stops
+4. **EOD Square-Off**: Automatic position flattening at 15:25 IST
+5. **Market Hours Validation**: Strategies only trade during market hours
+
+---
+
+## 📚 Documentation
+
+- `strategy_sources/` - Strategy design references
+- `docs/` - System documentation
+- `README.md` - Getting started guide

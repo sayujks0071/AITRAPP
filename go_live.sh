@@ -4,8 +4,10 @@
 # Automated daily authentication and strategy rollout for AITRAPP
 #
 # Usage:
-#   ./go_live.sh              # Full workflow with authentication
-#   ./go_live.sh --skip-login # Skip authentication (use existing token)
+#   ./go_live.sh                                    # Full workflow with authentication (if token stale)
+#   ./go_live.sh --skip-login                       # Skip authentication (use existing token)
+#   ./go_live.sh --force-login                      # Force new login (bypass freshness check)
+#   ./go_live.sh --force-login "redirect_url_here"  # Force login with redirect URL (non-interactive)
 #
 # This script:
 # 1. Runs express login to refresh Kite token (unless --skip-login)
@@ -16,8 +18,16 @@ set -e  # Exit on any error
 
 # Parse arguments
 SKIP_LOGIN=false
+FORCE_LOGIN=false
+REDIRECT_URL=""
 if [[ "$1" == "--skip-login" ]]; then
     SKIP_LOGIN=true
+elif [[ "$1" == "--force-login" ]]; then
+    FORCE_LOGIN=true
+    # Check if redirect URL is provided as second argument
+    if [[ -n "$2" && "$2" != "--"* ]]; then
+        REDIRECT_URL="$2"
+    fi
 fi
 
 # Colors for better visibility
@@ -85,7 +95,7 @@ if [ -f "$REPO_ROOT/.env" ]; then
     fi
 fi
 
-# Only run login if token is missing or stale, or if --skip-login not set
+# Only run login if token is missing or stale, or if --force-login is set
 if [ "$SKIP_LOGIN" = true ]; then
     echo -e "${GREEN}✅ Authentication skipped (--skip-login flag)${NC}"
     # Ensure token is loaded from .env
@@ -94,8 +104,29 @@ if [ "$SKIP_LOGIN" = true ]; then
         source "$REPO_ROOT/.env"
         set +a
     fi
+elif [ "$FORCE_LOGIN" = true ]; then
+    echo -e "${YELLOW}🔄 Force login requested (bypassing freshness check)...${NC}"
+    if [ -n "$REDIRECT_URL" ]; then
+        echo -e "${BLUE}   Using provided redirect URL${NC}"
+        if ! python3 "$REPO_ROOT/scripts/express_login.py" --redirect-url "$REDIRECT_URL"; then
+            echo -e "\n${RED}❌ Authentication failed!${NC}"
+            echo -e "${YELLOW}Login script exited with error. Aborting deployment.${NC}"
+            exit 1
+        fi
+    else
+        if ! python3 "$REPO_ROOT/scripts/express_login.py"; then
+            echo -e "\n${RED}❌ Authentication failed!${NC}"
+            echo -e "${YELLOW}Login script exited with error. Aborting deployment.${NC}"
+            echo -e "${YELLOW}Tip: You can provide redirect URL: ./go_live.sh --force-login 'http://localhost:8080/callback?request_token=...'${NC}"
+            exit 1
+        fi
+    fi
+    # Reload .env after login
+    set -a
+    source "$REPO_ROOT/.env"
+    set +a
 elif [ "$TOKEN_FRESH" = false ] || [ "$TOKEN_EXISTS" = false ]; then
-    echo -e "${YELLOW}🔄 Running authentication...${NC}"
+    echo -e "${YELLOW}🔄 Running authentication (token missing or stale)...${NC}"
     if ! python3 "$REPO_ROOT/scripts/express_login.py"; then
         echo -e "\n${RED}❌ Authentication failed!${NC}"
         echo -e "${YELLOW}Login script exited with error. Aborting deployment.${NC}"
@@ -107,6 +138,7 @@ elif [ "$TOKEN_FRESH" = false ] || [ "$TOKEN_EXISTS" = false ]; then
     set +a
 else
     echo -e "${GREEN}✅ Authentication skipped - token is fresh${NC}"
+    echo -e "${YELLOW}   (Use --force-login to force a new login)${NC}"
 fi
 
 # Verify that token was updated

@@ -52,7 +52,7 @@ jobs:
       
       - name: Deploy via SSH
         if: github.ref == 'refs/heads/main'
-        uses: appleboy/ssh-action@5a3aeae8c0c4b4c8c8c8c8c8c8c8c8c8c8c8c8c8
+        uses: appleboy/ssh-action@91f3272fc5907f4699dcf59761eb622a07342f5a  # v1.2.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -71,6 +71,10 @@ jobs:
             # Wait for health check
             sleep 5
             curl -f http://localhost:3000 || exit 1
+
+
+
+
 
 
 

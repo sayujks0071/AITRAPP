@@ -1,4 +1,4 @@
-.PHONY: help dev paper live stop clean test test-integration test-replay lint format install ops-smoke ops-smoke-no-ui ops-verify-cors ops-verify-preflight ops-verify-expose ops-smoke-proxy
+.PHONY: help dev paper paper-start paper-boot paper-stop live stop stop-docker clean test test-integration test-replay lint format install ops-smoke ops-smoke-no-ui ops-verify-cors ops-verify-preflight ops-verify-expose ops-smoke-proxy
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -27,7 +27,18 @@ dev: ## Start development environment (Docker)
 	@echo "Postgres: localhost:5432"
 	@echo "Redis: localhost:6379"
 
-paper: ## Run in PAPER mode (safe simulation)
+up-infra: ## Start infrastructure services (Postgres + Redis)
+	@echo "Starting AITRAPP infrastructure..."
+	docker-compose up -d postgres redis
+	@echo "Waiting for services to be healthy..."
+	@sleep 3
+	@docker-compose ps
+	@echo ""
+	@echo "✅ Infrastructure started"
+	@echo "Postgres: localhost:5432"
+	@echo "Redis: localhost:6379"
+
+paper: ## Run in PAPER mode (safe simulation) - foreground
 	@echo "Starting in PAPER MODE (simulation only)"
 	@if [ -d "venv" ]; then \
 		echo "Using virtual environment..."; \
@@ -36,6 +47,15 @@ paper: ## Run in PAPER mode (safe simulation)
 	PORT=$${PORT:-8000}; \
 	export APP_MODE=PAPER; \
 	python -m uvicorn apps.api.main:app --host 0.0.0.0 --port $$PORT
+
+paper-start: ## Start paper API in background (logs to logs/api_8000.log)
+	@scripts/start_paper_api.sh
+
+paper-boot: ## Morning bootstrap: start paper API and verify health/ready
+	@scripts/morning_paper_boot.sh
+
+paper-stop: ## Stop paper API (by PID or port)
+	@scripts/stop_paper_api.sh
 
 live: ## Run in LIVE mode (⚠️ REAL TRADING - USE WITH CAUTION)
 	@echo "╔════════════════════════════════════════════════╗"
@@ -53,8 +73,11 @@ live: ## Run in LIVE mode (⚠️ REAL TRADING - USE WITH CAUTION)
 		exit 1; \
 	fi
 
-stop: ## Stop all services
-	docker-compose down
+stop: paper-stop ## Stop all services (API + Docker)
+	@docker-compose down
+
+stop-docker: ## Stop only Docker services
+	@docker-compose down
 
 clean: ## Clean up containers and volumes
 	docker-compose down -v
@@ -87,6 +110,9 @@ burnin-report: ## Generate daily trading report
 
 verify-env: ## Verify environment and connectivity
 	python scripts/verify_env.py
+
+health-check: ## Run comprehensive infrastructure health check
+	python3 scripts/health_check.py
 
 verify-r1: ## Verify R1 Regime-Switching Volatility Engine is loaded and working
 	python3 scripts/verify_r1.py
@@ -182,36 +208,17 @@ migration-checklist: ## Run complete migration checklist
 start-paper: ## Start complete PAPER session (automated)
 	bash scripts/start_paper_session.sh
 
-crypto-paper: ## Start API in CRYPTO_PAPER mode
-	@echo "Starting in CRYPTO_PAPER mode..."
-	@if [ -z "$$BINANCE_API_KEY" ] || [ -z "$$BINANCE_API_SECRET" ]; then \
-		echo "⚠️  Warning: BINANCE_API_KEY or BINANCE_API_SECRET not set"; \
-		echo "   Set them with: export BINANCE_API_KEY=... BINANCE_API_SECRET=..."; \
-	fi; \
-	if [ -d "venv" ]; then \
-		echo "Using virtual environment..."; \
-		source venv/bin/activate; \
-	fi; \
-	export APP_MODE=CRYPTO_PAPER; \
-	export APP_TIMEZONE=UTC; \
-	export PYTHONPATH=.; \
-	uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
-
-score-crypto-day1: ## Run crypto Day-1 scorer
-	bash scripts/score_crypto_day1.sh
+# Crypto-related targets removed - focusing on NSE only
+# crypto-paper: ## (REMOVED - NSE focus only)
+# score-crypto-day1: ## (REMOVED - NSE focus only)
 
 watch-metrics: ## Watch key metrics (leader, heartbeats, errors) - generic for Kite/Crypto
 	@watch -n 5 'curl -s http://localhost:8000/metrics 2>/dev/null | grep -E "^trader_(is_leader|.*heartbeat.*|.*errors.*|oco_orphans_total)" | sort' || echo "⚠️  API not running or watch command not available"
 
-watch-crypto: ## Watch crypto metrics (heartbeats, WS reconnects, OCO orphans, Binance rate limits)
-	@watch -n 5 'curl -s http://localhost:8000/metrics 2>/dev/null | grep -E "^trader_(is_leader|marketdata_heartbeat_seconds|order_stream_heartbeat_seconds|scan_heartbeat_seconds|crypto_ws_reconnects_total|oco_orphans_total|binance_used_weight_1m|binance_order_count_1m|binance_listenkey_renew_total|binance_time_skew_ms)" | sort' || echo "⚠️  API not running or watch command not available"
-
-watch-all: ## Watch all key metrics (unified - equity + crypto)
-	@watch -n 5 'curl -s http://localhost:8000/metrics 2>/dev/null | grep -E "^(trader_is_leader|trader_(marketdata|order_stream|scan)_heartbeat_seconds|trader_scan_ticks_total|trader_leader_changes_total|trader_oco_orphans_total|trader_crypto_ws_reconnects_total|trader_binance_(used_weight_1m|order_count_1m|time_skew_ms|listenkey_renew_total))" | sort' || echo "⚠️  API not running or watch command not available"
-
-crypto-oco-drill: ## Run crypto OCO drill (inject plan + flatten)
-	@echo "🧪 Running crypto OCO drill..."
-	@python scripts/synthetic_crypto_plan.py || (echo "❌ Plan injection failed" && exit 1)
+# Crypto-related targets removed - focusing on NSE only
+# watch-crypto: ## (REMOVED - NSE focus only)
+# watch-all: ## (REMOVED - NSE focus only)
+# crypto-oco-drill: ## (REMOVED - NSE focus only)
 	@sleep 2
 	@echo "📉 Flattening positions..."
 	@curl -fsS -X POST http://localhost:8000/flatten | jq || (echo "❌ Flatten failed" && exit 1)
@@ -309,6 +316,9 @@ kite-token-smoke: ## Smoke test token refresh script (no secrets, dry run)
 verify-infra: ## Verify infrastructure (orchestrator, metrics, docker, watch commands)
 	@bash scripts/verify_infrastructure.sh
 
+proxy-health: ## Check proxy health and verify static IP (SEBI compliance)
+	@python3 scripts/check_proxy_health.py
+
 # Ops Browser Commands
 ops-smoke: ## Run ops browser smoke test (API + UI)
 	@if [ -z "$$API_BASE" ]; then API_BASE=http://localhost:8000; fi; \
@@ -337,14 +347,10 @@ ops-smoke-proxy: ## Run production smoke test (API behind reverse proxy)
 	API=$$API ORIGIN=$$ORIGIN \
 	bash apps/ops-browser/scripts/prod_smoke_proxy.sh
 
-crypto-prelaunch-smoke: ## Run 30-second pre-launch smoke test
-	bash scripts/crypto_prelaunch_smoke.sh
-
-crypto-validation-flight: ## Run 7-minute Binance validation flight
-	bash scripts/crypto_validation_flight.sh
-
-test-binance: ## Run Binance adapter unit tests
-	pytest tests/test_binance_spot.py -v
+# Crypto-related targets removed - focusing on NSE only
+# crypto-prelaunch-smoke: ## (REMOVED - NSE focus only)
+# crypto-validation-flight: ## (REMOVED - NSE focus only)
+# test-binance: ## (REMOVED - NSE focus only)
 
 quick-proveout: ## Run quick prove-out test (health, metrics, kill-switch)
 	bash scripts/quick_proveout.sh

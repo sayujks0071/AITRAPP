@@ -3,7 +3,7 @@ import asyncio
 import os
 import time as time_module
 from datetime import datetime, time, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 from kiteconnect import KiteConnect
@@ -11,6 +11,9 @@ from kiteconnect import KiteConnect
 from packages.core.config import app_config, settings
 from packages.core.execution import ExecutionEngine, OrderResult
 from packages.core.exits import ExitManager, ExitReason, ExitSignal
+from packages.core.exit_enhancements import EnhancedExitManager
+from packages.core.position_adjuster import PositionAdjuster, AdjustmentConfig, AdjustmentStrategy
+from packages.core.position_reconciliation import PositionReconciler
 from packages.core.instruments import InstrumentManager
 from packages.core.market_data import MarketDataStream
 from packages.core.models import Position, PositionStatus, Signal, SignalSide, SystemState
@@ -61,7 +64,11 @@ class TradingOrchestrator:
         strategy_allocator: Optional[Any] = None,
         oco_manager: Optional[OCOManager] = None,
         crypto_router: Optional[Any] = None,
-        delta_neutralizer: Optional[Any] = None
+        delta_neutralizer: Optional[Any] = None,
+        autonomous_capital_allocator: Optional[Any] = None,
+        portfolio_manager: Optional[Any] = None,
+        logic_heartbeat: Optional[Callable[[], None]] = None,
+        notification_service: Optional[Any] = None
     ):
         self.kite = kite
         self.position_store = position_store
@@ -77,6 +84,10 @@ class TradingOrchestrator:
         self.oco_manager = oco_manager
         self.crypto_router = crypto_router
         self.delta_neutralizer = delta_neutralizer
+        self.autonomous_capital_allocator = autonomous_capital_allocator
+        self.portfolio_manager = portfolio_manager
+        self._logic_heartbeat = logic_heartbeat
+        self.notification_service = notification_service
         self.leader_lock: Optional[LeaderLock] = None
         
         # State
@@ -130,6 +141,65 @@ class TradingOrchestrator:
             allocator_enabled=bool(strategy_allocator)
         )
         
+        # NEW: Self-Healing integration
+        self._self_healing_enabled = os.getenv("SELF_HEALING_ENABLED", "true").lower() == "true"
+        self._self_diagnostics: Optional[Any] = None
+        self._self_healing: Optional[Any] = None
+        self._last_diagnostics_run: Optional[datetime] = None
+        self._diagnostics_interval = 300  # 5 minutes
+        self._blocking_anomalies: List[str] = []  # Anomalies that block trading
+        
+        if self._self_healing_enabled:
+            try:
+                from packages.core.self_healing import SelfDiagnostics, SelfHealing
+                from packages.core.rag_memory import RAGMemory
+                from pathlib import Path
+                
+                # Initialize diagnostics
+                self._self_diagnostics = SelfDiagnostics()
+                
+                # Initialize healing (if config path available)
+                config_path = Path(app_config.config_path) if hasattr(app_config, 'config_path') else Path("configs/kite_day1_live.yaml")
+                if config_path.exists():
+                    memory = RAGMemory()
+                    self._self_healing = SelfHealing(
+                        config_path=str(config_path),
+                        memory=memory,
+                        healing_enabled=True
+                    )
+                    logger.info("Self-healing system initialized", config_path=str(config_path))
+                else:
+                    logger.warning(f"Self-healing disabled: config file not found at {config_path}")
+                    self._self_healing_enabled = False
+            except Exception as e:
+                logger.warning(f"Self-healing initialization failed: {e}", exc_info=True)
+                self._self_healing_enabled = False
+
+        # NEW: Position Adjuster for partial fills
+        adjuster_config = AdjustmentConfig(
+            default_strategy=AdjustmentStrategy.RETRY_FAILED,
+            max_retry_attempts=3,
+            retry_delay_seconds=1.0,
+            allow_partial_positions=True,
+            hedge_partial_fills=False,
+            notify_on_partial=True
+        )
+        self.position_adjuster = PositionAdjuster(self.execution_engine, adjuster_config)
+        logger.info("Position adjuster initialized", strategy="RETRY_FAILED", max_retries=3)
+
+        # NEW: Enhanced Exit Manager (replaces standard exit manager for spreads)
+        # If exit_manager is already EnhancedExitManager, keep it; otherwise wrap it
+        if not isinstance(exit_manager, EnhancedExitManager):
+            logger.info("Upgrading exit manager to EnhancedExitManager")
+            self.enhanced_exit_manager = EnhancedExitManager(app_config.exits)
+        else:
+            self.enhanced_exit_manager = exit_manager
+
+        # NEW: Position Reconciler for Kite API sync
+        # Note: database will be set up in start() method
+        self.position_reconciler: Optional[PositionReconciler] = None
+        logger.info("Position reconciler will be initialized on start")
+
     async def start(self) -> None:
         """Start the trading orchestrator"""
         logger.info("Starting Trading Orchestrator", mode=settings.app_mode.value)
@@ -140,23 +210,58 @@ class TradingOrchestrator:
             self.leader_lock = LeaderLock(self.redis_bus.redis)
             acquired = await self.leader_lock.acquire()
             if not acquired:
-                logger.critical("Failed to acquire leader lock - another instance may be running")
-                raise RuntimeError("Cannot start: leader lock not acquired")
-            
-            # Set leader metric immediately
-            instance_id = getattr(self.leader_lock, 'instance_id', 'default')
-            is_leader.labels(instance_id=instance_id).set(1)
-            logger.info("Leader lock acquired and metric set", instance_id=instance_id)
-            
-            # Start refresh task
-            asyncio.create_task(self._refresh_leader_lock())
+                if settings.app_mode.value == "PAPER":
+                    # In paper mode, proceed without a hard leader lock to avoid local deadlocks
+                    instance_id = "paper-local"
+                    is_leader.labels(instance_id=instance_id).set(1)
+                    logger.warning("Leader lock not acquired in PAPER mode - proceeding as leader for local testing")
+                else:
+                    logger.critical("Failed to acquire leader lock - another instance may be running")
+                    raise RuntimeError("Cannot start: leader lock not acquired")
+            else:
+                # Set leader metric immediately
+                instance_id = getattr(self.leader_lock, 'instance_id', 'default')
+                is_leader.labels(instance_id=instance_id).set(1)
+                logger.info("Leader lock acquired and metric set", instance_id=instance_id)
+                
+                # Start refresh task
+                asyncio.create_task(self._refresh_leader_lock())
         
         # Re-arm OCO watchers for open positions (crash-safe recovery)
         await self._recover_open_positions()
-        
+
+        # NEW: Initialize position reconciler and run startup reconciliation
+        if self.position_reconciler is None:
+            try:
+                self.position_reconciler = PositionReconciler(self.kite, db_session=None)
+                logger.info("Position reconciler initialized")
+
+                # Run startup reconciliation with auto-sync
+                logger.info("Running position reconciliation on startup...")
+                result = await self.position_reconciler.reconcile_and_sync(auto_sync=False)
+                logger.info(result.summary())
+
+                if not result.is_clean():
+                    logger.warning(
+                        "Position discrepancies found on startup",
+                        discrepancies=result.total_discrepancies,
+                        missing_in_system=len(result.missing_in_system)
+                    )
+                    # Log the missing positions for visibility
+                    for pos in result.missing_in_system:
+                        logger.info(
+                            "Position in Kite not in system",
+                            symbol=pos["symbol"],
+                            quantity=pos["kite_qty"],
+                            pnl=pos.get("kite_pnl", 0)
+                        )
+            except Exception as e:
+                logger.error(f"Position reconciliation failed: {e}", exc_info=True)
+                logger.warning("Continuing without position reconciliation")
+
         self.is_running = True
         self.is_paused = False
-        
+
         # Run initial allocation cycle if allocator is available
         if self.strategy_allocator:
             try:
@@ -194,8 +299,14 @@ class TradingOrchestrator:
                     logger.info("Continuing in CRYPTO_PAPER mode without WebSocket")
                 else:
                     raise
-        else:
-            # Start market data stream for equity mode
+        
+        # Start periodic diagnostics task (every 5 minutes)
+        if self._self_healing_enabled:
+            asyncio.create_task(self._periodic_diagnostics())
+            logger.info("Periodic diagnostics task started", interval_seconds=self._diagnostics_interval)
+        
+        # Start market data stream for equity mode
+        if settings.app_mode.value not in ("CRYPTO_PAPER", "CRYPTO_LIVE"):
             if not self.market_data_stream.is_connected:
                 self.market_data_stream.start()
                 await asyncio.sleep(2)  # Wait for connection
@@ -432,9 +543,10 @@ class TradingOrchestrator:
         
         # Get decision to find signal
         from packages.storage.database import get_db_session
+        from sqlalchemy.orm import selectinload
         from packages.storage.models import Decision, Position as DBPosition, PositionStatusEnum
         with get_db_session() as db:
-            decision = db.query(Decision).filter_by(id=order_model.decision_id).first()
+            decision = db.query(Decision).options(selectinload(Decision.signal)).filter_by(id=order_model.decision_id).first()
             if not decision or not decision.signal:
                 return
             
@@ -495,7 +607,7 @@ class TradingOrchestrator:
             with get_db_session() as db:
                 order_model = db.query(Order).filter_by(client_order_id=client_order_id).first()
             if order_model:
-                self.oco_manager.on_child_fill(parent_group, order_model)
+                await self.oco_manager.on_child_fill(parent_group, order_model)
         
         # Update position and create trade
         from packages.storage.database import get_db_session
@@ -565,6 +677,18 @@ class TradingOrchestrator:
         
         # Record metric
         kill_switch_total.labels(reason=reason).inc()
+
+        # Send alert (Telegram/Slack) without blocking control flow
+        if self.notification_service and getattr(self.notification_service, "is_configured", lambda: False)():
+            msg = (
+                f"Kill switch activated ({reason}) | "
+                f"open risk rupees: {open_risk:.2f} | positions: {positions_count}"
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, self.notification_service.send, msg, "CRITICAL")
+            except Exception as notify_err:
+                logger.warning("Kill switch notification failed", error=str(notify_err))
         
         # Send alert
         alert_manager.alert_kill_switch(
@@ -650,6 +774,11 @@ class TradingOrchestrator:
                     finally:
                         scan_ticks_total.inc()  # Increment tick counter
                         touch_scan()
+                        if self._logic_heartbeat:
+                            try:
+                                self._logic_heartbeat()
+                            except Exception:
+                                logger.warning("Sidecar heartbeat update failed", exc_info=True)
                 except asyncio.CancelledError:
                     scan_supervisor_state.set(4)  # stopping
                     raise
@@ -741,12 +870,21 @@ class TradingOrchestrator:
         }
         
         # Import StrategyContext (needed for both paths)
-        from packages.core.strategies.base import StrategyContext
+        from packages.core.strategies.base import StrategyContext, Strategy
         
-        # Check if strategy supports async execute()
-        supports_async = hasattr(strategy, 'execute') and callable(getattr(strategy, 'execute'))
+        # Check if strategy has overridden execute() (not just the base class default)
+        # The base class has a default execute() that calls generate_signals(),
+        # which expects context.instrument to exist. We only want to use bulk context
+        # for strategies that have actually overridden execute() to handle bulk contexts.
+        base_execute = Strategy.execute
+        strategy_execute = getattr(strategy.__class__, 'execute', None)
+        has_overridden_execute = (
+            strategy_execute is not None 
+            and strategy_execute is not base_execute
+            and callable(strategy_execute)
+        )
         
-        if supports_async:
+        if has_overridden_execute:
             # New strategy: Use async execute() with bulk context
             try:
                 # Build multi-instrument context (StatGeist-style)
@@ -952,10 +1090,21 @@ class TradingOrchestrator:
         - Regime shifts (R1)
         - Event changes (E1)
         
+        Level 9 (ACA) takes precedence if enabled, otherwise falls back to StrategyAllocator.
+        
         Args:
             regime_snapshot: Current regime snapshot from R1 (e.g., {"NIFTY": {"regime": "LOW_MEAN_REVERT", ...}})
             event_snapshot: Current event snapshot from E1 (e.g., {"today": {"is_event_day": False, ...}})
         """
+        # Priority: Level 12 (PME) > Level 9 (ACA) > StrategyAllocator
+        if self.portfolio_manager:
+            await self._run_pme_allocation(regime_snapshot, event_snapshot)
+            return
+        
+        if self.autonomous_capital_allocator:
+            await self._run_aca_allocation(regime_snapshot, event_snapshot)
+            return
+        
         if not self.strategy_allocator:
             return
         
@@ -1035,6 +1184,173 @@ class TradingOrchestrator:
         except Exception as e:
             logger.error(
                 f"StrategyAllocator refresh failed: {e}",
+                exc_info=True
+            )
+    
+    async def _run_aca_allocation(
+        self,
+        regime_snapshot: Optional[Dict[str, Any]],
+        event_snapshot: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Run Level 9 Autonomous Capital Allocator (ACA).
+        
+        Args:
+            regime_snapshot: Current regime snapshot from R1
+            event_snapshot: Current event snapshot from E1
+        """
+        if not self.autonomous_capital_allocator or not self.risk_manager:
+            return
+        
+        try:
+            # Extract current regime
+            current_regime = None
+            if regime_snapshot:
+                if "NIFTY" in regime_snapshot:
+                    regime_data = regime_snapshot["NIFTY"]
+                    if isinstance(regime_data, dict) and "regime" in regime_data:
+                        current_regime = regime_data["regime"]
+                elif regime_snapshot:
+                    for symbol, data in regime_snapshot.items():
+                        if isinstance(data, dict) and "regime" in data:
+                            current_regime = data["regime"]
+                            break
+            
+            if not current_regime:
+                logger.warning("⚠️  ACA: No regime detected, skipping allocation")
+                return
+            
+            # Extract event context
+            event_ctx = None
+            if event_snapshot:
+                # Try to extract event day flag from snapshot
+                if isinstance(event_snapshot, dict):
+                    if "today" in event_snapshot:
+                        today_data = event_snapshot["today"]
+                        if isinstance(today_data, dict):
+                            event_ctx = {"is_event_day": today_data.get("is_event_day", False)}
+                    elif "is_event_day" in event_snapshot:
+                        event_ctx = {"is_event_day": event_snapshot["is_event_day"]}
+            
+            # Run ACA allocation cycle
+            allocations = self.autonomous_capital_allocator.run_allocation_cycle(
+                current_regime=current_regime,
+                event_ctx=event_ctx
+            )
+            
+            # Apply allocations to risk manager
+            for alloc in allocations:
+                strategy_name = alloc.get("strategy_name")
+                cap_pct = alloc.get("capital_pct")
+                
+                if strategy_name and cap_pct is not None and cap_pct > 0:
+                    self.risk_manager.set_strategy_cap(
+                        strategy_name=strategy_name,
+                        max_capital_pct=cap_pct
+                    )
+            
+            logger.info(
+                "✅ ACA: Allocation cycle completed",
+                regime=current_regime,
+                num_allocations=len(allocations),
+                event_ctx=event_ctx
+            )
+        except Exception as e:
+            logger.error(
+                f"❌ ACA: Allocation cycle failed: {e}",
+                exc_info=True
+            )
+    
+    async def _run_pme_allocation(
+        self,
+        regime_snapshot: Optional[Dict[str, Any]],
+        event_snapshot: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Run Level 12 Portfolio Management Engine (PME).
+        
+        Args:
+            regime_snapshot: Current regime snapshot from R1
+            event_snapshot: Current event snapshot from E1
+        """
+        if not self.portfolio_manager or not self.risk_manager:
+            return
+        
+        try:
+            # Extract current regime
+            current_regime = None
+            if regime_snapshot:
+                if "NIFTY" in regime_snapshot:
+                    regime_data = regime_snapshot["NIFTY"]
+                    if isinstance(regime_data, dict) and "regime" in regime_data:
+                        current_regime = regime_data["regime"]
+                elif regime_snapshot:
+                    for symbol, data in regime_snapshot.items():
+                        if isinstance(data, dict) and "regime" in data:
+                            current_regime = data["regime"]
+                            break
+            
+            if not current_regime:
+                logger.warning("⚠️  PME: No regime detected, skipping allocation")
+                return
+            
+            # Get NAV (Net Asset Value) from risk manager
+            portfolio_risk = self._get_portfolio_risk()
+            nav = portfolio_risk.net_liquid
+            
+            if nav <= 0:
+                logger.warning("⚠️  PME: Invalid NAV, skipping allocation")
+                return
+            
+            # Extract event context
+            event_ctx = None
+            if event_snapshot:
+                if isinstance(event_snapshot, dict):
+                    if "today" in event_snapshot:
+                        today_data = event_snapshot["today"]
+                        if isinstance(today_data, dict):
+                            event_ctx = {"is_event_day": today_data.get("is_event_day", False)}
+                    elif "is_event_day" in event_snapshot:
+                        event_ctx = {"is_event_day": event_snapshot["is_event_day"]}
+            
+            # Get daily returns history for volatility targeting
+            # Calculate from portfolio risk (daily PnL / NAV)
+            daily_returns_history = []
+            if hasattr(portfolio_risk, 'daily_pnl') and portfolio_risk.daily_pnl is not None:
+                # If we have daily PnL, calculate return
+                if nav > 0:
+                    daily_return = portfolio_risk.daily_pnl / nav
+                    daily_returns_history = [daily_return]  # Single day for now
+            # TODO: In production, maintain rolling history of daily returns
+            
+            # Run PME allocation cycle
+            allocations = self.portfolio_manager.generate_allocation_vector(
+                regime=current_regime,
+                account_nav=nav,
+                daily_returns_history=daily_returns_history
+            )
+            
+            # Apply allocations to risk manager
+            for alloc in allocations:
+                strategy_name = alloc.get("strategy_name")
+                cap_pct = alloc.get("capital_pct")
+                
+                if strategy_name and cap_pct is not None and cap_pct > 0:
+                    self.risk_manager.set_strategy_cap(
+                        strategy_name=strategy_name,
+                        max_capital_pct=cap_pct
+                    )
+            
+            logger.info(
+                "✅ PME: Allocation cycle completed",
+                regime=current_regime,
+                nav=nav,
+                num_allocations=len(allocations),
+                event_ctx=event_ctx
+            )
+        except Exception as e:
+            logger.error(
+                f"❌ PME: Allocation cycle failed: {e}",
                 exc_info=True
             )
     
@@ -1176,6 +1492,16 @@ class TradingOrchestrator:
         
         logger.info(f"Top {len(ranked_opportunities)} ranked opportunities")
         
+        # NEW: Pre-trade safety check (self-healing integration)
+        if self._self_healing_enabled and self._self_diagnostics:
+            blocking = await self._pre_trade_safety_check()
+            if blocking:
+                logger.warning(
+                    "Trading blocked by self-healing diagnostics",
+                    blocking_anomalies=self._blocking_anomalies
+                )
+                return  # Block entire scan cycle if critical anomalies detected
+        
         # 3. Persist signals and execute top opportunities
         for rank, opportunity in enumerate(ranked_opportunities[:3], 1):  # Top 3 only
             if self.is_paused:
@@ -1183,8 +1509,12 @@ class TradingOrchestrator:
             
             signal = opportunity.signal
             
+            # Record signal in diagnostics
+            if self._self_healing_enabled and self._self_diagnostics:
+                self._self_diagnostics.record_signal(datetime.now())
+            
             # Persist signal with features
-            signal_model = persist_signal(
+            signal_id = persist_signal(
                 signal=signal,
                 score=opportunity.score,
                 rank=rank,
@@ -1193,14 +1523,14 @@ class TradingOrchestrator:
                 penalties=opportunity.penalties if hasattr(opportunity, 'penalties') else {}
             )
             record_signal_ranked(signal.strategy_name, signal.instrument.symbol, rank)
-            
+
             # Risk check
             portfolio_risk = self._get_portfolio_risk()
             risk_check = self.risk_manager.check_signal(signal, portfolio_risk)
-            
+
             # Persist decision
-            decision_model = persist_decision(
-                signal_model=signal_model,
+            decision_id = persist_decision(
+                signal_id=signal_id,
                 approved=risk_check.approved,
                 risk_pct=risk_check.risk_pct,
                 risk_amount=risk_check.risk_amount if hasattr(risk_check, 'risk_amount') else 0.0,
@@ -1210,18 +1540,23 @@ class TradingOrchestrator:
                 portfolio_heat_after=portfolio_risk.portfolio_heat_pct,  # Will update after execution
                 rejection_reasons=risk_check.reasons if not risk_check.approved else None
             )
-            
+
             # Publish decision to Redis
             if self.redis_bus:
                 asyncio.create_task(self.redis_bus.publish_decision({
-                    "decision_id": decision_model.id,
-                    "signal_id": signal_model.id,
+                    "decision_id": decision_id,
+                    "signal_id": signal_id,
                     "approved": risk_check.approved,
                     "position_size": risk_check.position_size,
                     "risk_pct": risk_check.risk_pct
                 }))
             
             if not risk_check.approved:
+                # Record rejection in diagnostics
+                if self._self_healing_enabled and self._self_diagnostics:
+                    rejection_reason = risk_check.reasons[0] if risk_check.reasons else "unknown"
+                    self._self_diagnostics.record_rejection(rejection_reason, signal.strategy_name)
+                
                 record_decision_rejected(signal.strategy_name, signal.instrument.symbol, 
                                        risk_check.reasons[0] if risk_check.reasons else "unknown")
                 logger.debug(
@@ -1242,9 +1577,9 @@ class TradingOrchestrator:
                     position_size=risk_check.position_size
                 )
             else:
-                await self._execute_signal(signal, risk_check.position_size, decision_model)
-    
-    async def _execute_signal(self, signal: Signal, quantity: int, decision_model) -> None:
+                await self._execute_signal(signal, risk_check.position_size, decision_id)
+
+    async def _execute_signal(self, signal: Signal, quantity: int, decision_id: int) -> None:
         """Execute a trading signal with persistence"""
         try:
             logger.info(
@@ -1256,18 +1591,45 @@ class TradingOrchestrator:
             )
             
             # Place entry order
-            result, order = await self.execution_engine.execute_signal(signal, quantity)
-            
-            if result == OrderResult.SUCCESS and order:
+            # Convert signal side (LONG/SHORT) to order side (BUY/SELL)
+            order_side = "BUY" if signal.side == SignalSide.LONG else "SELL"
+            order = await self.execution_engine.place_order(
+                symbol=signal.instrument.tradingsymbol,
+                side=order_side,
+                quantity=quantity,
+                product="NRML",
+                order_type="MARKET",
+                price=None,
+                tag=f"{signal.strategy_name}_ENTRY",
+                instrument=signal.instrument
+            )
+
+            if order.success:
+                # Record fill in diagnostics (for latency and slippage tracking)
+                if self._self_healing_enabled and self._self_diagnostics:
+                    signal_time = signal.timestamp if hasattr(signal, 'timestamp') else datetime.now()
+                    fill_time = datetime.now()
+                    # Calculate slippage (simplified - would need actual expected price)
+                    slippage_bps = 0.0  # Placeholder - would calculate from signal.entry_price vs order.avg_price
+                    if hasattr(signal, 'entry_price') and order.avg_price:
+                        price_diff = abs(order.avg_price - signal.entry_price)
+                        slippage_bps = (price_diff / signal.entry_price) * 10000 if signal.entry_price > 0 else 0.0
+                    self._self_diagnostics.record_fill(
+                        signal_time=signal_time,
+                        fill_time=fill_time,
+                        slippage_bps=slippage_bps,
+                        strategy=signal.strategy_name
+                    )
+                
                 # Persist order
                 order_model = persist_order(
-                    decision_model=decision_model,
+                    decision_id=decision_id,
                     symbol=signal.instrument.symbol,
                     instrument_token=signal.instrument.token,
                     side="BUY" if signal.side == SignalSide.LONG else "SELL",
                     qty=quantity,
                     order_type="MARKET",
-                    price=order.average_price,
+                    price=order.avg_price,
                     tag="ENTRY",
                     parent_group=None,  # Will be set by OCO manager
                     broker_order_id=order.order_id if hasattr(order, 'order_id') else None,
@@ -1289,10 +1651,10 @@ class TradingOrchestrator:
                     position_id=f"POS_{datetime.now().strftime('%Y%m%d%H%M%S')}_{len(self.positions)}",
                     instrument=signal.instrument,
                     entry_time=datetime.now(),
-                    entry_price=order.average_price,
-                    quantity=order.filled_quantity,
+                    entry_price=order.avg_price,
+                    quantity=order.filled_qty,
                     side=signal.side,
-                    current_price=order.average_price,
+                    current_price=order.avg_price,
                     stop_loss=signal.stop_loss,
                     take_profit_1=signal.take_profit_1,
                     take_profit_2=signal.take_profit_2,
@@ -1320,7 +1682,7 @@ class TradingOrchestrator:
                     "Position opened",
                     position_id=position.position_id,
                     instrument=signal.instrument.tradingsymbol,
-                    entry_price=order.average_price
+                    entry_price=order.avg_price
                 )
         
         except Exception as e:
@@ -1355,9 +1717,9 @@ class TradingOrchestrator:
                 if tick and bars_5s:
                     market_data[token] = (tick, bars_5s)
         
-        # Check exits
+        # Check exits (use enhanced exit manager for spread-specific logic)
         portfolio_risk = self._get_portfolio_risk()
-        exit_signals = self.exit_manager.check_exits(
+        exit_signals = self.enhanced_exit_manager.check_exits(
             [p for p in self.positions if p.is_open],
             market_data,
             datetime.now(),
@@ -1383,28 +1745,28 @@ class TradingOrchestrator:
             if exit_order:
                 position.status = PositionStatus.CLOSED
                 position.close_time = datetime.now()
-                position.close_price = exit_order.average_price
+                position.close_price = exit_order.avg_price
                 position.exit_order_id = exit_order.order_id
-                
+
                 # Calculate P&L
                 if position.side == SignalSide.LONG:
-                    gross_pnl = (exit_order.average_price - position.entry_price) * position.quantity
+                    gross_pnl = (exit_order.avg_price - position.entry_price) * position.quantity
                 else:
-                    gross_pnl = (position.entry_price - exit_order.average_price) * position.quantity
-                
+                    gross_pnl = (position.entry_price - exit_order.avg_price) * position.quantity
+
                 fees = self.risk_manager.estimate_fees(
                     position.instrument,
                     position.quantity,
                     position.entry_price,
-                    exit_order.average_price
+                    exit_order.avg_price
                 )
-                
+
                 position.realized_pnl = gross_pnl - fees
                 self.trades_completed_today += 1
-                
+
                 # Sync to PositionStore (canonical source)
                 if self.position_store:
-                    self.position_store.close_position(position.position_id, exit_order.average_price, datetime.now())
+                    self.position_store.close_position(position.position_id, exit_order.avg_price, datetime.now())
                 
                 # Notify strategy
                 for strategy in self.strategies:
@@ -1448,6 +1810,104 @@ class TradingOrchestrator:
             logger.info("EOD square-off time - closing all positions")
             await self._close_all_positions("EOD_SQUAREOFF")
     
+    async def _periodic_diagnostics(self) -> None:
+        """Run periodic diagnostics every 5 minutes and apply healing if needed"""
+        while self.is_running:
+            try:
+                await asyncio.sleep(self._diagnostics_interval)
+                
+                if not self._self_healing_enabled or not self._self_diagnostics:
+                    continue
+                
+                logger.debug("Running periodic diagnostics")
+                
+                # Get current metrics
+                portfolio_risk = self._get_portfolio_risk()
+                current_metrics = {
+                    "win_rate": (self.wins_today / max(self.trades_completed_today, 1)) if self.trades_completed_today > 0 else 0.0,
+                    "trades_today": self.trades_completed_today,
+                    "daily_pnl": portfolio_risk.daily_pnl,
+                    "margin_utilization": portfolio_risk.used_margin / max(portfolio_risk.net_liquid, 1) if portfolio_risk.net_liquid > 0 else 0.0,
+                }
+                
+                # Get strategy performance (simplified - would need more detailed tracking)
+                strategy_performance = {}
+                for strategy in self.strategies:
+                    # Placeholder - would track actual performance per strategy
+                    strategy_performance[strategy.name] = {
+                        "win_rate": 0.0,
+                        "trades": 0
+                    }
+                
+                # Run diagnostics
+                diagnostic_results = self._self_diagnostics.run_diagnostics(
+                    current_metrics,
+                    strategy_performance
+                )
+                
+                # Update blocking anomalies
+                self._blocking_anomalies = [
+                    r.anomaly_type.value for r in diagnostic_results
+                    if r.severity in ["CRITICAL", "HIGH"] and r.detected
+                ]
+                
+                # Apply healing for HIGH/CRITICAL anomalies
+                if self._self_healing and diagnostic_results:
+                    for diagnostic in diagnostic_results:
+                        if diagnostic.severity in ["HIGH", "CRITICAL"]:
+                            healing_result = self._self_healing.apply_healing(diagnostic)
+                            if healing_result and healing_result.success:
+                                logger.info(
+                                    "Healing action applied",
+                                    action=healing_result.action.value,
+                                    message=healing_result.message,
+                                    anomaly=diagnostic.anomaly_type.value
+                                )
+                
+                self._last_diagnostics_run = datetime.now()
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Periodic diagnostics error: {e}", exc_info=True)
+                await asyncio.sleep(60)  # Wait 1 minute before retry
+    
+    async def _pre_trade_safety_check(self) -> bool:
+        """
+        Pre-trade safety check - returns True if trading should be blocked.
+        
+        Returns:
+            True if trading should be blocked, False otherwise
+        """
+        if not self._self_healing_enabled or not self._self_diagnostics:
+            return False
+        
+        # Quick check for blocking anomalies
+        if self._blocking_anomalies:
+            # Check if any blocking anomalies are still active
+            portfolio_risk = self._get_portfolio_risk()
+            current_metrics = {
+                "win_rate": (self.wins_today / max(self.trades_completed_today, 1)) if self.trades_completed_today > 0 else 0.0,
+                "trades_today": self.trades_completed_today,
+                "daily_pnl": portfolio_risk.daily_pnl,
+                "margin_utilization": portfolio_risk.used_margin / max(portfolio_risk.net_liquid, 1) if portfolio_risk.net_liquid > 0 else 0.0,
+            }
+            
+            # Run quick diagnostics
+            diagnostic_results = self._self_diagnostics.run_diagnostics(current_metrics)
+            
+            # Check for CRITICAL anomalies that should block trading
+            critical_anomalies = [
+                r for r in diagnostic_results
+                if r.severity == "CRITICAL" and r.detected
+            ]
+            
+            if critical_anomalies:
+                self._blocking_anomalies = [r.anomaly_type.value for r in critical_anomalies]
+                return True
+        
+        return False
+    
     def _get_portfolio_risk(self) -> PortfolioRisk:
         """Get current portfolio risk state"""
         net_liquid = self._get_net_liquid()
@@ -1474,10 +1934,27 @@ class TradingOrchestrator:
     def _is_market_open(self) -> bool:
         """Check if market is currently open"""
         current_time = datetime.now().time()
-        market_open = time(9, 15)
-        market_close = time(15, 30)
         
-        return market_open <= current_time <= market_close
+        def _parse_time(time_str: str, fallback: time) -> time:
+            try:
+                return datetime.strptime(time_str, "%H:%M").time()
+            except Exception:
+                return fallback
+        
+        # Primary (NSE/BSE) window
+        primary_open = _parse_time(app_config.market.open_time, time(9, 15))
+        primary_close = _parse_time(app_config.market.close_time, time(15, 30))
+        if primary_open <= current_time <= primary_close:
+            return True
+        
+        # MCX extended window (if enabled in universe)
+        if getattr(app_config.universe, "mcx_symbols", []):
+            mcx_open = _parse_time(app_config.market.mcx_open_time, time(9, 0))
+            mcx_close = _parse_time(app_config.market.mcx_close_time, time(23, 30))
+            if mcx_open <= current_time <= mcx_close:
+                return True
+        
+        return False
     
     def _should_square_off_eod(self) -> bool:
         """Check if EOD square-off should happen"""
@@ -1485,8 +1962,19 @@ class TradingOrchestrator:
             return False
         
         current_time = datetime.now().time()
-        eod_time = datetime.strptime(app_config.market.eod_squareoff_time, "%H:%M").time()
         
+        def _parse_time(time_str: str, fallback: time) -> time:
+            try:
+                return datetime.strptime(time_str, "%H:%M").time()
+            except Exception:
+                return fallback
+        
+        # Prefer MCX square-off if MCX is in play
+        eod_str = app_config.market.eod_squareoff_time
+        if getattr(app_config.universe, "mcx_symbols", []):
+            eod_str = getattr(app_config.market, "mcx_eod_squareoff_time", eod_str)
+        
+        eod_time = _parse_time(eod_str, time(15, 25))
         return current_time >= eod_time
     
     def get_system_state(self) -> SystemState:
@@ -1527,4 +2015,3 @@ class TradingOrchestrator:
             wins_today=wins,
             losses_today=losses
         )
-

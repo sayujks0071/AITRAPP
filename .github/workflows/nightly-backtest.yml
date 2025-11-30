@@ -82,4 +82,3 @@ jobs:
           name: nightly-backtests-${{ github.run_number }}
           path: reports/backtests/
           retention-days: 30
-

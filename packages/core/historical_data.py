@@ -60,15 +60,20 @@ class HistoricalDataLoader:
             # Load CSV
             logger.info(f"Loading historical data from {filename}")
             
+            # Read CSV first, then clean column names, then parse dates
             df = pd.read_csv(
                 filepath,
-                skipinitialspace=True,
-                parse_dates=['Date', 'Expiry'],
-                date_parser=lambda x: pd.to_datetime(x, format='%d-%b-%Y')
+                skipinitialspace=True
             )
             
-            # Clean column names (remove extra spaces)
-            df.columns = df.columns.str.strip()
+            # Clean column names (remove extra spaces and commas)
+            df.columns = df.columns.str.strip().str.replace(',', '')
+            
+            # Parse date columns after cleaning
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'], format='%d-%b-%Y', errors='coerce')
+            if 'Expiry' in df.columns:
+                df['Expiry'] = pd.to_datetime(df['Expiry'], format='%d-%b-%Y', errors='coerce')
             
             # Convert numeric columns
             numeric_cols = [

@@ -23,6 +23,8 @@ import asyncio
 import time
 import structlog
 
+from packages.core.compliance import ComplianceGuard
+
 logger = structlog.get_logger(__name__)
 
 Side = Literal["BUY", "SELL"]
@@ -40,6 +42,9 @@ class LimitChaseConfig:
     max_modifications: int = 8            # safety bound
     fallback_to_market: bool = False      # if True, send MARKET at the end
     verbose_logging: bool = True
+    reprice_mid_after_seconds: float = 3.0   # move to LTP after this
+    panic_after_seconds: float = 6.0         # final aggressive reprice after this
+    panic_buffer_pct: float = 0.005          # +/-0.5% buffer for panic price
 
 
 @dataclass
@@ -61,9 +66,15 @@ class LimitChaseExecutor:
       - Enforce slippage + time guards
     """
 
-    def __init__(self, kite_client, cfg: Optional[LimitChaseConfig] = None):
+    def __init__(
+        self, 
+        kite_client, 
+        cfg: Optional[LimitChaseConfig] = None,
+        compliance_guard: Optional[ComplianceGuard] = None
+    ):
         self.kite = kite_client
         self.cfg = cfg or LimitChaseConfig()
+        self.compliance_guard = compliance_guard
         
         # Telemetry: Track execution alpha
         self.stats = {
@@ -298,16 +309,35 @@ class LimitChaseExecutor:
                 continue  # transient, next loop
 
             best_price = self._best_price_for_side(side, quote)
-            if best_price is None:
+            ltp = float(quote.get("last_price") or quote.get("ltp") or 0.0)
+            if best_price is None and ltp <= 0:
                 continue
 
+            # Determine target based on time tiers:
+            # Tier 0: passive (best + nudge)
+            # Tier 1: reprice to LTP
+            # Tier 2: panic: LTP +/- panic buffer
+            target_price = None
+            if elapsed >= cfg.panic_after_seconds and ltp > 0:
+                buff = cfg.panic_buffer_pct
+                target_price = ltp * (1 + buff) if side == "BUY" else ltp * (1 - buff)
+            elif elapsed >= cfg.reprice_mid_after_seconds and ltp > 0:
+                target_price = ltp
+            else:
+                if best_price is not None:
+                    target_price = self._nudge_towards(best_price, side)
+
+            if target_price is None:
+                continue
+            target_price = self._round_to_tick(target_price, cfg.tick_size)
+
             # slippage guard
-            if abs(best_price - anchor_price) > cfg.max_slippage_abs:
+            if abs(target_price - anchor_price) > cfg.max_slippage_abs:
                 self.stats["slippage_stops"] += 1
                 if cfg.verbose_logging:
                     logger.warning(
-                        "[LimitChase] Slippage guard triggered for %s %s: best=%.2f, anchor=%.2f",
-                        side, symbol, best_price, anchor_price,
+                        "[LimitChase] Slippage guard triggered for %s %s: target=%.2f, anchor=%.2f",
+                        side, symbol, target_price, anchor_price,
                     )
                 await self._safe_cancel(order_id)
                 return LimitChaseResult(
@@ -319,19 +349,18 @@ class LimitChaseExecutor:
                     message="Cancelled due to slippage guard",
                 )
 
-            new_price = self._nudge_towards(best_price, side)
-            if self._price_eq(new_price, working_price, cfg.tick_size):
+            if self._price_eq(target_price, working_price, self.cfg.tick_size):
                 continue  # nothing to do
 
             # modify order (for remaining qty)
-            ok = await self._safe_modify(order_id, price=new_price)
+            ok = await self._safe_modify(order_id, price=target_price)
             if ok:
-                working_price = new_price
+                working_price = target_price
                 num_mods += 1
                 if cfg.verbose_logging:
                     logger.info(
                         "[LimitChase] Modify %s %s: price %.2f -> %.2f (mods=%d)",
-                        side, symbol, working_price, new_price, num_mods,
+                        side, symbol, working_price, target_price, num_mods,
                     )
 
     # ---- Broker helpers (adapt to your KiteClient) ----------------------
@@ -387,7 +416,18 @@ class LimitChaseExecutor:
         meta: Dict[str, Any],
         order_type: str = "LIMIT",
     ) -> Optional[str]:
-        """Place order via broker, with error handling"""
+        """Place order via broker, with error handling and compliance checks"""
+        # Compliance: Check kill switch and rate limit
+        if self.compliance_guard:
+            if not await self.compliance_guard.check_before_order("PLACE", tag=tag or "LIMIT_CHASE", limiter_type="limit_chase_place"):
+                logger.warning(
+                    "[LimitChase] Order placement blocked by compliance guard",
+                    symbol=symbol,
+                    side=side,
+                    tag=tag
+                )
+                return None
+        
         try:
             # Try async place_order first
             if hasattr(self.kite, 'place_order'):
@@ -407,7 +447,7 @@ class LimitChaseExecutor:
                 else:
                     # Sync method
                     order_id = self.kite.place_order(
-                        exchange="NFO",  # Adjust as needed
+                        exchange=meta.get("exchange", "NFO") if meta else "NFO",
                         tradingsymbol=symbol,
                         transaction_type=side,
                         quantity=quantity,
@@ -429,7 +469,16 @@ class LimitChaseExecutor:
             return None
 
     async def _safe_modify(self, order_id: str, price: float) -> bool:
-        """Modify order price, with error handling"""
+        """Modify order price, with error handling and compliance checks"""
+        # Compliance: Check kill switch and rate limit (modify counts toward OPS)
+        if self.compliance_guard:
+            if not await self.compliance_guard.check_before_order("MODIFY", tag="LIMIT_CHASE", limiter_type="limit_chase_modify"):
+                logger.warning(
+                    "[LimitChase] Order modify blocked by compliance guard",
+                    order_id=order_id
+                )
+                return False
+        
         try:
             if hasattr(self.kite, 'modify_order'):
                 import inspect
@@ -444,7 +493,16 @@ class LimitChaseExecutor:
             return False
 
     async def _safe_cancel(self, order_id: str) -> bool:
-        """Cancel order, with error handling"""
+        """Cancel order, with error handling and compliance checks"""
+        # Compliance: Check kill switch and rate limit (cancel counts toward OPS)
+        if self.compliance_guard:
+            if not await self.compliance_guard.check_before_order("CANCEL", tag="LIMIT_CHASE", limiter_type="limit_chase_cancel"):
+                logger.warning(
+                    "[LimitChase] Order cancel blocked by compliance guard",
+                    order_id=order_id
+                )
+                return False
+        
         try:
             if hasattr(self.kite, 'cancel_order'):
                 import inspect

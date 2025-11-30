@@ -8,7 +8,8 @@ import structlog
 from packages.core.config import app_config
 from packages.core.execution import ExecutionEngine, OrderResult
 from packages.core.historical_data import HistoricalDataLoader
-from packages.core.models import Position, PositionStatus, Signal, SignalSide
+from packages.core.indicators import IndicatorCalculator
+from packages.core.models import Bar, Position, PositionStatus, Signal, SignalSide, Tick
 from packages.core.paper_simulator import PaperSimulator
 from packages.core.risk import PortfolioRisk, RiskManager
 from packages.core.strategies import Strategy
@@ -50,6 +51,17 @@ class BacktestEngine:
         )
         
         self.risk_manager = RiskManager(app_config.risk)
+        
+        # Indicator calculator for backtesting
+        self.indicator_calc = IndicatorCalculator(
+            atr_period=14,
+            rsi_period=14,
+            adx_period=14,
+            ema_fast=34,
+            ema_slow=89,
+            bb_period=20,
+            bb_std=2.0
+        )
         
         # Performance tracking
         self.daily_pnl: Dict[datetime, float] = {}
@@ -154,6 +166,8 @@ class BacktestEngine:
             # Convert to bars (for strategies that need OHLC)
             if not ce_data.empty:
                 ce_bars = self.data_loader.convert_to_bars(ce_data, symbol, strike, 'CE')
+                # Attach technical indicators to bars
+                ce_bars = self._attach_indicators(ce_bars)
                 ce_tick = self.data_loader.convert_to_ticks(ce_data, symbol, strike, 'CE')
                 
                 # Generate signals for CE
@@ -179,6 +193,8 @@ class BacktestEngine:
             # Same for PE
             if not pe_data.empty:
                 pe_bars = self.data_loader.convert_to_bars(pe_data, symbol, strike, 'PE')
+                # Attach technical indicators to bars
+                pe_bars = self._attach_indicators(pe_bars)
                 pe_tick = self.data_loader.convert_to_ticks(pe_data, symbol, strike, 'PE')
                 
                 for strategy in strategies:
@@ -208,6 +224,98 @@ class BacktestEngine:
         # Update daily P&L
         self._update_daily_pnl(date)
     
+    def _attach_indicators(self, bars: List[Bar]) -> List[Bar]:
+        """
+        Calculate and attach technical indicators to bars.
+        
+        This is critical for backtesting - strategies require indicators
+        (RSI, ATR, MACD, Bollinger Bands, VWAP, etc.) to generate signals.
+        
+        Args:
+            bars: List of Bar objects with OHLCV data
+            
+        Returns:
+            List of Bar objects with indicators attached
+        """
+        if not bars or len(bars) < 50:  # Need minimum bars for indicators
+            logger.debug(f"Skipping indicator calculation: only {len(bars)} bars available")
+            return bars
+        
+        try:
+            # Convert bars to DataFrame for indicator calculation
+            df = pd.DataFrame([
+                {
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "volume": bar.volume
+                }
+                for bar in bars
+            ])
+            
+            # Calculate indicators for the entire dataset first (more efficient)
+            # Then attach to each bar
+            all_indicators = self.indicator_calc.compute_all(df)
+            
+            # For rolling indicators, calculate per bar with lookback
+            for i in range(len(bars)):
+                bar = bars[i]
+                
+                # Get lookback window (need at least 50 bars for all indicators)
+                start_idx = max(0, i - 50)
+                end_idx = i + 1
+                window_df = df.iloc[start_idx:end_idx]
+                
+                if len(window_df) < 26:  # Need at least 26 for MACD slow period
+                    continue
+                
+                # Compute all indicators for this window
+                indicators = self.indicator_calc.compute_all(window_df)
+                
+                # Attach indicators to current bar
+                bar.vwap = indicators.get("vwap")
+                bar.atr = indicators.get("atr")
+                bar.rsi = indicators.get("rsi")
+                bar.adx = indicators.get("adx")
+                bar.ema_fast = indicators.get("ema_fast")
+                bar.ema_slow = indicators.get("ema_slow")
+                bar.supertrend = indicators.get("supertrend")
+                bar.supertrend_direction = indicators.get("supertrend_direction")
+                bar.macd = indicators.get("macd")
+                bar.macd_signal = indicators.get("macd_signal")
+                bar.macd_histogram = indicators.get("macd_histogram")
+                bar.bb_upper = indicators.get("bb_upper")
+                bar.bb_middle = indicators.get("bb_middle")
+                bar.bb_lower = indicators.get("bb_lower")
+                # New indicators for top 10 strategies
+                bar.stoch_k = indicators.get("stoch_k")
+                bar.stoch_d = indicators.get("stoch_d")
+                bar.cci = indicators.get("cci")
+                bar.sar = indicators.get("sar")
+                bar.ichi_tenkan = indicators.get("ichi_tenkan")
+                bar.ichi_kijun = indicators.get("ichi_kijun")
+                bar.ichi_senkou_a = indicators.get("ichi_senkou_a")
+                bar.ichi_senkou_b = indicators.get("ichi_senkou_b")
+                bar.pivot = indicators.get("pivot")
+                bar.pivot_r1 = indicators.get("pivot_r1")
+                bar.pivot_r2 = indicators.get("pivot_r2")
+                bar.pivot_s1 = indicators.get("pivot_s1")
+                bar.pivot_s2 = indicators.get("pivot_s2")
+                # Donchian channels (if not already set)
+                if not hasattr(bar, 'dc_upper') or bar.dc_upper is None:
+                    bar.dc_upper = indicators.get("dc_upper")
+                    bar.dc_lower = indicators.get("dc_lower")
+            
+            # Count how many bars got indicators
+            bars_with_indicators = sum(1 for b in bars if b.rsi is not None)
+            logger.debug(f"Attached indicators to {bars_with_indicators}/{len(bars)} bars")
+            return bars
+            
+        except Exception as e:
+            logger.warning(f"Failed to attach indicators: {e}", exc_info=True)
+            return bars  # Return bars without indicators if calculation fails
+    
     def _generate_signals(
         self,
         strategy: Strategy,
@@ -236,7 +344,7 @@ class BacktestEngine:
             tick_size=0.05
         )
         
-        # Create strategy context
+        # Create strategy context with backtest mode enabled
         context = StrategyContext(
             timestamp=date,
             instrument=instrument,
@@ -245,7 +353,8 @@ class BacktestEngine:
             bars_1s=bars[-60:] if len(bars) >= 60 else bars,  # Last 60 for 1s
             net_liquid=self.current_capital,
             available_margin=self.current_capital * 0.8,
-            open_positions=len([p for p in self.positions if p.is_open])
+            open_positions=len([p for p in self.positions if p.is_open]),
+            backtest_mode=True  # Enable relaxed filters for backtesting
         )
         
         # Generate signals
@@ -328,13 +437,36 @@ class BacktestEngine:
         
         exit_manager = ExitManager(app_config.exits)
         
-        # Create market data dict (simplified)
+        # Get options chain for current prices (use symbol from first position)
+        chain = None
+        if self.positions:
+            first_pos = self.positions[0]
+            symbol = first_pos.instrument.symbol
+            try:
+                chain = self.data_loader.get_options_chain(symbol, date)
+            except Exception as e:
+                logger.debug(f"Could not load chain for exits: {e}")
+        
+        # Create market data dict with actual tick/bar data
         market_data = {}
         for position in self.positions:
             if position.is_open:
-                # Get current tick/bar (simplified)
-                tick = None  # Would need to load from data
-                bars = []
+                # Get current price from chain or use entry price
+                current_price = position.entry_price
+                if chain is not None and not chain.empty:
+                    strike = position.instrument.strike
+                    option_type = 'CE' if position.instrument.instrument_type.value == 'CE' else 'PE'
+                    row = chain[(chain['Strike Price'] == strike) & (chain['Option type'] == option_type)]
+                    if not row.empty:
+                        current_price = row.iloc[0]['LTP'] if pd.notna(row.iloc[0]['LTP']) else row.iloc[0]['Close']
+                
+                # Create a simple tick object
+                tick = Tick(
+                    token=position.instrument.token,
+                    last_price=current_price,
+                    timestamp=date
+                )
+                bars = []  # Bars not needed for exit checks in backtest
                 market_data[position.instrument.token] = (tick, bars)
         
         # Check exits
@@ -352,20 +484,19 @@ class BacktestEngine:
                 (p for p in self.positions if p.position_id == exit_signal.position_id),
                 None
             )
-            
-            if position and position.is_open:
-                # Close position
+            if position:
+                # Close position using paper simulator
                 exit_order = self.paper_sim.close_position(
                     position,
                     position.current_price,
                     exit_signal.reason.value
                 )
-                
+
                 # Record trade
                 trade = {
                     "entry_date": position.entry_time,
                     "exit_date": date,
-                    "symbol": position.instrument.tradingsymbol,
+                    "instrument": position.instrument.tradingsymbol,
                     "side": position.side.value,
                     "quantity": position.quantity,
                     "entry_price": position.entry_price,
@@ -373,6 +504,11 @@ class BacktestEngine:
                     "pnl": position.realized_pnl or 0.0,
                     "exit_reason": exit_signal.reason.value
                 }
+
+                self.closed_trades.append(trade)
+
+                # Update capital
+                self.current_capital += position.realized_pnl or 0.0
                 
                 self.closed_trades.append(trade)
                 

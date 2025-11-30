@@ -56,6 +56,9 @@ class StrategyContext:
     universe_size: int = 0  # Total universe size
     token_count: int = 0     # Tokens being scanned in this cycle
     
+    # Backtest mode flag (relaxes filters for historical data)
+    backtest_mode: bool = False
+    
     def __post_init__(self):
         if self.bars_1s is None:
             self.bars_1s = []

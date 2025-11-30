@@ -1,0 +1,63 @@
+name: Publish OpenAPI Spec
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  generate-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (minimal)
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn httpx
+          pip install -r requirements.txt || true  # best effort; skip missing extras
+
+      - name: Generate OpenAPI spec
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi.testclient import TestClient
+          from apps.api.main import app
+
+          client = TestClient(app)
+          resp = client.get("/openapi.json")
+          resp.raise_for_status()
+          spec = resp.json()
+
+          out_dir = Path("reports")
+          out_dir.mkdir(exist_ok=True, parents=True)
+          out_file = out_dir / "openapi.json"
+          out_file.write_text(json.dumps(spec, indent=2))
+          print(f"Wrote OpenAPI spec to {out_file}")
+          PY
+
+      - name: Commit and push spec
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git status --short reports/openapi.json | grep -q "openapi.json"; then
+            git add reports/openapi.json
+            git commit -m "chore: update openapi spec [skip ci]" || true
+            git push
+          else
+            echo "No changes to OpenAPI spec."

@@ -185,7 +185,19 @@ def prompt_for_token() -> Optional[str]:
     print("   http://localhost:8080/callback?request_token=XXXXX&action=login&status=success")
     print("="*60)
     
-    user_input = input("\n📋 Paste request_token or callback URL here: ").strip()
+    # Check if running in interactive mode (stdin is a TTY)
+    import sys
+    if not sys.stdin.isatty():
+        print("\n⚠️  Non-interactive mode detected. Cannot prompt for input.")
+        print("   Please provide --redirect-url or --request-token parameter.")
+        return None
+    
+    try:
+        user_input = input("\n📋 Paste request_token or callback URL here: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n⚠️  Input cancelled or not available.")
+        print("   Please provide --redirect-url or --request-token parameter.")
+        return None
     
     if not user_input:
         return None

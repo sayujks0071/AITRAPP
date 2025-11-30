@@ -47,9 +47,9 @@ market:
 # Entry Window Restriction (Day-1 only)
 entry:
   window_start: "09:30"          # First entry allowed
-  window_end: "10:30"            # No new entries after 10:30 IST
-  max_entries_per_day: 1         # One attempt only (Day-1)
-  cooldown_minutes: 0            # No re-entries today
+  window_end: "15:00"            # Extended to 3 PM for testing
+  max_entries_per_day: 2         # Increased to 2 attempts
+  cooldown_minutes: 30           # 30 min cooldown between entries
 
 # Execution Throttles (SEBI/NSE compliant)
 execution:
@@ -186,6 +186,11 @@ compliance:
   force_daily_logout_iso: "03:30"  # Force logout at 03:30 IST
   audit_retention_years: 5        # 5 years audit retention
   whitelisted_clients_env: WHITELISTED_CLIENTS  # Comma-separated client IDs
+
+
+
+
+
 
 
 

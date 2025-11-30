@@ -152,6 +152,27 @@ class Bar:
     ema_slow: Optional[float] = None
     supertrend: Optional[float] = None
     supertrend_direction: Optional[int] = None
+    macd: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_lower: Optional[float] = None
+    
+    # Additional indicators for top 10 strategies
+    stoch_k: Optional[float] = None  # Stochastic %K
+    stoch_d: Optional[float] = None  # Stochastic %D
+    cci: Optional[float] = None  # Commodity Channel Index
+    sar: Optional[float] = None  # Parabolic SAR
+    ichi_tenkan: Optional[float] = None  # Ichimoku Tenkan-sen
+    ichi_kijun: Optional[float] = None  # Ichimoku Kijun-sen
+    ichi_senkou_a: Optional[float] = None  # Ichimoku Senkou Span A
+    ichi_senkou_b: Optional[float] = None  # Ichimoku Senkou Span B
+    pivot: Optional[float] = None  # Pivot Point
+    pivot_r1: Optional[float] = None  # Pivot Resistance 1
+    pivot_r2: Optional[float] = None  # Pivot Resistance 2
+    pivot_s1: Optional[float] = None  # Pivot Support 1
+    pivot_s2: Optional[float] = None  # Pivot Support 2
     
     @property
     def typical_price(self) -> float:

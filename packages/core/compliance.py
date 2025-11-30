@@ -4,6 +4,7 @@ import os
 import time
 import json
 import datetime as dt
+from datetime import datetime, timedelta
 from typing import Tuple, Optional
 import urllib.request
 
@@ -24,6 +25,10 @@ def _fetch_egress_ip(timeout=3.0) -> Optional[str]:
 
 
 def check_static_ip(expected_ip: str) -> Tuple[bool, str, Optional[str]]:
+    app_mode = os.getenv("APP_MODE", "PAPER").upper()
+    if app_mode == "PAPER":
+        curr = _fetch_egress_ip()
+        return True, "paper mode: static IP check skipped", curr
     if not expected_ip:
         return False, "EXPECTED_EGRESS_IP not set", None
     curr = _fetch_egress_ip()
@@ -218,6 +223,35 @@ class ComplianceManager:
             logger.warning("EXCHANGE_ALGO_ID not set (required post broker go-live)")
             return False
         return True
+
+    def check_dormant_account(
+        self,
+        last_trade_date: Optional[datetime],
+        max_dormant_days: int = 30
+    ) -> Tuple[bool, str]:
+        """
+        Check if account is dormant (no trades for N days).
+
+        SEBI compliance: Warn about inactive accounts to prevent unauthorized access.
+
+        Args:
+            last_trade_date: Date of last trade (None if no trades)
+            max_dormant_days: Maximum allowed days without trading
+
+        Returns:
+            (is_active: bool, reason: str)
+        """
+        if last_trade_date is None:
+            # No trade history - new account or never traded
+            return True, "no trade history (new account?)"
+
+        from datetime import datetime, timedelta
+        days_since_trade = (datetime.now() - last_trade_date).days
+
+        if days_since_trade > max_dormant_days:
+            return False, f"account dormant: {days_since_trade} days since last trade (limit={max_dormant_days})"
+
+        return True, f"active: {days_since_trade} days since last trade"
     
     async def run_compliance_checks(self) -> bool:
         """Run all compliance checks"""
@@ -239,4 +273,3 @@ class ComplianceManager:
             logger.error("Compliance checks failed", failed_checks=failed)
         
         return all_passed
-

@@ -1,148 +1,399 @@
+# Kite LIVE Canary Configuration - Day-1 (₹20-50k capital)
+# Conservative, SEBI-safe parameters for first LIVE session
+# 
+# Usage:
+#   export APP_MODE=LIVE
+#   export APP_TIMEZONE=Asia/Kolkata
+#   export KITE_API_KEY="***"
+#   export KITE_API_SECRET="***"
+#   export KITE_ACCESS_TOKEN="***"  # from today's OAuth exchange
+#   export EXPECTED_EGRESS_IP="x.x.x.x"  # your allowlisted IP
+#
+#   # Load this config override
+#   python -m uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+
 app:
-  mode: CRYPTO_PAPER
-  timezone: UTC
+  mode: PAPER
+  timezone: Asia/Kolkata
 
 venue:
-  name: BINANCE_SPOT
-  base_asset: USDT
-  allowed_symbols: [BTCUSDT, ETHUSDT, SOLUSDT]
-  maker_fee_bps: 10
-  taker_fee_bps: 10  # Binance: 0.1% = 10 bps (VIP 0)
-  ws_reconnect_secs: 3
-  rest_rps: 8  # Throttle to 8 requests per second
-  
-  # Per-symbol slippage/fee overrides (optional)
-  symbol_configs:
-    BTCUSDT:
-      slippage_bps: 5      # Default slippage
-      maker_fee_bps: 10    # Override if different
-      taker_fee_bps: 10
-    ETHUSDT:
-      slippage_bps: 5
-      maker_fee_bps: 10
-      taker_fee_bps: 10
-    SOLUSDT:
-      slippage_bps: 8      # Higher slippage for lower liquidity
-      maker_fee_bps: 10
-      taker_fee_bps: 10
+  name: NSE
+  # Kite Connect integration
+  api_key_env: KITE_API_KEY
+  api_secret_env: KITE_API_SECRET
+  access_token_env: KITE_ACCESS_TOKEN
 
+# Risk Management - Day-1 Conservative Parameters
 risk:
-  per_trade_risk_pct: 0.25
-  portfolio_heat_pct: 1.0
-  daily_stop_pct: -1.25
-  max_positions: 2
-  min_notional_usd: 25
+  per_trade_risk_pct: 0.30      # 0.30% per trade (₹60-₹150 for ₹20k-₹50k)
+  max_portfolio_heat_pct: 1.0    # ≤1.0% portfolio heat
+  daily_loss_stop_pct: -1.50     # -1.50% daily loss cap (₹300-₹750)
+  max_positions: 2                # Max 1-2 concurrent positions
+  max_position_size_multiplier: 1 # Conservative: 1x lot size max
+  slippage_bps: 5                # 5 bps slippage assumption
+  fees_per_order: 20             # ₹20 per order (Kite)
+  fees_per_option_leg: 20        # ₹20 per option leg
+  # MCX overrides (phase 3 - keep conservative)
+  mcx_slippage_bps: 8
+  mcx_fees_per_order: 30
+  mcx_fees_per_option_leg: 30
+  # Liquidity guards (applied when signal carries spread/volume)
+  nse_max_spread_pct: 0.8
+  nse_min_volume: 100
+  mcx_max_spread_pct: 1.2
+  mcx_min_volume: 50
 
+# Market Hours & Entry Windows
+market:
+  open_time: "09:15"             # Market open
+  close_time: "15:20"            # Last entry time
+  eod_squareoff_time: "15:25"    # Hard flat time (IST)
+  eod_squareoff_enabled: true    # Force flatten at 15:25
+  premarket_sync_time: "08:55"   # Pre-open sync
+  event_aware: true              # Block around events
+  event_stop_mult: 1.5
+  # MCX extended session (phase 2)
+  mcx_open_time: "09:00"
+  mcx_close_time: "23:30"
+  mcx_eod_squareoff_time: "23:20"
+  
+# Entry Window Restriction (Day-1 only)
+entry:
+  window_start: "09:30"          # First entry allowed
+  window_end: "15:00"            # Extended to 3 PM for testing
+  max_entries_per_day: 2         # Increased to 2 attempts
+  cooldown_minutes: 30           # 30 min cooldown between entries
+
+# Execution Throttles (SEBI/NSE compliant)
 execution:
-  engine_gap_ms: 350
-  instrument_gap_ms: 350
-  price_band_bps: 40
-  burst: 4
-  fanout_per_sec: 6
-  use_native_oco: false  # Use client-side OCO emulation
+  engine_gap_ms: 300             # 250-350ms gap between orders
+  instrument_gap_ms: 300         # Gap between instruments
+  price_band_bps: 40             # 0.4% price band check
+  burst: 2                        # Max 2 orders in burst
+  fanout_per_sec: 4              # 4 orders/sec max
+  use_native_oco: false            # Client-side OCO (Kite doesn't support native)
+  default_order_type: LIMIT       # Use LIMIT orders
+  limit_chase_ticks: 2            # Chase limit orders 2 ticks
+  limit_timeout_sec: 5           # Timeout after 5s
+  ioc_for_exits: true            # IOC for exits
+  max_order_retries: 3            # Max retries
+  retry_backoff_ms: 500          # Backoff between retries
+  tops_cap_per_sec: 10           # TOPS compliance: 10 updates/sec
+  mcx_product: NRML              # MCX product type (override per broker if needed)
 
-secrets_env:
-  api_key: BINANCE_API_KEY
-  api_secret: BINANCE_API_SECRET
+# Universe - NIFTY weekly options only (Day-1)
+universe:
+  indices: [NIFTY 50]               # NIFTY 50 (full trading symbol) for Day-1
+  fo_stocks_liquidity_rank_top_n: 0  # No stocks, indices only
+  exclude_fo_ban: true           # Exclude F&O ban stocks
+  exclude_illiquid_threshold_turnover: 10000000
+  sync_time: "08:55"             # Sync instruments at 08:55 IST
+  # MCX (Phase 1: paper-mode universe)
+  mcx_symbols: [CRUDEOIL, GOLDM, SILVERM]   # limit to top 3; keep universe small
+  mcx_include_options: false                # futures-only for first run
+  mcx_strikes_from_atm: 3                   # if enabled later
+  mcx_strike_range_pct: 0.08
+  mcx_max_dte_days: 45
 
-# Strategy Configuration (reuse existing strategies)
+# Options Filters - Tight liquidity gates
+options:
+  max_spread_mid_pct: 0.5        # Bid-ask spread ≤ 0.5% of mid
+  min_oi: 50000                   # Minimum OI: 50k
+  min_last_traded_volume: 100     # Minimum volume: 100
+  strikes_from_atm: 5            # Look 5 strikes around ATM
+  prefer_weekly: true            # Prefer weekly expiries
+  max_dte: 7                     # Max 7 days to expiry
+  iv_percentile_min: 20          # IV percentile range
+  iv_percentile_max: 80
+
+# Strategy Configuration - Top 10 Nifty Strategies (in priority order)
 strategies:
-  - name: ORB
+  # Priority 0: Premium Adaptive Trend (multi-confirmation trend with volatility gating)
+  - name: PremiumAdaptiveTrend
     enabled: true
     priority: 1
     params:
-      window_min: 15
-      breakout_confirmation_ticks: 3
-      rr_min: 1.8
-      max_positions: 2
-      instruments: [BTCUSDT, ETHUSDT]
-      
-  - name: TrendPullback
+      ema_fast: 34
+      ema_slow: 89
+      adx_threshold: 22
+      backtest_relaxed_adx: 18
+      atr_vol_cap_pct: 1.1        # ATR as % of price cap
+      atr_stop_mult: 1.2
+      pullback_lookback: 12
+      pullback_tolerance_pct: 0.35
+      breakout_lookback: 10
+      rr_min: 2.3
+      backtest_rr_min: 1.6
+      cooldown_minutes: 12
+      skip_event_days: true
+      block_regimes: [CHAOTIC, HIGH_EVENT]
+      preferred_regimes: [MEDIUM_TREND, LOW_VOL, LOW_MEAN_REVERT]
+      rsi_entry_range: [45, 65]
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
+
+  # Priority 1.5: ML Premium Alpha (model-driven signals)
+  - name: MLPremiumAlpha
     enabled: true
-    priority: 1
+    priority: 2
+    params:
+      model_path: models/ml_premium_alpha.pkl   # replace with trained model
+      feature_lookback: 60
+      confidence_threshold: 0.55
+      atr_period: 14
+      atr_stop_mult: 1.3
+      atr_target_mult: 2.2
+      rr_min: 1.8
+      backtest_rr_min: 1.2
+      cooldown_minutes: 10
+      instruments: [NIFTY, BANKNIFTY]
+      max_positions: 1
+
+  # Priority 1: Options Strategy (Live)
+  - name: OptionsRanker
+    enabled: true
+    priority: 3
+    params:
+      strategy_type: DEBIT_SPREAD
+      ivp_min: 20
+      ivp_max: 80
+      liquidity_score_min: 0.7
+      max_spread_legs: 2
+      rr_min: 1.5
+      max_positions: 1
+      instruments: [NIFTY]
+      max_cost_pct: 30
+      min_pop: 40
+      stop_loss_pct: 50
+      take_profit_pct: 70
+      require_trend_confirmation: true
+      orb_window_min: 15
+      require_breakout_confirmation: true
+
+  # Priority 2: Moving Average Crossover (SMA Momentum)
+  - name: SMAMomentum
+    enabled: false  # Disabled for now; re-enable after validation
+    priority: 8
+    params:
+      sma_fast: 13
+      sma_slow: 34
+      atr_period: 14
+      atr_stop_mult: 2.0
+      atr_target_mult: 3.0
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.2
+      rr_min: 1.5
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
+
+  # Priority 3: MACD Strategy
+  - name: MACD
+    enabled: false  # Disabled for now; re-enable after validation
+    priority: 7
+    params:
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      atr_period: 14
+      atr_stop_mult: 2.0
+      atr_target_mult: 3.0
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.2
+      rr_min: 1.5
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
+
+  # Priority 4: RSI Mean Reversion
+  - name: RSIMeanReversion
+    enabled: false  # Disabled for now; re-enable after validation
+    priority: 9
+    params:
+      rsi_period: 14
+      oversold_threshold: 25
+      overbought_threshold: 75
+      atr_period: 14
+      atr_stop_mult: 1.5
+      atr_target_mult: 2.0
+      max_volatility_atr_mult: 4.0    # relaxed to reduce high-vol skips
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.1
+      min_liquidity_turnover: 10000000
+      rr_min: 1.5
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
+
+  # Priority 5: Breakout Strategy (Support/Resistance)
+  - name: Breakout
+    enabled: true  # Enabled for 24-hour paper testing
+    priority: 5
+    params:
+      lookback_period: 20
+      breakout_confirmation_bars: 2
+      atr_period: 14
+      atr_stop_mult: 1.5
+      atr_target_mult: 2.5
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.5
+      rr_min: 2.0
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
+
+  # Priority 6: VWAP Strategy
+  - name: VWAP
+    enabled: true  # Enabled for 24-hour paper testing
+    priority: 6
+    params:
+      vwap_deviation_pct: 0.5
+      atr_period: 14
+      atr_stop_mult: 2.0
+      atr_target_mult: 3.0
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.2
+      rr_min: 1.5
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
+
+  # Priority 7: CCI (MCX-focused)
+  - name: CCI
+    enabled: true
+    priority: 7
+    params:
+      cci_period: 20
+      overbought_threshold: 80
+      oversold_threshold: -80
+      rr_min: 2.0
+      cooldown_minutes: 12
+      instruments: [CRUDEOIL, GOLDM]
+      max_positions: 1
+
+  # Priority 8: Parabolic SAR (enable after CCI validation)
+  - name: ParabolicSAR
+    enabled: false
+    priority: 8
+    params:
+      acceleration: 0.02
+      max_acceleration: 0.2
+      instruments: [CRUDEOIL, GOLDM]
+      max_positions: 1
+
+  # Priority 9: Mean Reversion Strategy
+  - name: MeanReversion
+    enabled: false  # Disabled for now; re-enable after validation
+    priority: 11
+    params:
+      ma_period: 20
+      ma_type: SMA
+      atr_period: 14
+      atr_band_mult: 2.0
+      atr_stop_mult: 1.5
+      atr_target_mult: 2.0
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.1
+      max_volatility_atr_mult: 4.0    # relaxed to reduce high-vol skips
+      rr_min: 1.5
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
+
+  # Priority 10: Trend Pullback
+  - name: TrendPullback
+    enabled: true  # Enabled for 24-hour paper testing
+    priority: 4
     params:
       ema_fast: 34
       ema_slow: 89
       atr_period: 14
       pullback_atr_mult: 0.5
       rr_min: 2.0
-      max_positions: 2
+      max_positions: 1
 
-# Ranking Engine Configuration
-ranking:
-  weights:
-    momentum: 0.25
-    trend: 0.25
-    liquidity: 0.20
-    regime: 0.15
-    rr: 0.15
-  
-  penalties:
-    illiquid_mult: 0.5
-    news_event_mult: 0.7
-    far_from_vwap_mult: 0.8
-  
-  top_n: 5
+  # Priority 11: Opening Range Breakout (ORB)
+  - name: ORB
+    enabled: false  # Disabled for now; re-enable after validation
+    priority: 12
+    params:
+      window_min: 15
+      breakout_confirmation_ticks: 3
+      rr_min: 1.8
+      max_positions: 1
+      instruments: [NIFTY, BANKNIFTY]
 
-# Exit Management
+# Exit Management - Day-1 Conservative
 exits:
-  hard_stop_atr_mult: 2.0
-  trail_enabled: true
+  hard_stop_atr_mult: 2.0         # Hard stop (not used for spreads)
+  trail_enabled: false            # No trailing stops for Day-1
   trail_atr_mult: 1.2
   trail_step_pct: 0.5
-  tp1_rr: 1.2
+  tp1_rr: 1.2                     # TP1 (not used for spreads)
   tp1_partial_pct: 50
-  tp2_rr: 2.0
+  tp2_rr: 2.0                     # TP2 (not used for spreads)
   tp2_partial_pct: 100
-  move_to_be_after_tp1: true
-  time_stop_enabled: true
-  time_stop_min: 20
-  vol_stop_enabled: true
+  move_to_be_after_tp1: false
+  time_stop_enabled: true         # Time-based exit
+  time_stop_min: 20               # Exit after 20 min if no TP/SL
+  vol_stop_enabled: false          # No vol stops Day-1
   vol_spike_mult: 2.0
-  mae_stop_enabled: true
+  mae_stop_enabled: false         # No MAE stops Day-1
   mae_stop_pct: 1.5
+  
+  # Debit spread specific exits
+  debit_spread_stop_pct: 50       # Stop at -50% of net debit
+  debit_spread_tp_pct: 70         # TP at +70% of net debit
+  debit_spread_timeout_min: 20    # Exit by 15:10-15:20 if still open
 
-# Market Hours (24/7 for crypto)
-market:
-  open_time: "00:00"
-  close_time: "23:59"
-  eod_squareoff_time: "23:59"
-  eod_squareoff_enabled: false  # No EOD for crypto
-  premarket_sync_time: "00:00"
-  event_aware: false
-  event_stop_mult: 1.5
+# Guards & Safety
+guards:
+  block_around_events_min: 10     # Block 10 min around CPI/RBI/expiry
+  max_spread_mid_pct: 0.5         # Reject if spread > 0.5%
+  min_liquidity_score: 0.7         # Min liquidity score
+  require_unique_order_ids: true   # Enforce unique order IDs
+  audit_all_decisions: true       # Full audit trail
 
-# Order Execution
-execution:
-  default_order_type: LIMIT
-  limit_chase_ticks: 2
-  limit_timeout_sec: 5
-  ioc_for_exits: true
-  max_order_retries: 3
-  retry_backoff_ms: 500
-  dry_run: false
+# Ranking Engine (simplified for Day-1)
+ranking:
+  weights:
+    momentum: 0.20
+    trend: 0.30                   # Higher weight on trend
+    liquidity: 0.30               # High weight on liquidity
+    regime: 0.10
+    rr: 0.10
+  penalties:
+    illiquid_mult: 0.3            # Heavy penalty for illiquid
+    news_event_mult: 0.5          # Heavy penalty around events
+    far_from_vwap_mult: 0.8
+  top_n: 3                        # Top 3 opportunities
 
-# WebSocket Configuration
-websocket:
-  tick_interval_ms: 1000
-  aggregation_windows: [1, 5]
-  reconnect_delay_sec: 3
-  max_reconnect_attempts: 10
-  subscribe_mode: FULL
-
-# Logging & Audit
+# Logging & Audit (SEBI compliance)
 logging:
   level: INFO
   format: json
-  log_file: logs/aitrapp_crypto.log
-  max_bytes: 104857600
+  log_file: logs/kite_canary_live.log
+  max_bytes: 104857600            # 100 MB
   backup_count: 10
-  audit_all_decisions: true
-  audit_retention_days: 90
+  audit_all_decisions: true       # Full audit trail
+  audit_retention_days: 90        # 90 days retention
 
 # Monitoring
 monitoring:
   prometheus_enabled: true
   prometheus_port: 9090
   health_check_interval_sec: 30
+  heartbeat_timeout_sec: 5        # Alert if heartbeat > 5s
+  leader_election_enabled: true   # Single leader only
 
+# SEBI/NSE Compliance
+compliance:
+  sebi_2025: true                 # SEBI Feb 2025 compliance
+  exchange_algo_id_env: EXCHANGE_ALGO_ID  # Algo-ID from env
+  oauth_required: true            # OAuth required
+  two_fa_required: true           # 2FA required
+  require_static_ip: true         # Static IP required
+  expected_egress_ip_env: EXPECTED_EGRESS_IP  # Check egress IP
+  force_daily_logout_iso: "03:30"  # Force logout at 03:30 IST
+  audit_retention_years: 5        # 5 years audit retention
+  whitelisted_clients_env: WHITELISTED_CLIENTS  # Comma-separated client IDs

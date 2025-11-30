@@ -1,0 +1,22 @@
+{
+  "HIGH_VOL": {
+    "trend_credit_spread_v1": {
+      "pnl": 4300.0,
+      "trades": 21,
+      "wins": 12,
+      "days": 19
+    },
+    "intraday_short_strangle_v1": {
+      "pnl": 8600.0,
+      "trades": 21,
+      "wins": 12,
+      "days": 19
+    },
+    "TrendCreditSpreadV1": {
+      "pnl": 500.0,
+      "trades": 2,
+      "wins": 1,
+      "days": 1
+    }
+  }
+}

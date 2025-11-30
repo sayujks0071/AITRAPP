@@ -9,6 +9,8 @@ from typing import Optional
 import logging
 import math
 
+from packages.core.compliance import ComplianceGuard
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,10 +36,17 @@ class DeltaNeutralizer:
     - Never hedges more than max_hedge_lots
     """
     
-    def __init__(self, kite_client, position_store, cfg: DeltaNeutralizerConfig):
+    def __init__(
+        self, 
+        kite_client, 
+        position_store, 
+        cfg: DeltaNeutralizerConfig,
+        compliance_guard: Optional[ComplianceGuard] = None
+    ):
         self.kite = kite_client
         self.position_store = position_store
         self.cfg = cfg
+        self.compliance_guard = compliance_guard
         
         logger.info(
             "[DeltaNeutralizer] Initialized",
@@ -46,7 +55,8 @@ class DeltaNeutralizer:
             fut_symbol=cfg.fut_symbol,
             rebalance_threshold=cfg.rebalance_threshold,
             max_hedge_lots=cfg.max_hedge_lots,
-            lot_size=cfg.lot_size
+            lot_size=cfg.lot_size,
+            compliance_enabled=compliance_guard is not None
         )
 
     async def maybe_rebalance(self) -> None:
@@ -85,6 +95,17 @@ class DeltaNeutralizer:
             net_delta, fut_side, lots_needed, qty,
         )
 
+        # Compliance: Check kill switch and rate limit before placing order
+        if self.compliance_guard:
+            if not await self.compliance_guard.check_before_order("PLACE", tag="DELTA_HEDGE", limiter_type="delta_hedge"):
+                logger.warning(
+                    "[DeltaNeutralizer] Hedge order blocked by compliance guard",
+                    net_delta=net_delta,
+                    fut_side=fut_side,
+                    qty=qty
+                )
+                return
+        
         # VERY conservative: use MARKET for now, or you can wrap with LimitChase later
         try:
             # Try async place_order first

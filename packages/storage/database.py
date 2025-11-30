@@ -13,13 +13,38 @@ logger = structlog.get_logger(__name__)
 # Create declarative base for models
 Base = declarative_base()
 
-# Create engine
-engine = create_engine(
-    settings.database_url,
-    pool_size=settings.database_pool_size,
-    max_overflow=settings.database_max_overflow,
-    echo=settings.debug
-)
+# Create engine with DB-specific settings
+connect_args = {}
+engine_kwargs = {
+    "echo": settings.debug,
+}
+
+if settings.database_url.startswith("postgresql"):
+    # Fail fast if Postgres is down/misconfigured
+    connect_args["connect_timeout"] = 2
+    engine_kwargs.update({
+        "pool_size": settings.database_pool_size,
+        "max_overflow": settings.database_max_overflow,
+        "pool_pre_ping": True,  # Drop stale connections instead of blocking
+        "connect_args": connect_args,
+    })
+elif settings.database_url.startswith("sqlite"):
+    # SQLite in paper mode; allow multithreaded access from uvicorn workers
+    connect_args["check_same_thread"] = False
+    engine_kwargs.update({
+        "connect_args": connect_args,
+        "pool_pre_ping": True,  # lightweight check; SQLite ignores pools
+    })
+else:
+    # Default to pooled config for other engines
+    engine_kwargs.update({
+        "pool_size": settings.database_pool_size,
+        "max_overflow": settings.database_max_overflow,
+        "pool_pre_ping": True,
+        "connect_args": connect_args,
+    })
+
+engine = create_engine(settings.database_url, **engine_kwargs)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -29,6 +54,16 @@ def init_db() -> None:
     """Initialize database (create tables)"""
     logger.info("Initializing database")
     Base.metadata.create_all(bind=engine)
+    
+    # Enable WAL mode for SQLite to reduce writer locks
+    if settings.database_url.startswith("sqlite"):
+        with engine.connect() as conn:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL;")
+                conn.commit()
+                logger.info("SQLite WAL mode enabled")
+            except Exception as e:
+                logger.warning("Failed to enable SQLite WAL mode", error=str(e))
     logger.info("Database initialized")
 
 
@@ -69,4 +104,3 @@ def order_exists(client_order_id: str, status_in: tuple = None) -> bool:
         return query.first() is not None
     finally:
         db.close()
-
