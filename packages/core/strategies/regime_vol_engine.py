@@ -106,7 +106,13 @@ class MarketContextAdapter:
         if self.context.bars_5s and len(self.context.bars_5s) >= days:
             closes = [b.close for b in self.context.bars_5s[-days:]]
             if len(closes) >= 2:
-                returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+                returns = []
+                for i in range(1, len(closes)):
+                    prev = closes[i - 1]
+                    if prev == 0:
+                        # Skip bad ticks to avoid divide-by-zero
+                        continue
+                    returns.append((closes[i] - prev) / prev)
                 if returns:
                     vol = (sum(r**2 for r in returns) / len(returns)) ** 0.5
                     # Annualize (assuming 252 trading days, ~252*78 5-min bars per day)
@@ -225,19 +231,37 @@ class RegimeClassifier:
     
     def compute_features(self, ctx: MarketContextAdapter) -> RegimeFeatures:
         """Compute feature vector from market context"""
-        iv_rank = ctx.iv_rank(days=self.lookbacks.get("iv_rank_days", 60))
-        iv_pct = ctx.iv_percentile(days=self.lookbacks.get("iv_rank_days", 60))
-        
-        iv = max(ctx.implied_vol(), 1e-6)
-        rv = ctx.realised_vol(days=self.lookbacks.get("rv_days", 10))
-        rv_iv_ratio = rv / iv
-        
-        atr = ctx.atr(self.lookbacks.get("atr_period", 14))
-        atr_pct = (atr / ctx.spot * 100.0) if atr and ctx.spot > 0 else 0.0
-        
-        trend_strength = ctx.trend_strength()
-        vix_rank = ctx.vix_rank(days=self.lookbacks.get("vix_rank_days", 90))
-        vix_slope = ctx.vix_slope()
+        def safe_div(n: float, d: float, default: float = 0.0) -> float:
+            return default if d is None or d == 0 else n / d
+
+        try:
+            iv_rank = ctx.iv_rank(days=self.lookbacks.get("iv_rank_days", 60))
+            iv_pct = ctx.iv_percentile(days=self.lookbacks.get("iv_rank_days", 60))
+            
+            iv = max(ctx.implied_vol() or 0.0, 1e-6)  # Avoid divide-by-zero
+            rv = ctx.realised_vol(days=self.lookbacks.get("rv_days", 10)) or 0.0
+            rv_iv_ratio = safe_div(rv, iv, default=0.0)
+            
+            atr = ctx.atr(self.lookbacks.get("atr_period", 14))
+            atr_pct = safe_div(atr or 0.0, ctx.spot or 0.0, default=0.0) * 100.0 if atr else 0.0
+            
+            trend_strength = ctx.trend_strength()
+            vix_rank = ctx.vix_rank(days=self.lookbacks.get("vix_rank_days", 90))
+            vix_slope = ctx.vix_slope()
+        except ZeroDivisionError as e:
+            logger.warning(
+                "RegimeVolEngine compute_features caught divide-by-zero; returning safe defaults",
+                error=str(e)
+            )
+            return RegimeFeatures(
+                iv_rank=0.0,
+                iv_percentile=0.0,
+                rv_iv_ratio=0.0,
+                atr_pct=0.0,
+                trend_strength=0.0,
+                vix_rank=0.0,
+                vix_slope=0.0,
+            )
         
         return RegimeFeatures(
             iv_rank=iv_rank,
@@ -399,9 +423,24 @@ class RegimeVolEngine(Strategy):
         ctx_adapter = MarketContextAdapter(context)
         
         # Compute features and classify regime
-        feats = self.classifier.compute_features(ctx_adapter)
-        regime = self.classifier.classify(feats)
-        self.current_regime = regime
+        try:
+            feats = self.classifier.compute_features(ctx_adapter)
+            regime = self.classifier.classify(feats)
+            self.current_regime = regime
+        except ZeroDivisionError as e:
+            logger.error(
+                "RegimeVolEngine feature computation failed (divide by zero)",
+                underlying=underlying,
+                error=str(e)
+            )
+            return []
+        except Exception as e:
+            logger.error(
+                "RegimeVolEngine feature computation failed",
+                underlying=underlying,
+                error=str(e)
+            )
+            return []
         
         # Record metrics
         if self.metrics is not None:
