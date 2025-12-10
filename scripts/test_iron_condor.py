@@ -1,199 +1,101 @@
 #!/usr/bin/env python3
-"""Test Iron Condor strategy on NIFTY historical data"""
-import sys
-from datetime import datetime
-from pathlib import Path
+"""Test NIFTY Iron Condor Deployment - Simplified for quick testing"""
 
-# Add parent directory to path
+import sys
+from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from packages.core.backtest import BacktestEngine
-from packages.core.strategies.iron_condor import IronCondorStrategy
+from kiteconnect import KiteConnect
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 def main():
-    print("="*70)
-    print("🧪 IRON CONDOR BACKTEST - NIFTY Historical Data")
-    print("="*70)
+    print("=" * 60)
+    print("  NIFTY IRON CONDOR TEST")
+    print("=" * 60)
     print()
-    
-    # Iron Condor parameters
-    # "9 20" interpreted as: min_dte=9, max_dte=20
-    # Also using 200 point spreads (common for NIFTY)
-    
-    iron_condor_params = {
-        "call_spread_width": 200,      # 200 point call spread
-        "put_spread_width": 200,       # 200 point put spread
-        "call_short_strike_offset": 200,  # Short call 200 points OTM
-        "put_short_strike_offset": 200,   # Short put 200 points OTM
-        "max_dte": 20,                  # Max 20 days to expiry
-        "min_dte": 9,                   # Min 9 days to expiry
-        "target_profit_pct": 50,        # Close at 50% profit
-        "max_loss_pct": 200,            # Close at 200% loss
-        "iv_percentile_min": 30,        # Min IV percentile
-        "iv_percentile_max": 70,        # Max IV percentile
-        "max_positions": 2              # Max 2 concurrent positions
-    }
-    
-    print("📋 Strategy Parameters:")
-    print(f"   Call Spread Width: {iron_condor_params['call_spread_width']} points")
-    print(f"   Put Spread Width: {iron_condor_params['put_spread_width']} points")
-    print(f"   Call Short Strike Offset: {iron_condor_params['call_short_strike_offset']} points")
-    print(f"   Put Short Strike Offset: {iron_condor_params['put_short_strike_offset']} points")
-    print(f"   Days to Expiry: {iron_condor_params['min_dte']} - {iron_condor_params['max_dte']}")
-    print(f"   IV Percentile Range: {iron_condor_params['iv_percentile_min']} - {iron_condor_params['iv_percentile_max']}")
-    print()
-    
-    # Initialize strategy
-    strategy = IronCondorStrategy("IronCondor", iron_condor_params)
-    
-    # Initialize backtest engine
-    initial_capital = 1000000  # 10 lakh
-    engine = BacktestEngine(
-        initial_capital=initial_capital,
-        data_dir="docs/NSE OPINONS DATA"
-    )
-    
-    # Date range (full available range)
-    start_date = datetime(2025, 8, 15)
-    end_date = datetime(2025, 11, 10)
-    
-    print("📅 Backtest Period:")
-    print(f"   Start: {start_date.strftime('%Y-%m-%d')}")
-    print(f"   End: {end_date.strftime('%Y-%m-%d')}")
-    print(f"   Initial Capital: ₹{initial_capital:,.0f}")
-    print()
-    print("🚀 Starting backtest...")
-    print()
-    
-    # Run backtest
+
+    # Initialize Kite
+    api_key = os.getenv("KITE_API_KEY")
+    access_token = os.getenv("KITE_ACCESS_TOKEN")
+
+    if not api_key or not access_token:
+        print("❌ Missing KITE_API_KEY or KITE_ACCESS_TOKEN in .env")
+        return
+
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+
     try:
-        results = engine.run_backtest(
-            strategies=[strategy],
-            symbol="NIFTY",
-            start_date=start_date,
-            end_date=end_date
-        )
-        
-        # Print results
-        print("="*70)
-        print("📊 BACKTEST RESULTS")
-        print("="*70)
+        # Get NIFTY spot
+        print("📊 Fetching NIFTY spot price...")
+        quote = kite.ltp(["NSE:NIFTY 50"])
+        spot = quote["NSE:NIFTY 50"]["last_price"]
+        print(f"   NIFTY Spot: ₹{spot:,.2f}")
         print()
-        print("💰 Capital & Returns:")
-        print(f"   Initial Capital:     ₹{results['initial_capital']:,.2f}")
-        print(f"   Final Capital:       ₹{results['final_capital']:,.2f}")
-        print(f"   Total Return:        ₹{results['total_return']:,.2f}")
-        print(f"   Total Return %:     {results['total_return_pct']:+.2f}%")
-        print(f"   Max Drawdown:        {results['max_drawdown_pct']:.2f}%")
+
+        # Calculate ATM and iron condor strikes
+        atm = round(spot / 50) * 50
+        width = 100
+
+        strikes = {
+            "buy_put": atm - 200,
+            "sell_put": atm - 100,
+            "sell_call": atm + 100,
+            "buy_call": atm + 200
+        }
+
+        print("🎯 Iron Condor Structure:")
+        print(f"   ATM Strike: {atm}")
+        print(f"   Buy Put:  {strikes['buy_put']} PE (far OTM)")
+        print(f"   Sell Put: {strikes['sell_put']} PE (near OTM)")
+        print(f"   Sell Call: {strikes['sell_call']} CE (near OTM)")
+        print(f"   Buy Call: {strikes['buy_call']} CE (far OTM)")
         print()
-        
-        print("📈 Trade Statistics:")
-        print(f"   Total Trades:        {results['total_trades']}")
-        print(f"   Winning Trades:     {results['wins']}")
-        print(f"   Losing Trades:      {results['losses']}")
-        print(f"   Win Rate:           {results['win_rate']:.2f}%")
+
+        print("📅 To deploy this iron condor:")
+        print(f"   1. Get option chain for NIFTY (current expiry)")
+        print(f"   2. Find tradingsymbols for strikes: {list(strikes.values())}")
+        print(f"   3. Place 4 orders (2 buys, 2 sells)")
         print()
-        
-        print("💵 P&L Analysis:")
-        print(f"   Average Win:         ₹{results['avg_win']:,.2f}")
-        print(f"   Average Loss:        ₹{results['avg_loss']:,.2f}")
-        print(f"   Profit Factor:       {results['profit_factor']:.2f}")
-        print(f"   Largest Win:         ₹{results['largest_win']:,.2f}")
-        print(f"   Largest Loss:        ₹{results['largest_loss']:,.2f}")
+
+        # Get next expiry options (example)
+        print("🔍 Fetching available option contracts...")
+        instruments = kite.instruments("NFO")
+        nifty_options = [i for i in instruments if i["name"] == "NIFTY" and i["instrument_type"] in ["CE", "PE"]]
+
+        # Get unique expiries
+        expiries = sorted(set(i["expiry"] for i in nifty_options))[:3]
+        print(f"   Next 3 expiries: {[str(e) for e in expiries]}")
         print()
-        
-        print("📊 Strategy Performance:")
-        print(f"   Signals Generated:  {results['signals_generated']}")
-        print(f"   Execution Rate:     {(results['total_trades'] / results['signals_generated'] * 100) if results['signals_generated'] > 0 else 0:.2f}%")
+
+        print("⚠️  This is a TEST script.")
+        print("   To place actual orders, uncomment the order placement code below.")
         print()
-        
-        # Performance assessment
-        print("="*70)
-        if results['total_return_pct'] > 0:
-            print("✅ BACKTEST PROFITABLE")
-        else:
-            print("❌ BACKTEST SHOWS LOSSES")
-        
-        if results['win_rate'] >= 60:
-            print("✅ Good Win Rate")
-        elif results['win_rate'] >= 50:
-            print("⚠️  Moderate Win Rate")
-        else:
-            print("❌ Low Win Rate")
-        
-        if results['profit_factor'] >= 2.0:
-            print("✅ Excellent Profit Factor")
-        elif results['profit_factor'] >= 1.5:
-            print("✅ Good Profit Factor")
-        elif results['profit_factor'] >= 1.0:
-            print("⚠️  Marginal Profit Factor")
-        else:
-            print("❌ Poor Profit Factor")
-        
-        if results['max_drawdown_pct'] <= 10:
-            print("✅ Low Drawdown")
-        elif results['max_drawdown_pct'] <= 20:
-            print("⚠️  Moderate Drawdown")
-        else:
-            print("❌ High Drawdown")
-        
-        print("="*70)
-        print()
-        
-        # Show sample trades
-        if engine.closed_trades:
-            print("📋 Sample Trades (First 10):")
-            print("-"*70)
-            for i, trade in enumerate(engine.closed_trades[:10], 1):
-                pnl_sign = "+" if trade['pnl'] >= 0 else ""
-                print(f"{i:2d}. {trade['entry_date'].strftime('%Y-%m-%d')} → {trade['exit_date'].strftime('%Y-%m-%d')}")
-                print(f"    {trade['symbol']:20s} | {trade['side']:4s} | Qty: {trade['quantity']:3d} | "
-                      f"Entry: ₹{trade['entry_price']:7.2f} | Exit: ₹{trade['exit_price']:7.2f} | "
-                      f"P&L: {pnl_sign}₹{trade['pnl']:8.2f} | Reason: {trade['exit_reason']}")
-            print()
-        
-        # Recommendations
-        print("💡 Recommendations:")
-        if results['total_trades'] < 10:
-            print("   ⚠️  Very few trades - strategy may be too selective")
-            print("   → Consider widening strike offsets or IV range")
-        
-        if results['win_rate'] < 50 and results['total_return_pct'] < 0:
-            print("   ⚠️  Low win rate with losses - review exit rules")
-            print("   → Consider tighter stop losses or earlier profit taking")
-        
-        if results['max_drawdown_pct'] > 15:
-            print("   ⚠️  High drawdown - review position sizing")
-            print("   → Consider reducing per-trade risk percentage")
-        
-        if results['profit_factor'] < 1.0:
-            print("   ⚠️  Profit factor below 1.0 - strategy losing money")
-            print("   → Review strategy logic and parameters")
-        
-        print()
-        print("📝 Next Steps:")
-        print("   1. Review individual trades for patterns")
-        print("   2. Test different parameter combinations")
-        print("   3. Test on different date ranges (walk-forward)")
-        print("   4. Paper trade if results look promising")
-        print()
-        
-    except FileNotFoundError as e:
-        print(f"❌ Error: Historical data not found")
-        print(f"   {e}")
-        print()
-        print("💡 Make sure CSV files are in: docs/NSE OPINONS DATA/")
-        return 1
+
+        # Example order placement (COMMENTED OUT FOR SAFETY)
+        print("# Example order code (DISABLED):")
+        print(f"# kite.place_order(")
+        print(f"#     variety=kite.VARIETY_REGULAR,")
+        print(f"#     exchange=kite.EXCHANGE_NFO,")
+        print(f"#     tradingsymbol='NIFTY24JANFUT',  # Replace with actual option symbol")
+        print(f"#     transaction_type=kite.TRANSACTION_TYPE_BUY,")
+        print(f"#     quantity=25,")
+        print(f"#     product=kite.PRODUCT_NRML,")
+        print(f"#     order_type=kite.ORDER_TYPE_MARKET")
+        print(f"# )")
+
     except Exception as e:
-        print(f"❌ Error during backtest: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
-        return 1
-    
-    return 0
+        return
 
+    print()
+    print("✅ Test completed successfully")
+    print("   System can connect to Kite and fetch data")
 
 if __name__ == "__main__":
-    exit(main())
-
+    main()

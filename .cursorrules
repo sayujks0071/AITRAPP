@@ -1,0 +1,6 @@
+# Compliance guardrails for Cursor-generated changes
+- NEVER hardcode API keys, secrets, or tokens; always load via os.getenv and .env.
+- ALL trade execution logic MUST route through execution_engine.py to preserve rate limiting and kill switch checks.
+- Do NOT bypass the LeakyBucket limiter with time.sleep for pacing; use the limiter utilities.
+- Preserve JSON logging configuration; do not replace with print statements.
+- Keep `.env`, secrets, and logs excluded from AI indexing (.cursorignore).

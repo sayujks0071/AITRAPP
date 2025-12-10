@@ -1,0 +1,53 @@
+{
+  "lineage": [
+    {
+      "strategy_name": "trend_credit_spread_v1",
+      "parent_strategy": null,
+      "created_at": "2025-11-21T00:17:30.224690",
+      "evolution_reason": "Initial strategy",
+      "status": "ACTIVE",
+      "abandoned_reason": null
+    },
+    {
+      "strategy_name": "intraday_short_strangle_v1",
+      "parent_strategy": null,
+      "created_at": "2025-11-21T00:17:30.224837",
+      "evolution_reason": "Initial strategy",
+      "status": "ACTIVE",
+      "abandoned_reason": null
+    }
+  ],
+  "regime_performance": [
+    {
+      "strategy_name": "trend_credit_spread_v1",
+      "regime": "HIGH_VOL",
+      "total_trades": 8,
+      "wins": 7,
+      "losses": 1,
+      "total_pnl": 1100.0,
+      "avg_pnl_per_trade": 137.5,
+      "win_rate": 87.5,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "last_updated": "2025-11-21T00:17:46.105376"
+    },
+    {
+      "strategy_name": "intraday_short_strangle_v1",
+      "regime": "HIGH_VOL",
+      "total_trades": 8,
+      "wins": 8,
+      "losses": 0,
+      "total_pnl": 4700.0,
+      "avg_pnl_per_trade": 587.5,
+      "win_rate": 100.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "last_updated": "2025-11-21T00:17:46.105528"
+    }
+  ],
+  "seasonality": [],
+  "metadata": {
+    "created_at": "2025-11-21T00:17:46.105575",
+    "last_updated": "2025-11-21T00:17:46.105576"
+  }
+}

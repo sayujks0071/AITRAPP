@@ -155,3 +155,81 @@ groups:
           summary: "Kill switch activated"
           description: "Kill switch was pressed. All positions should be flattened."
 
+groups:
+  - name: crypto-specific
+    interval: 30s
+    rules:
+      # Crypto spread too wide (> 50 bps for 60s)
+      - alert: CryptoSpreadTooWide
+        expr: |
+          (
+            # This would need a custom metric for spread, or calculate from orderbook
+            # For now, we'll use a placeholder - in production, emit trader_crypto_spread_bps metric
+            trader_crypto_orders_placed_total{venue="KRAKEN_SPOT"} > 0
+            and on() vector(0.5)  # Placeholder: replace with actual spread metric
+          ) > 50
+        for: 60s
+        labels:
+          severity: warning
+          component: crypto
+        annotations:
+          summary: "Crypto spread too wide (> 50 bps)"
+          description: "Spread for {{ $labels.symbol }} is {{ $value }} bps. Orders will be rejected."
+
+      # Crypto WebSocket reconnect spike (> 3 in 10m)
+      - alert: CryptoWSReconnectSpike
+        expr: increase(trader_crypto_ws_reconnects_total[10m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          component: crypto
+        annotations:
+          summary: "Crypto WebSocket reconnect spike"
+          description: "{{ $value }} WebSocket reconnects in last 10 minutes for {{ $labels.venue }}. Check network stability."
+
+      # Crypto OCO orphans detected
+      - alert: CryptoOCOOrphans
+        expr: trader_oco_orphans_total{venue=~"KRAKEN_SPOT|BINANCE_SPOT"} > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: crypto
+        annotations:
+          summary: "Crypto OCO orphans detected"
+          description: "Found {{ $value }} orphan OCO siblings for {{ $labels.venue }}. Immediate cleanup required."
+
+      # Flatten duration SLO breach (p95 > 2s)
+      - alert: CryptoFlattenDurationSLOBreach
+        expr: |
+          histogram_quantile(0.95, 
+            rate(trader_crypto_flatten_duration_seconds_bucket[5m])
+          ) > 2
+        for: 1m
+        labels:
+          severity: warning
+          component: crypto
+        annotations:
+          summary: "Crypto flatten duration SLO breach"
+          description: "95th percentile flatten duration is {{ $value }}s (SLO: ≤2s) for {{ $labels.venue }}"
+
+      # Binance rate limit warnings
+      - alert: BinanceWeightNearCap
+        expr: trader_binance_used_weight_1m{venue="BINANCE_SPOT"} > 1000
+        for: 1m
+        labels:
+          severity: warning
+          component: crypto
+        annotations:
+          summary: "Binance API weight near cap"
+          description: "Used weight {{ $value }}/1200 in last 1 minute for {{ $labels.venue }}"
+
+      - alert: BinanceWeightCritical
+        expr: trader_binance_used_weight_1m{venue="BINANCE_SPOT"} > 1100
+        for: 0m
+        labels:
+          severity: critical
+          component: crypto
+        annotations:
+          summary: "Binance API weight critical"
+          description: "Used weight {{ $value }}/1200 in last 1 minute for {{ $labels.venue }} - rate limit imminent"
+

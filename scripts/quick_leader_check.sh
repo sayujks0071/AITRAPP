@@ -8,7 +8,9 @@ echo ""
 
 # Leader lock
 LEADER=$(curl -s "$API/metrics" 2>/dev/null | awk '/^trader_is_leader[^_]/ {print $2; exit}' || echo "0")
-if [[ "$LEADER" == "1" ]]; then
+# Normalise to integer (handles 1 vs 1.0)
+LEADER_INT="${LEADER%.*}"
+if [[ "$LEADER_INT" == "1" ]]; then
     echo "✅ Leader: ACQUIRED ($LEADER)"
 else
     echo "❌ Leader: NOT ACQUIRED ($LEADER)"
@@ -45,4 +47,3 @@ echo "=== Heartbeats ==="
 printf "Market Data:   %.2fs %s\n" "$MD_HB" "$([ $(echo "$MD_HB < 5" | bc -l 2>/dev/null || echo 0) -eq 1 ] && echo '✅' || echo '❌')"
 printf "Order Stream:  %.2fs %s\n" "$ORDER_HB" "$([ $(echo "$ORDER_HB < 5" | bc -l 2>/dev/null || echo 0) -eq 1 ] && echo '✅' || echo '❌')"
 printf "Scan Loop:     %.2fs %s\n" "$SCAN_HB" "$([ $(echo "$SCAN_HB < 5" | bc -l 2>/dev/null || echo 0) -eq 1 ] && echo '✅' || echo '❌')"
-

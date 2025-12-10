@@ -6,7 +6,8 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
-from packages.core.models import AppMode, SystemState
+from packages.core.models import SystemState
+from packages.core.config import AppMode
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

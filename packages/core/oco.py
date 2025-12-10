@@ -11,6 +11,7 @@ from packages.storage.models import (
 from packages.storage.database import get_db_session
 from packages.core.kite_client import KiteClient
 from packages.core.execution import plan_client_id, order_client_id
+from packages.core.compliance import ComplianceGuard
 
 logger = structlog.get_logger(__name__)
 
@@ -51,8 +52,9 @@ class OCOGroup:
 class OCOManager:
     """Manages OCO groups and sibling cancellation"""
     
-    def __init__(self, kite_client: KiteClient):
+    def __init__(self, kite_client: KiteClient, compliance_guard: Optional[ComplianceGuard] = None):
         self.kite_client = kite_client
+        self.compliance_guard = compliance_guard
         self.groups: Dict[str, OCOGroup] = {}
     
     def create_oco_group(self, entry_order: Order, stop_price: float, 
@@ -140,7 +142,7 @@ class OCOManager:
         
         return group_id
     
-    def on_entry_fill(self, group_id: str) -> None:
+    async def on_entry_fill(self, group_id: str) -> None:
         """Called when entry order is filled - place stop and TP orders (single-flight)"""
         group = self.groups.get(group_id)
         if not group:
@@ -168,79 +170,173 @@ class OCOManager:
             
             # Place stop order
             if group.stop_order:
-                try:
-                    broker_order_id = self.kite_client.place_order(
-                        exchange=group.stop_order.symbol.split(":")[0] if ":" in group.stop_order.symbol else "NFO",
-                        tradingsymbol=group.stop_order.symbol,
-                        transaction_type="SELL" if group.stop_order.side == OrderSideEnum.BUY else "BUY",
-                        quantity=group.stop_order.qty,
-                        order_type="SL-M",
-                        trigger_price=group.stop_order.trigger_price,
-                        product="MIS",
-                        validity="DAY"
-                    )
-                    group.stop_order.broker_order_id = broker_order_id
-                    group.stop_order.status = OrderStatusEnum.PLACED
-                    db.add(group.stop_order)
-                    logger.info("Stop order placed", group_id=group_id, 
-                              broker_order_id=broker_order_id)
-                except Exception as e:
-                    logger.error("Failed to place stop order", group_id=group_id, error=str(e))
-                    # Create risk event
-                    from packages.storage.models import RiskEvent
-                    risk_event = RiskEvent(
-                        event_type="STOP_ORDER_FAILED",
-                        severity="CRITICAL",
-                        message=f"Failed to place stop order for {group_id}",
-                        details={"group_id": group_id, "error": str(e)}
-                    )
-                    db.add(risk_event)
+                # Compliance: Check before placing
+                if self.compliance_guard:
+                    import asyncio
+                    if not await self.compliance_guard.check_before_order("PLACE", tag="OCO_STOP", limiter_type="oco_place"):
+                        logger.warning("Stop order blocked by compliance guard", group_id=group_id)
+                        # Create risk event
+                        from packages.storage.models import RiskEvent
+                        risk_event = RiskEvent(
+                            event_type="STOP_ORDER_BLOCKED",
+                            severity="HIGH",
+                            message=f"Stop order blocked by compliance guard for {group_id}",
+                            details={"group_id": group_id, "reason": "compliance_check_failed"}
+                        )
+                        db.add(risk_event)
+                    else:
+                        try:
+                            broker_order_id = self.kite_client.place_order(
+                                exchange=group.stop_order.symbol.split(":")[0] if ":" in group.stop_order.symbol else "NFO",
+                                tradingsymbol=group.stop_order.symbol,
+                                transaction_type="SELL" if group.stop_order.side == OrderSideEnum.BUY else "BUY",
+                                quantity=group.stop_order.qty,
+                                order_type="SL-M",
+                                trigger_price=group.stop_order.trigger_price,
+                                product="MIS",
+                                validity="DAY"
+                            )
+                            group.stop_order.broker_order_id = broker_order_id
+                            group.stop_order.status = OrderStatusEnum.PLACED
+                            db.add(group.stop_order)
+                            logger.info("Stop order placed", group_id=group_id, 
+                                      broker_order_id=broker_order_id)
+                        except Exception as e:
+                            logger.error("Failed to place stop order", group_id=group_id, error=str(e))
+                            # Create risk event
+                            from packages.storage.models import RiskEvent
+                            risk_event = RiskEvent(
+                                event_type="STOP_ORDER_FAILED",
+                                severity="CRITICAL",
+                                message=f"Failed to place stop order for {group_id}",
+                                details={"group_id": group_id, "error": str(e)}
+                            )
+                            db.add(risk_event)
+                else:
+                    # No compliance guard - direct placement (backward compatibility)
+                    try:
+                        broker_order_id = self.kite_client.place_order(
+                            exchange=group.stop_order.symbol.split(":")[0] if ":" in group.stop_order.symbol else "NFO",
+                            tradingsymbol=group.stop_order.symbol,
+                            transaction_type="SELL" if group.stop_order.side == OrderSideEnum.BUY else "BUY",
+                            quantity=group.stop_order.qty,
+                            order_type="SL-M",
+                            trigger_price=group.stop_order.trigger_price,
+                            product="MIS",
+                            validity="DAY"
+                        )
+                        group.stop_order.broker_order_id = broker_order_id
+                        group.stop_order.status = OrderStatusEnum.PLACED
+                        db.add(group.stop_order)
+                        logger.info("Stop order placed", group_id=group_id, 
+                                  broker_order_id=broker_order_id)
+                    except Exception as e:
+                        logger.error("Failed to place stop order", group_id=group_id, error=str(e))
+                        # Create risk event
+                        from packages.storage.models import RiskEvent
+                        risk_event = RiskEvent(
+                            event_type="STOP_ORDER_FAILED",
+                            severity="CRITICAL",
+                            message=f"Failed to place stop order for {group_id}",
+                            details={"group_id": group_id, "error": str(e)}
+                        )
+                        db.add(risk_event)
             
             # Place TP1 order
             if group.tp1_order:
-                try:
-                    broker_order_id = self.kite_client.place_order(
-                        exchange=group.tp1_order.symbol.split(":")[0] if ":" in group.tp1_order.symbol else "NFO",
-                        tradingsymbol=group.tp1_order.symbol,
-                        transaction_type="SELL" if group.tp1_order.side == OrderSideEnum.BUY else "BUY",
-                        quantity=group.tp1_order.qty,
-                        order_type="LIMIT",
-                        price=group.tp1_order.price,
-                        product="MIS",
-                        validity="DAY"
-                    )
-                    group.tp1_order.broker_order_id = broker_order_id
-                    group.tp1_order.status = OrderStatusEnum.PLACED
-                    db.add(group.tp1_order)
-                    logger.info("TP1 order placed", group_id=group_id, 
-                              broker_order_id=broker_order_id)
-                except Exception as e:
-                    logger.error("Failed to place TP1 order", group_id=group_id, error=str(e))
+                if self.compliance_guard:
+                    import asyncio
+                    if not await self.compliance_guard.check_before_order("PLACE", tag="OCO_TP1", limiter_type="oco_place"):
+                        logger.warning("TP1 order blocked by compliance guard", group_id=group_id)
+                    else:
+                        try:
+                            broker_order_id = self.kite_client.place_order(
+                                exchange=group.tp1_order.symbol.split(":")[0] if ":" in group.tp1_order.symbol else "NFO",
+                                tradingsymbol=group.tp1_order.symbol,
+                                transaction_type="SELL" if group.tp1_order.side == OrderSideEnum.BUY else "BUY",
+                                quantity=group.tp1_order.qty,
+                                order_type="LIMIT",
+                                price=group.tp1_order.price,
+                                product="MIS",
+                                validity="DAY"
+                            )
+                            group.tp1_order.broker_order_id = broker_order_id
+                            group.tp1_order.status = OrderStatusEnum.PLACED
+                            db.add(group.tp1_order)
+                            logger.info("TP1 order placed", group_id=group_id, 
+                                      broker_order_id=broker_order_id)
+                        except Exception as e:
+                            logger.error("Failed to place TP1 order", group_id=group_id, error=str(e))
+                else:
+                    # No compliance guard - direct placement
+                    try:
+                        broker_order_id = self.kite_client.place_order(
+                            exchange=group.tp1_order.symbol.split(":")[0] if ":" in group.tp1_order.symbol else "NFO",
+                            tradingsymbol=group.tp1_order.symbol,
+                            transaction_type="SELL" if group.tp1_order.side == OrderSideEnum.BUY else "BUY",
+                            quantity=group.tp1_order.qty,
+                            order_type="LIMIT",
+                            price=group.tp1_order.price,
+                            product="MIS",
+                            validity="DAY"
+                        )
+                        group.tp1_order.broker_order_id = broker_order_id
+                        group.tp1_order.status = OrderStatusEnum.PLACED
+                        db.add(group.tp1_order)
+                        logger.info("TP1 order placed", group_id=group_id, 
+                                  broker_order_id=broker_order_id)
+                    except Exception as e:
+                        logger.error("Failed to place TP1 order", group_id=group_id, error=str(e))
             
             # Place TP2 order
             if group.tp2_order:
-                try:
-                    broker_order_id = self.kite_client.place_order(
-                        exchange=group.tp2_order.symbol.split(":")[0] if ":" in group.tp2_order.symbol else "NFO",
-                        tradingsymbol=group.tp2_order.symbol,
-                        transaction_type="SELL" if group.tp2_order.side == OrderSideEnum.BUY else "BUY",
-                        quantity=group.tp2_order.qty,
-                        order_type="LIMIT",
-                        price=group.tp2_order.price,
-                        product="MIS",
-                        validity="DAY"
-                    )
-                    group.tp2_order.broker_order_id = broker_order_id
-                    group.tp2_order.status = OrderStatusEnum.PLACED
-                    db.add(group.tp2_order)
-                    logger.info("TP2 order placed", group_id=group_id, 
-                              broker_order_id=broker_order_id)
-                except Exception as e:
-                    logger.error("Failed to place TP2 order", group_id=group_id, error=str(e))
+                if self.compliance_guard:
+                    import asyncio
+                    if not await self.compliance_guard.check_before_order("PLACE", tag="OCO_TP2", limiter_type="oco_place"):
+                        logger.warning("TP2 order blocked by compliance guard", group_id=group_id)
+                    else:
+                        try:
+                            broker_order_id = self.kite_client.place_order(
+                                exchange=group.tp2_order.symbol.split(":")[0] if ":" in group.tp2_order.symbol else "NFO",
+                                tradingsymbol=group.tp2_order.symbol,
+                                transaction_type="SELL" if group.tp2_order.side == OrderSideEnum.BUY else "BUY",
+                                quantity=group.tp2_order.qty,
+                                order_type="LIMIT",
+                                price=group.tp2_order.price,
+                                product="MIS",
+                                validity="DAY"
+                            )
+                            group.tp2_order.broker_order_id = broker_order_id
+                            group.tp2_order.status = OrderStatusEnum.PLACED
+                            db.add(group.tp2_order)
+                            logger.info("TP2 order placed", group_id=group_id, 
+                                      broker_order_id=broker_order_id)
+                        except Exception as e:
+                            logger.error("Failed to place TP2 order", group_id=group_id, error=str(e))
+                else:
+                    # No compliance guard - direct placement
+                    try:
+                        broker_order_id = self.kite_client.place_order(
+                            exchange=group.tp2_order.symbol.split(":")[0] if ":" in group.tp2_order.symbol else "NFO",
+                            tradingsymbol=group.tp2_order.symbol,
+                            transaction_type="SELL" if group.tp2_order.side == OrderSideEnum.BUY else "BUY",
+                            quantity=group.tp2_order.qty,
+                            order_type="LIMIT",
+                            price=group.tp2_order.price,
+                            product="MIS",
+                            validity="DAY"
+                        )
+                        group.tp2_order.broker_order_id = broker_order_id
+                        group.tp2_order.status = OrderStatusEnum.PLACED
+                        db.add(group.tp2_order)
+                        logger.info("TP2 order placed", group_id=group_id, 
+                                  broker_order_id=broker_order_id)
+                    except Exception as e:
+                        logger.error("Failed to place TP2 order", group_id=group_id, error=str(e))
             
             db.commit()
     
-    def on_child_fill(self, group_id: str, filled_order: Order) -> None:
+    async def on_child_fill(self, group_id: str, filled_order: Order) -> None:
         """Called when any child order (stop/TP) is filled - cancel siblings"""
         group = self.groups.get(group_id)
         if not group:
@@ -263,6 +359,15 @@ class OCOManager:
         
         with get_db_session() as db:
             for sibling in siblings:
+                # Compliance: Check before canceling
+                if self.compliance_guard:
+                    import asyncio
+                    if not await self.compliance_guard.check_before_order("CANCEL", tag="OCO_CANCEL", limiter_type="oco_cancel"):
+                        logger.warning("Sibling cancel blocked by compliance guard", 
+                                     group_id=group_id,
+                                     sibling_id=sibling.client_order_id)
+                        continue
+                
                 try:
                     if sibling.broker_order_id:
                         # Cancel on broker
@@ -284,7 +389,7 @@ class OCOManager:
             
             db.commit()
     
-    def cancel_all_in_group(self, group_id: str) -> None:
+    async def cancel_all_in_group(self, group_id: str) -> None:
         """Cancel all orders in an OCO group (e.g., on EOD or kill switch)"""
         group = self.groups.get(group_id)
         if not group:
@@ -299,6 +404,15 @@ class OCOManager:
         
         with get_db_session() as db:
             for order in active_orders:
+                # Compliance: Check before canceling
+                if self.compliance_guard:
+                    import asyncio
+                    if not await self.compliance_guard.check_before_order("CANCEL", tag="OCO_CANCEL_ALL", limiter_type="oco_cancel"):
+                        logger.warning("Order cancel blocked by compliance guard",
+                                     group_id=group_id,
+                                     order_id=order.client_order_id)
+                        continue
+                
                 try:
                     if order.broker_order_id:
                         self.kite_client.cancel_order(

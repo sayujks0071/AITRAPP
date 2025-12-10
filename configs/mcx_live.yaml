@@ -1,0 +1,196 @@
+# MCX LIVE Configuration (Phase: Ready for Live after final validation)
+#
+# Usage:
+#   export APP_MODE=LIVE
+#   export APP_CONFIG=configs/mcx_live.yaml
+#   export APP_TIMEZONE=Asia/Kolkata
+#   export KITE_API_KEY="***"
+#   export KITE_API_SECRET="***"
+#   export KITE_ACCESS_TOKEN="***"
+#   export EXPECTED_EGRESS_IP="x.x.x.x"
+#
+# Notes:
+# - Live trading guardrails match NSE style but tailored to MCX hours/fees.
+# - Strategies: enable only MCX-compatible ones; keep size conservative for first go-live.
+
+app:
+  mode: LIVE
+  timezone: Asia/Kolkata
+
+venue:
+  name: MCX
+  api_key_env: KITE_API_KEY
+  api_secret_env: KITE_API_SECRET
+  access_token_env: KITE_ACCESS_TOKEN
+
+risk:
+  per_trade_risk_pct: 0.20         # 0.20% per trade
+  max_portfolio_heat_pct: 0.80     # tighter heat for first live
+  daily_loss_stop_pct: -1.00       # -1% daily cap
+  max_positions: 2
+  max_position_size_multiplier: 1  # 1 lot max per leg initially
+  slippage_bps: 8
+  fees_per_order: 30
+  fees_per_option_leg: 30
+  mcx_slippage_bps: 8
+  mcx_fees_per_order: 30
+  mcx_fees_per_option_leg: 30
+  # Liquidity guards
+  nse_max_spread_pct: 0.8
+  nse_min_volume: 100
+  mcx_max_spread_pct: 1.2
+  mcx_min_volume: 50
+
+market:
+  open_time: "09:15"               # NSE reference (unused for MCX but kept for code paths)
+  close_time: "15:30"
+  eod_squareoff_time: "15:25"
+  eod_squareoff_enabled: true
+  premarket_sync_time: "08:55"
+  event_aware: true
+  event_stop_mult: 1.5
+  # MCX extended session
+  mcx_open_time: "09:00"
+  mcx_close_time: "23:30"
+  mcx_eod_squareoff_time: "23:20"
+
+execution:
+  engine_gap_ms: 300
+  instrument_gap_ms: 300
+  price_band_bps: 40
+  burst: 2
+  fanout_per_sec: 4
+  use_native_oco: false
+  default_order_type: LIMIT        # protect fills; MPP will buffer MARKET if needed
+  limit_chase_ticks: 2
+  limit_timeout_sec: 5
+  ioc_for_exits: true
+  max_order_retries: 3
+  retry_backoff_ms: 500
+  tops_cap_per_sec: 10
+  mcx_product: NRML
+  dry_run: false
+  freeze_limits:
+    CRUDEOIL: 100   # adjust per exchange freeze qty
+    GOLDM: 10
+    SILVERM: 20
+
+universe:
+  indices: []                      # no NSE indices for MCX-only live
+  fo_stocks_liquidity_rank_top_n: 0
+  exclude_fo_ban: true
+  exclude_illiquid_threshold_turnover: 10000000
+  sync_time: "08:55"
+  mcx_symbols: [CRUDEOIL, GOLDM, SILVERM]
+  mcx_include_options: false       # start futures-only; enable options after validation
+  mcx_strikes_from_atm: 3
+  mcx_strike_range_pct: 0.08
+  mcx_max_dte_days: 45
+
+options:
+  max_spread_mid_pct: 0.5
+  min_oi: 50000
+  min_last_traded_volume: 100
+  strikes_from_atm: 5
+  prefer_weekly: true
+  max_dte: 7
+  iv_percentile_min: 20
+  iv_percentile_max: 80
+
+strategies:
+  # Enable only those safe for MCX; start with zero strategies (toggle after validation)
+  - name: PremiumAdaptiveTrend
+    enabled: false
+    priority: 1
+    params:
+      ema_fast: 34
+      ema_slow: 89
+      adx_threshold: 22
+      backtest_relaxed_adx: 18
+      atr_vol_cap_pct: 1.1
+      atr_stop_mult: 1.2
+      pullback_lookback: 12
+      pullback_tolerance_pct: 0.35
+      breakout_lookback: 10
+      rr_min: 2.3
+      backtest_rr_min: 1.6
+      cooldown_minutes: 12
+      skip_event_days: false
+      block_regimes: [CHAOTIC, HIGH_EVENT]
+      preferred_regimes: [MEDIUM_TREND, LOW_VOL, LOW_MEAN_REVERT]
+      rsi_entry_range: [45, 65]
+      max_positions: 1
+      instruments: [CRUDEOIL, GOLDM, SILVERM]
+
+  # Placeholder: add MCX-specific strategies here after validation
+  # - name: MCXStrategyName
+  #   enabled: false
+  #   priority: 2
+  #   params: {}
+
+exits:
+  hard_stop_atr_mult: 2.0
+  trail_enabled: false
+  trail_atr_mult: 1.2
+  trail_step_pct: 0.5
+  tp1_rr: 1.2
+  tp1_partial_pct: 50
+  tp2_rr: 2.0
+  tp2_partial_pct: 100
+  move_to_be_after_tp1: false
+  time_stop_enabled: true
+  time_stop_min: 20
+  vol_stop_enabled: true
+  vol_spike_mult: 2.0
+  mae_stop_enabled: true
+  mae_stop_pct: 1.5
+  debit_spread_stop_pct: 50
+  debit_spread_tp_pct: 70
+  debit_spread_timeout_min: 20
+
+guards:
+  block_around_events_min: 10
+  max_spread_mid_pct: 0.5
+  min_liquidity_score: 0.7
+  require_unique_order_ids: true
+  audit_all_decisions: true
+
+ranking:
+  weights:
+    momentum: 0.20
+    trend: 0.30
+    liquidity: 0.30
+    regime: 0.10
+    rr: 0.10
+  penalties:
+    illiquid_mult: 0.3
+    news_event_mult: 0.5
+    far_from_vwap_mult: 0.8
+  top_n: 3
+
+logging:
+  level: INFO
+  format: json
+  log_file: logs/mcx_live.log
+  max_bytes: 104857600
+  backup_count: 10
+  audit_all_decisions: true
+  audit_retention_days: 90
+
+monitoring:
+  prometheus_enabled: true
+  prometheus_port: 9090
+  health_check_interval_sec: 30
+  heartbeat_timeout_sec: 5
+  leader_election_enabled: true
+
+compliance:
+  sebi_2025: true
+  exchange_algo_id_env: EXCHANGE_ALGO_ID
+  oauth_required: true
+  two_fa_required: true
+  require_static_ip: true
+  expected_egress_ip_env: EXPECTED_EGRESS_IP
+  force_daily_logout_iso: "03:30"
+  audit_retention_years: 5
+  whitelisted_clients_env: WHITELISTED_CLIENTS

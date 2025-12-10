@@ -1,0 +1,23 @@
+{
+  "buildCommand": "cd apps/ops-browser && pnpm install && pnpm build",
+  "outputDirectory": "apps/ops-browser/.next",
+  "installCommand": "cd apps/ops-browser && pnpm install",
+  "framework": "nextjs",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/"
+    }
+  ]
+}
+
+
+
+
+
+
+
+
+
+
+

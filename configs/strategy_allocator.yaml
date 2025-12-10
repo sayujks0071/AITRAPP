@@ -1,0 +1,112 @@
+# configs/strategy_allocator.yaml
+
+strategy_allocator:
+  enabled: false  # Disabled for Day-1 bootstrap (no trading history yet)
+  
+  # Periodic refresh configuration
+  refresh_interval_seconds: 90        # Run allocator every 90 seconds (regime-aware refresh)
+
+  # Global risk envelope for all strategies controlled by allocator
+  global_max_capital_pct: 0.60        # 60% of capital under allocator control
+  min_capital_pct_per_strategy: 0.01  # 1% floor if enabled
+  max_capital_pct_per_strategy: 0.25  # 25% per strategy cap
+
+  # Stats lookbacks
+  stats:
+    trade_window: 50                  # last 50 trades
+    day_window: 30                    # last 30 days
+
+  # Performance thresholds (rule-based layer)
+  thresholds:
+    min_hit_rate: 0.45
+    min_expectancy_perc: 0.10         # avg PnL per trade (% of risk) over window
+    max_drawdown_perc: 5.0            # >5% DD → downweight / disable
+    cold_streak_trades: 7             # N losses in a row = disable until cool-down
+
+  # ML / scoring model (can be rule-based initially)
+  model:
+    type: "RULE_BASED"                # later: "ML_REMOTE", "ML_LOCAL"
+    ml_endpoint: ""                   # if you later host a model
+    risk_aversion: 0.5                # 0=aggressive, 1=conservative
+
+  # Strategies under allocator control
+  # Day-4: Updated weights for premium strategies (G1, T1, D1) + OptionsRanker
+  strategies:
+    # NEW: Premium Adaptive Trend (Priority 0)
+    - name: "PremiumAdaptiveTrend"
+      base_weight: 0.15              # 15% allocation for high-conviction trend
+      role: "directional_trend"
+
+    # PRIMARY: OptionsRanker (Debit Spreads)
+    - name: "OptionsRanker"
+      base_weight: 0.40              # Day-4: 40% (reduced from 45% to make room for PAT)
+      role: "directional_debit"
+
+    # SECONDARY: Expiry Short Strangle V2
+    - name: "expiry_short_strangle_v2"
+      base_weight: 0.10              # Day-4: 10% (V2 upgrade)
+      role: "income_short_vol"
+
+    # PREMIUM: G1 Gamma Scalper
+    - name: "GammaScalper"
+      base_weight: 0.15              # Day-4: 15% (promoted to LIVE)
+      role: "long_gamma"
+
+    # PREMIUM: T1 Calendar Arbitrage
+    - name: "CalendarArb"
+      base_weight: 0.15              # Day-4: 15% (promoted to LIVE)
+      role: "term_structure"
+
+    # PREMIUM: D1 Dispersion Arbitrage
+    - name: "DispersionArb"
+      base_weight: 0.10              # Day-4: 10% (promoted to LIVE)
+      role: "dispersion"
+
+    # PREMIUM: Intraday Short Strangle V1
+    - name: "intraday_short_strangle_v1"
+      base_weight: 0.05              # Day-4: 5% (small size, intraday only)
+      role: "intraday_short_vol"
+
+    # PREMIUM: Trend Credit Spread V1
+    - name: "trend_credit_spread_v1"
+      base_weight: 0.05              # Day-4: 5% (small size, trend-based)
+      role: "directional_income"
+
+    # SHADOW: Legacy strategies (disabled)
+    - name: "intraday_short_strangle"
+      base_weight: 0.0               # Day-4: Disabled (replaced by v1)
+      role: "intraday_short_vol"
+
+    - name: "index_sniper"
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
+      role: "directional_trend"
+
+    - name: "drifting_credit_spread"
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
+      role: "directional_income"
+
+    - name: "vscore_credit_spread"
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
+      role: "vol_surface"
+
+    - name: "kurtosis_straddle"
+      base_weight: 0.0               # Day-4: Disabled (shadow mode)
+      role: "long_vol"
+
+  # Integration with R1 regimes (optional rule overlay)
+  regime_overlays:
+    LOW_MEAN_REVERT:
+      boost_roles: ["income_short_vol", "directional_income", "term_structure"]
+      cut_roles:   ["long_vol", "long_gamma"]
+
+    MEDIUM_TREND:
+      boost_roles: ["directional_trend", "directional_income", "dispersion"]
+      cut_roles:   ["income_short_vol"]
+
+    HIGH_EVENT:
+      boost_roles: ["long_vol", "long_gamma", "term_structure"]
+      cut_roles:   ["income_short_vol"]
+
+    CHAOTIC:
+      boost_roles: ["long_vol", "long_gamma"]
+      cut_roles:   ["income_short_vol", "directional_trend", "directional_income"]

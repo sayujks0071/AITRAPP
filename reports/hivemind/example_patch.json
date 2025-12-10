@@ -1,0 +1,46 @@
+{
+  "day": "2025-11-21",
+  "version": "v1",
+  "source": "hivemind",
+  "summary": "Example patch document for testing",
+  "patches": [
+    {
+      "id": "PATCH-001",
+      "target": "strategies.intraday_short_strangle_v1.target_delta",
+      "current_value": 0.25,
+      "proposed_value": 0.22,
+      "change_type": "tune",
+      "reason": "Losers clustered at 0.25–0.30 delta; shifting to 0.22 to reduce tail risk.",
+      "priority": "HIGH",
+      "bounds": {
+        "min": 0.15,
+        "max": 0.35
+      },
+      "risk_officer": {
+        "approved": true,
+        "comment": "Within safe range, aligns with regime stats."
+      }
+    },
+    {
+      "id": "PATCH-002",
+      "target": "strategies.trend_credit_spread_v1.adx_threshold",
+      "current_value": 22.0,
+      "proposed_value": 25.0,
+      "change_type": "tune",
+      "reason": "Losing trades have mean ADX 23.1; increasing threshold to 25 to avoid choppy conditions.",
+      "priority": "MEDIUM",
+      "bounds": {
+        "min": 15,
+        "max": 40
+      },
+      "risk_officer": {
+        "approved": false,
+        "comment": "Flagged for manual review due to limited sample size (N=7)."
+      }
+    }
+  ]
+}
+
+
+
+

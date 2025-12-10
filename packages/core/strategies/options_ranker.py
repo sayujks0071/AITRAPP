@@ -3,11 +3,31 @@ from datetime import datetime
 from typing import List, Optional
 
 import structlog
+from prometheus_client import Counter
 
 from packages.core.models import Bar, Instrument, InstrumentType, Signal, SignalSide
 from packages.core.strategies.base import Strategy, StrategyContext
 
 logger = structlog.get_logger(__name__)
+
+# Observability Metrics
+options_ranker_setups_evaluated = Counter(
+    'options_ranker_setups_evaluated_total',
+    'Total number of option spread setups evaluated',
+    ['strategy_type', 'underlying']
+)
+
+options_ranker_filter_rejections = Counter(
+    'options_ranker_filter_rejections_total',
+    'Option setups rejected by each filter',
+    ['strategy_type', 'underlying', 'filter_name']
+)
+
+options_ranker_signals_approved = Counter(
+    'options_ranker_signals_approved_total',
+    'Option signals that passed all filters',
+    ['strategy_type', 'underlying', 'spread_type']
+)
 
 
 class OptionsRankerStrategy(Strategy):
@@ -85,36 +105,76 @@ class OptionsRankerStrategy(Strategy):
     def _generate_debit_spread(self, context: StrategyContext, ivp: float) -> Optional[Signal]:
         """
         Generate debit spread signal.
-        
+
         Buy ITM option, sell OTM option (same expiry, same type).
         Works best when IVP is low (cheaper premium).
         """
-        # Prefer debit spreads when IV is not too high
-        if ivp > self.ivp_max:
-            logger.debug("IVP too high for debit spread", ivp=ivp)
+        underlying = context.instrument.symbol
+        strategy_type = "DEBIT_SPREAD"
+
+        # Track: Setup evaluated
+        options_ranker_setups_evaluated.labels(
+            strategy_type=strategy_type,
+            underlying=underlying
+        ).inc()
+
+        # Filter 1: IV Percentile Range
+        if ivp < self.ivp_min or ivp > self.ivp_max:
+            options_ranker_filter_rejections.labels(
+                strategy_type=strategy_type,
+                underlying=underlying,
+                filter_name="iv_percentile"
+            ).inc()
+            logger.debug(
+                "Debit spread rejected: IV out of range",
+                ivp=ivp,
+                ivp_min=self.ivp_min,
+                ivp_max=self.ivp_max
+            )
             return None
-        
-        # Determine direction from underlying trend
+
+        # Filter 2: Directional Bias (Trend Confirmation)
         direction = self._get_directional_bias(context)
-        
+
         if direction is None:
+            options_ranker_filter_rejections.labels(
+                strategy_type=strategy_type,
+                underlying=underlying,
+                filter_name="trend_confirmation"
+            ).inc()
+            logger.debug(
+                "Debit spread rejected: No clear directional bias",
+                underlying=underlying
+            )
             return None
         
         # In production, fetch actual options chain and select strikes
         # For now, create placeholder signal
-        
+
         current_price = context.latest_tick.last_price
-        
+
         if direction == "BULLISH":
             # Bull call spread: Buy ITM call, sell OTM call
             buy_strike = current_price * 0.98  # ITM
             sell_strike = current_price * 1.02  # OTM
-            
+
             # Estimate spread cost and max profit
             spread_cost = 100  # Placeholder
             max_profit = (sell_strike - buy_strike) - spread_cost
-            
-            if max_profit / spread_cost < self.rr_min:
+
+            # Filter 3: Risk-Reward Ratio
+            actual_rr = max_profit / spread_cost if spread_cost > 0 else 0
+            if actual_rr < self.rr_min:
+                options_ranker_filter_rejections.labels(
+                    strategy_type=strategy_type,
+                    underlying=underlying,
+                    filter_name="risk_reward"
+                ).inc()
+                logger.debug(
+                    "Debit spread rejected: RR too low",
+                    actual_rr=round(actual_rr, 2),
+                    required_rr=self.rr_min
+                )
                 return None
             
             signal = Signal(
@@ -143,11 +203,23 @@ class OptionsRankerStrategy(Strategy):
             # Bear put spread: Buy ITM put, sell OTM put
             buy_strike = current_price * 1.02  # ITM
             sell_strike = current_price * 0.98  # OTM
-            
+
             spread_cost = 100  # Placeholder
             max_profit = (buy_strike - sell_strike) - spread_cost
-            
-            if max_profit / spread_cost < self.rr_min:
+
+            # Filter 3: Risk-Reward Ratio
+            actual_rr = max_profit / spread_cost if spread_cost > 0 else 0
+            if actual_rr < self.rr_min:
+                options_ranker_filter_rejections.labels(
+                    strategy_type=strategy_type,
+                    underlying=underlying,
+                    filter_name="risk_reward"
+                ).inc()
+                logger.debug(
+                    "Debit spread rejected: RR too low",
+                    actual_rr=round(actual_rr, 2),
+                    required_rr=self.rr_min
+                )
                 return None
             
             signal = Signal(
@@ -174,16 +246,25 @@ class OptionsRankerStrategy(Strategy):
         
         signal.risk_amount = spread_cost
         signal.reward_amount = max_profit
-        
+
         self.signals_generated += 1
-        
+
+        # Track: Signal approved (passed all filters)
+        spread_type = signal.features["spread_type"]
+        options_ranker_signals_approved.labels(
+            strategy_type=strategy_type,
+            underlying=underlying,
+            spread_type=spread_type
+        ).inc()
+
         logger.info(
-            "Debit spread signal",
+            "Debit spread signal APPROVED",
             instrument=context.instrument.tradingsymbol,
-            type=signal.features["spread_type"],
-            rr=signal.risk_reward_ratio
+            type=spread_type,
+            rr=signal.risk_reward_ratio,
+            ivp=ivp
         )
-        
+
         return signal
     
     def _generate_credit_spread(self, context: StrategyContext, ivp: float) -> Optional[Signal]:

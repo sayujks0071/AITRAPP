@@ -1,0 +1,42 @@
+# FinRL Deep Reinforcement Learning Strategy Configuration
+# ========================================================
+#
+# This strategy uses trained FinRL DRL agents to generate trading signals.
+# Requires a pre-trained model (see scripts/train_finrl.py)
+
+finrl_strategy:
+  enabled: false  # Set to true after training a model
+  priority: 50  # Lower = higher priority
+  
+  # Model Configuration
+  model_path: "models/finrl_ppo.zip"  # Path to trained model
+  algorithm: "PPO"  # Algorithm: PPO, A2C, DDPG, TD3, SAC
+  
+  # Signal Generation
+  lookback_window: 30  # Number of bars to use for prediction
+  min_confidence: 0.6  # Minimum confidence threshold
+  
+  # Position Management
+  max_positions: 2  # Maximum concurrent positions
+  position_size_pct: 0.1  # Position size as % of capital
+  
+  # Risk Management
+  stop_loss_pct: 0.02  # 2% stop loss
+  take_profit_pct: 0.04  # 4% take profit
+  
+  # Trading Hours
+  entry_start: "09:30"  # IST
+  entry_end: "14:30"  # IST
+  exit_before: "15:20"  # IST
+  
+  # Filters
+  min_volume: 1000  # Minimum daily volume
+  min_liquidity_score: 0.7  # Minimum liquidity score
+  
+  # Notes:
+  # 1. Train model first: python scripts/train_finrl.py --data data.csv --algorithm PPO --output models/finrl_ppo.zip
+  # 2. Update model_path to point to trained model
+  # 3. Set enabled: true
+  # 4. Adjust parameters based on backtest results
+
+

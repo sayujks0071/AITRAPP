@@ -15,9 +15,9 @@ required_env = [
 ]
 
 required_ports: List[Tuple[str, int]] = [
-    ("postgres", 5432),
-    ("redis", 6379),
-    ("localhost", 8000)
+    ("localhost", 5432),  # PostgreSQL
+    ("localhost", 6379),  # Redis
+    ("localhost", 8000)   # API
 ]
 
 

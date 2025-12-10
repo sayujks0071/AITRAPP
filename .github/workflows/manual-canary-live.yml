@@ -125,30 +125,30 @@ jobs:
 
       - name: ✅ All validations PASSED
         run: |
-          echo ""
-          echo "╔════════════════════════════════════════════════════════════╗"
-          echo "║  ✅ ALL PRELIVE VALIDATIONS PASSED ✅                      ║"
-          echo "╠════════════════════════════════════════════════════════════╣"
-          echo "║  Day-2 burn-in requirements met.                          ║"
-          echo "║  System is READY for manual LIVE switch.                  ║"
-          echo "║                                                            ║"
-          echo "║  ⚠️  MANUAL OPERATOR ACTION REQUIRED ⚠️                   ║"
-          echo "║                                                            ║"
-          echo "║  To enable LIVE mode, run this command LOCALLY:           ║"
-          echo "║                                                            ║"
-          echo "║    curl -X POST http://localhost:8000/admin/mode \\       ║"
-          echo "║         -H 'Content-Type: application/json' \\            ║"
-          echo "║         -d '{"mode": "LIVE", "confirm": true}'            ║"
-          echo "║                                                            ║"
-          echo "║  OR use the Makefile target:                              ║"
-          echo "║                                                            ║"
-          echo "║    make live-switch                                       ║"
-          echo "║                                                            ║"
-          echo "║  Verify via:  curl http://localhost:8000/health           ║"
-          echo "║                                                            ║"
-          echo "║  ⚠️  DO NOT automate this switch via CI/CD ⚠️             ║"
-          echo "╚════════════════════════════════════════════════════════════╝"
-          echo ""
+          cat <<'MSG'
+╔════════════════════════════════════════════════════════════╗
+║  ✅ ALL PRELIVE VALIDATIONS PASSED ✅                      ║
+╠════════════════════════════════════════════════════════════╣
+║  Day-2 burn-in requirements met.                          ║
+║  System is READY for manual LIVE switch.                  ║
+║                                                            ║
+║  ⚠️  MANUAL OPERATOR ACTION REQUIRED ⚠️                   ║
+║                                                            ║
+║  To enable LIVE mode, run this command LOCALLY:           ║
+║                                                            ║
+║    curl -X POST http://localhost:8000/admin/mode \        ║
+║         -H 'Content-Type: application/json' \             ║
+║         -d '{"mode": "LIVE", "confirm": true}'            ║
+║                                                            ║
+║  OR use the Makefile target:                              ║
+║                                                            ║
+║    make live-switch                                       ║
+║                                                            ║
+║  Verify via:  curl http://localhost:8000/health           ║
+║                                                            ║
+║  ⚠️  DO NOT automate this switch via CI/CD ⚠️             ║
+╚════════════════════════════════════════════════════════════╝
+MSG
 
       - name: Collect validation logs
         if: always()

@@ -1,0 +1,58 @@
+# configs/tail_short_vol.yaml
+
+tail_short_vol:
+  enabled: true
+
+  # Which strategies are considered "short vol" for this overlay
+  short_vol_strategies:
+    - "expiry_short_strangle"
+    - "expiry_short_strangle_v2"    # Day-4+: Weekly income engine
+    - "intraday_short_strangle"
+    - "intraday_short_strangle_v1"  # Day-4+: Precision scalper
+    - "vscore_credit_spread"
+    - "drifting_credit_spread"
+    - "calendar_arb"         # optional, only if net-short vega
+    - "dispersion_arb"       # optional, if net-short overall
+
+  # Universe & instruments for tails
+  tail_underlyings:
+    - "NIFTY"
+    - "BANKNIFTY"
+
+  tail_instruments:
+    # For now, deep OTM puts only
+    type: "DEEP_OTM_PUT"
+    strike_offset_pct: 5.0         # 5–8% OTM; adjust by taste
+    expiry_selector: "next_month"  # or "nearest_monthly"
+
+  # Risk budgets (all as % of total portfolio capital)
+  risk_budgets:
+    max_short_premium_pct: 0.40    # total short-premium margin/notional cap
+    target_tail_coverage_pct: 0.15 # aim: tails deployed = 15% of short-premium notionals
+    min_tail_coverage_pct: 0.10    # never drop below 10%
+    max_tail_coverage_pct: 0.25    # don't over-hedge
+
+  # When to check and adjust tails
+  rebalance:
+    interval_minutes: 30           # how often overlay runs
+    min_notional_change_pct: 10.0  # only adjust if short-premium notional changes >10%
+    min_tail_gap_pct: 3.0          # only adjust if coverage gap >3% of short-premium
+
+  # Exits / rolls for tails
+  tail_exit:
+    max_days_to_expiry: 20         # roll tails if they get too close to expiry
+    pnl_take_profit_pct: 100.0     # if tails double (100% gain), consider taking profit & re-establish further OTM
+    pnl_stop_loss_pct: -70.0       # optional: avoid bleeding option that's gone horribly wrong
+
+  # Regime integration with R1 (overlay modifies coverage targets)
+  regime_overlays:
+    LOW_MEAN_REVERT:
+      coverage_multiplier: 1.0     # normal tails
+    MEDIUM_TREND:
+      coverage_multiplier: 1.1     # slightly higher tails
+    HIGH_EVENT:
+      coverage_multiplier: 1.5     # beef up tails
+    CHAOTIC:
+      coverage_multiplier: 2.0     # double tail coverage, and allocator should already be cutting short vol
+
+

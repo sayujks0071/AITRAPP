@@ -5,7 +5,11 @@ from datetime import datetime
 
 from packages.core.backtest import BacktestEngine
 from packages.core.config import app_config
-from packages.core.strategies import ORBStrategy, OptionsRankerStrategy, TrendPullbackStrategy
+from packages.core.strategies import (
+    ORBStrategy, OptionsRankerStrategy, TrendPullbackStrategy,
+    MACDStrategy, SMAMomentumStrategy, RSIMeanReversionStrategy,
+    BollingerBandsStrategy, VWAPStrategy, BreakoutStrategy, MeanReversionStrategy
+)
 
 
 def main():
@@ -43,7 +47,8 @@ def main():
     parser.add_argument(
         "--strategy",
         type=str,
-        choices=["ORB", "TrendPullback", "OptionsRanker", "all"],
+        choices=["ORB", "TrendPullback", "OptionsRanker", "MACD", "SMAMomentum", 
+                 "RSIMeanReversion", "BollingerBands", "VWAP", "Breakout", "MeanReversion", "all"],
         default="all",
         help="Strategy to test"
     )
@@ -78,6 +83,41 @@ def main():
         opt_config = app_config.get_strategy_by_name("OptionsRanker")
         if opt_config:
             strategies.append(OptionsRankerStrategy("OptionsRanker", opt_config.params))
+    
+    if args.strategy == "all" or args.strategy == "MACD":
+        macd_config = app_config.get_strategy_by_name("MACD")
+        if macd_config:
+            strategies.append(MACDStrategy("MACD", macd_config.params))
+    
+    if args.strategy == "all" or args.strategy == "SMAMomentum":
+        sma_config = app_config.get_strategy_by_name("SMAMomentum")
+        if sma_config:
+            strategies.append(SMAMomentumStrategy("SMAMomentum", sma_config.params))
+    
+    if args.strategy == "all" or args.strategy == "RSIMeanReversion":
+        rsi_config = app_config.get_strategy_by_name("RSIMeanReversion")
+        if rsi_config:
+            strategies.append(RSIMeanReversionStrategy("RSIMeanReversion", rsi_config.params))
+    
+    if args.strategy == "all" or args.strategy == "BollingerBands":
+        bb_config = app_config.get_strategy_by_name("BollingerBands")
+        if bb_config:
+            strategies.append(BollingerBandsStrategy("BollingerBands", bb_config.params))
+    
+    if args.strategy == "all" or args.strategy == "VWAP":
+        vwap_config = app_config.get_strategy_by_name("VWAP")
+        if vwap_config:
+            strategies.append(VWAPStrategy("VWAP", vwap_config.params))
+    
+    if args.strategy == "all" or args.strategy == "Breakout":
+        breakout_config = app_config.get_strategy_by_name("Breakout")
+        if breakout_config:
+            strategies.append(BreakoutStrategy("Breakout", breakout_config.params))
+    
+    if args.strategy == "all" or args.strategy == "MeanReversion":
+        mr_config = app_config.get_strategy_by_name("MeanReversion")
+        if mr_config:
+            strategies.append(MeanReversionStrategy("MeanReversion", mr_config.params))
     
     if not strategies:
         print("❌ No strategies configured. Check configs/app.yaml")

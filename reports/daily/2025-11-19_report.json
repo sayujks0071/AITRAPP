@@ -1,0 +1,66 @@
+{
+  "date": "2025-11-19",
+  "timestamp": "2025-11-19T18:53:16.373742",
+  "strategies": {
+    "gamma_scalper": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "hit_rate": 0.0,
+      "max_drawdown": 0.0
+    },
+    "calendar_arb": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "hit_rate": 0.0,
+      "max_drawdown": 0.0
+    },
+    "dispersion_arb": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "hit_rate": 0.0,
+      "max_drawdown": 0.0
+    }
+  },
+  "allocator": {
+    "expiry_short_strangle": {
+      "raw_score": 0.3,
+      "final_weight": 0.10526315789473682,
+      "max_capital_pct": 0.0631578947368421,
+      "enabled": true
+    },
+    "gamma_scalper": {
+      "raw_score": 0.3,
+      "final_weight": 0.15789473684210523,
+      "max_capital_pct": 0.09473684210526313,
+      "enabled": true
+    },
+    "calendar_arb": {
+      "raw_score": 0.3,
+      "final_weight": 0.15789473684210523,
+      "max_capital_pct": 0.09473684210526313,
+      "enabled": true
+    },
+    "dispersion_arb": {
+      "raw_score": 0.3,
+      "final_weight": 0.10526315789473682,
+      "max_capital_pct": 0.0631578947368421,
+      "enabled": true
+    }
+  },
+  "tail_coverage": {},
+  "regime_timeline": [
+    {
+      "time": "18:53",
+      "regime": "LOW_MEAN_REVERT"
+    }
+  ]
+}

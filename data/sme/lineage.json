@@ -1,0 +1,14 @@
+{
+  "trend_credit_spread_v2": {
+    "timestamp": "2025-11-21T00:23:30.519237",
+    "parent": "trend_credit_spread_v1",
+    "child": "trend_credit_spread_v2",
+    "reason": "Improved ADX threshold based on backtesting",
+    "diff": {
+      "adx_threshold": {
+        "old": 22,
+        "new": 20
+      }
+    }
+  }
+}

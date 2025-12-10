@@ -1,0 +1,77 @@
+PRE-FLIGHT CHECK REPORT
+========================
+Time: 2025-11-24 09:21 IST (Market Open: 09:15 IST)
+Status: POST-MARKET OPEN CHECK
+
+1. BACKEND STATUS
+-----------------
+✅ Mode: LIVE
+✅ Status: Running
+✅ Paused: No
+✅ Market Open: Yes
+
+2. AUTHENTICATION
+-----------------
+✅ Express Server: Authenticated
+✅ User: Sasidharan Sayuj Krishnan (MM2076)
+✅ Token: Fresh and Valid
+✅ REST API: Working
+✅ WebSocket: Connected
+
+3. RISK STATE
+-------------
+✅ Net Liquid: ₹10,00,000
+✅ Used Margin: ₹0
+✅ Available Margin: ₹10,00,000
+✅ Daily Loss Limit: -₹17,500
+✅ Max Portfolio Heat: ₹15,000
+✅ Can Take New Position: Yes
+✅ Daily Loss Breached: No
+✅ Heat Limit Breached: No
+
+4. POSITIONS & ORDERS
+--------------------
+✅ Open Positions: 0
+✅ Pending Orders: 0
+✅ Account Status: FLAT (Ready for trading)
+
+5. MARKET DATA
+--------------
+✅ Market Data Heartbeat: 0.23s (GOOD - <5s)
+✅ Order Stream Heartbeat: 0.68s (GOOD - <5s)
+✅ Scan Heartbeat: 4.94s (GOOD - <5s)
+✅ Leader: 1 (Active)
+✅ Ready Status: READY
+
+6. SYSTEM HEALTH
+----------------
+✅ Backend API: Running on port 8000
+✅ Express Server: Running on port 3001
+✅ WebSocket Connection: Active
+✅ Token Validity: Valid
+
+7. CONFIGURATION
+---------------
+✅ APP_MODE: LIVE
+✅ Config: kite_day1_live.yaml (assumed)
+✅ Token: Fresh (updated today)
+
+RECOMMENDATIONS
+---------------
+✅ System is READY for LIVE trading
+✅ All critical checks passed
+✅ Market is open and data is flowing
+✅ No blocking issues detected
+
+⚠️  Monitor scan_heartbeat (4.94s) - close to 5s threshold
+⚠️  Verify strategies are loaded and active
+⚠️  Monitor first few trades closely
+
+NEXT STEPS
+----------
+1. Monitor /ready endpoint - should remain true
+2. Watch for first signals from strategies
+3. Verify positions appear correctly when trades occur
+4. Monitor risk limits are respected
+
+

@@ -95,8 +95,18 @@ class ExitManager:
             
             tick, bars = tick_bars
             
-            # Update position with current price
-            position.current_price = tick.last_price
+            # Update position with current price (handle None tick)
+            if tick and hasattr(tick, 'last_price'):
+                position.current_price = tick.last_price
+            elif tick and isinstance(tick, dict):
+                position.current_price = tick.get('last_price', position.entry_price)
+            elif bars and len(bars) > 0:
+                # Fallback to latest bar close price
+                position.current_price = bars[-1].close
+            else:
+                # No market data available, skip this position
+                continue
+            
             position.update_pnl()
             
             # Initialize tracking

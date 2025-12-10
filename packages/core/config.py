@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, ConfigDict
 from pydantic_settings import BaseSettings
 
 
@@ -13,6 +13,8 @@ class AppMode(str, Enum):
     """Application execution mode"""
     PAPER = "PAPER"
     LIVE = "LIVE"
+    CRYPTO_PAPER = "CRYPTO_PAPER"
+    CRYPTO_LIVE = "CRYPTO_LIVE"
 
 
 class OrderType(str, Enum):
@@ -39,15 +41,19 @@ class ProductType(str, Enum):
 class Settings(BaseSettings):
     """Application settings from environment"""
     
-    # Kite Connect
-    kite_api_key: str = Field(alias="KITE_API_KEY")
-    kite_api_secret: str = Field(alias="KITE_API_SECRET")
-    kite_access_token: str = Field(alias="KITE_ACCESS_TOKEN")
-    kite_user_id: str = Field(alias="KITE_USER_ID")
+    # Configure Pydantic to ignore extra fields (like KITE_TOKEN_REFRESHED_AT)
+    model_config = ConfigDict(extra="ignore")
+    
+    # Kite Connect (optional for crypto mode)
+    kite_api_key: Optional[str] = Field(default=None, alias="KITE_API_KEY")
+    kite_api_secret: Optional[str] = Field(default=None, alias="KITE_API_SECRET")
+    kite_access_token: Optional[str] = Field(default=None, alias="KITE_ACCESS_TOKEN")
+    kite_user_id: Optional[str] = Field(default=None, alias="KITE_USER_ID")
     
     # Application
     app_mode: AppMode = Field(default=AppMode.PAPER, alias="APP_MODE")
     app_timezone: str = Field(default="Asia/Kolkata", alias="APP_TIMEZONE")
+    app_config_path: Optional[str] = Field(default=None, alias="APP_CONFIG")
     
     # SEBI/NSE Compliance (Feb 2025)
     compliance_sebi_2025: bool = Field(default=False, alias="COMPLIANCE_SEBI_2025")
@@ -62,19 +68,19 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     
     # Database
-    database_url: str = Field(alias="DATABASE_URL")
+    database_url: str = Field(default="postgresql+psycopg2://trader:trader@localhost:5432/aitrapp", alias="DATABASE_URL")
     database_pool_size: int = Field(default=20, alias="DATABASE_POOL_SIZE")
     database_max_overflow: int = Field(default=10, alias="DATABASE_MAX_OVERFLOW")
     
     # Redis
-    redis_url: str = Field(alias="REDIS_URL")
+    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_max_connections: int = Field(default=50, alias="REDIS_MAX_CONNECTIONS")
     
     # API Server
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
     api_workers: int = Field(default=4, alias="API_WORKERS")
-    api_secret_key: str = Field(alias="API_SECRET_KEY")
+    api_secret_key: str = Field(default="dev-secret-key-change-in-production", alias="API_SECRET_KEY")
     
     # WebSocket
     ws_ping_interval: int = Field(default=30, alias="WS_PING_INTERVAL")
@@ -84,7 +90,7 @@ class Settings(BaseSettings):
     # Risk Management
     risk_per_trade_pct: float = Field(default=0.5, alias="RISK_PER_TRADE_PCT")
     risk_max_portfolio_heat_pct: float = Field(default=2.0, alias="RISK_MAX_PORTFOLIO_HEAT_PCT")
-    risk_daily_loss_stop_pct: float = Field(default=2.5, alias="RISK_DAILY_LOSS_STOP_PCT")
+    risk_daily_loss_stop_pct: float = Field(default=-2.5, alias="RISK_DAILY_LOSS_STOP_PCT")
     
     # Market Hours
     market_open_time: str = Field(default="09:15", alias="MARKET_OPEN_TIME")
@@ -104,9 +110,12 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     reload: bool = Field(default=False, alias="RELOAD")
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    # Pydantic v2 configuration (replaces old Config class)
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"  # Ignore extra fields like KITE_TOKEN_REFRESHED_AT
+    )
 
 
 class RiskConfig:
@@ -114,11 +123,25 @@ class RiskConfig:
     def __init__(self, config: Dict[str, Any]):
         self.per_trade_risk_pct = config.get("per_trade_risk_pct", 0.5)
         self.max_portfolio_heat_pct = config.get("max_portfolio_heat_pct", 2.0)
-        self.daily_loss_stop_pct = config.get("daily_loss_stop_pct", 2.5)
+        self.daily_loss_stop_pct = config.get("daily_loss_stop_pct", -2.5)
         self.slippage_bps = config.get("slippage_bps", 5)
         self.fees_per_order = config.get("fees_per_order", 20)
         self.fees_per_option_leg = config.get("fees_per_option_leg", 2)
         self.max_position_size_multiplier = config.get("max_position_size_multiplier", 3)
+
+        # SEBI Compliance: Strategy-wise loss limits (per strategy max loss %)
+        self.max_loss_per_strategy_pct = config.get("max_loss_per_strategy_pct", -5.0)
+        
+        # MCX-specific overrides (phase 3)
+        self.mcx_slippage_bps = config.get("mcx_slippage_bps", self.slippage_bps)
+        self.mcx_fees_per_order = config.get("mcx_fees_per_order", self.fees_per_order)
+        self.mcx_fees_per_option_leg = config.get("mcx_fees_per_option_leg", self.fees_per_option_leg)
+        
+        # Liquidity guards (applied when signal carries spread/volume)
+        self.nse_max_spread_pct = config.get("nse_max_spread_pct", 0.8)
+        self.nse_min_volume = config.get("nse_min_volume", 100)
+        self.mcx_max_spread_pct = config.get("mcx_max_spread_pct", 1.2)
+        self.mcx_min_volume = config.get("mcx_min_volume", 50)
 
 
 class UniverseConfig:
@@ -129,6 +152,13 @@ class UniverseConfig:
         self.exclude_fo_ban = config.get("exclude_fo_ban", True)
         self.exclude_illiquid_threshold_turnover = config.get("exclude_illiquid_threshold_turnover", 10000000)
         self.sync_time = config.get("sync_time", "08:30")
+        
+        # MCX universe (Phase 1)
+        self.mcx_symbols = config.get("mcx_symbols", [])
+        self.mcx_include_options = config.get("mcx_include_options", False)
+        self.mcx_strikes_from_atm = config.get("mcx_strikes_from_atm", 4)
+        self.mcx_strike_range_pct = config.get("mcx_strike_range_pct", 0.08)
+        self.mcx_max_dte_days = config.get("mcx_max_dte_days", 45)
 
 
 class OptionsFiltersConfig:
@@ -201,17 +231,33 @@ class MarketConfig:
         self.premarket_sync_time = config.get("premarket_sync_time", "08:30")
         self.event_aware = config.get("event_aware", True)
         self.event_stop_mult = config.get("event_stop_mult", 1.5)
+        
+        # MCX extended session (phase 2)
+        self.mcx_open_time = config.get("mcx_open_time", "09:00")
+        self.mcx_close_time = config.get("mcx_close_time", "23:30")
+        self.mcx_eod_squareoff_time = config.get("mcx_eod_squareoff_time", "23:20")
 
 
 class ExecutionConfig:
     """Order execution configuration"""
     def __init__(self, config: Dict[str, Any]):
         self.default_order_type = config.get("default_order_type", "LIMIT")
+        self.dry_run = config.get("dry_run", False)  # Dry-run mode: log signals without executing
+        # Level 4: Limit Chase Execution Alpha
+        self.use_limit_chase = config.get("use_limit_chase", False)
+        self.limit_chase_max_slippage_bps = config.get("limit_chase_max_slippage_bps", 5.0)
+        self.limit_chase_timeout_ms = config.get("limit_chase_timeout_ms", 500)
+        self.limit_chase_max_chases = config.get("limit_chase_max_chases", 10)
+        self.tick_size = config.get("tick_size", 0.05)
         self.limit_chase_ticks = config.get("limit_chase_ticks", 2)
         self.limit_timeout_sec = config.get("limit_timeout_sec", 5)
         self.ioc_for_exits = config.get("ioc_for_exits", True)
         self.max_order_retries = config.get("max_order_retries", 3)
         self.retry_backoff_ms = config.get("retry_backoff_ms", 500)
+        self.tops_cap_per_sec = config.get("tops_cap_per_sec", 10)  # Orders per second cap
+        
+        # Exchange-specific defaults
+        self.mcx_product = config.get("mcx_product", "NRML")
 
 
 class AppConfig:
@@ -235,6 +281,9 @@ class AppConfig:
         self.risk = RiskConfig(config.get("risk", {}))
         self.universe = UniverseConfig(config.get("universe", {}))
         self.options_filters = OptionsFiltersConfig(config.get("options_filters", {}))
+        
+        # Crypto venue config (optional)
+        self.venue = config.get("venue", {})
         
         self.strategies = [
             StrategyConfig(s) for s in config.get("strategies", [])
@@ -267,5 +316,28 @@ class AppConfig:
 
 
 # Global configuration instances
+# Settings are loaded with defaults to handle crypto mode where Kite credentials aren't needed
 settings = Settings()
-app_config = AppConfig()
+
+# Determine config path based on environment or mode
+def _get_config_path() -> str:
+    """Determine which config file to load"""
+    # Explicit APP_CONFIG takes precedence
+    if settings.app_config_path:
+        return settings.app_config_path
+    
+    # Auto-select based on APP_MODE
+    if settings.app_mode == AppMode.LIVE:
+        # For LIVE mode, prefer NSE config if it exists
+        nse_config = Path("configs/kite_day1_live.yaml")
+        if nse_config.exists():
+            return str(nse_config)
+        # Fallback to canary if day1 doesn't exist
+        canary_config = Path("configs/kite_canary_live.yaml")
+        if canary_config.exists():
+            return str(canary_config)
+    
+    # Default to app.yaml
+    return "configs/app.yaml"
+
+app_config = AppConfig(config_path=_get_config_path())

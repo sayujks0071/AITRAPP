@@ -1,0 +1,22 @@
+[Unit]
+Description=AITRAPP Paper Trading API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mac
+WorkingDirectory=/Users/mac/CRYPTO/AITRAPP
+Environment=APP_MODE=PAPER
+Environment=APP_CONFIG=configs/kite_paper.yaml
+Environment=MOCK_KITE=0
+ExecStart=/usr/bin/env bash -lc 'cd /Users/mac/CRYPTO/AITRAPP && scripts/start_paper_api.sh'
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=3
+StandardOutput=append:/Users/mac/CRYPTO/AITRAPP/logs/api_8000.log
+StandardError=append:/Users/mac/CRYPTO/AITRAPP/logs/api_8000.log
+
+[Install]
+WantedBy=multi-user.target

@@ -14,6 +14,23 @@ class InstrumentType(str, Enum):
     FUT = "FUT"  # Futures
     CE = "CE"  # Call Option
     PE = "PE"  # Put Option
+    CRYPTO = "CRYPTO"  # Cryptocurrency
+
+
+class AssetType(str, Enum):
+    """Asset types"""
+    EQUITY = "EQUITY"
+    DERIVATIVES = "DERIVATIVES"
+    OPTIONS = "OPTIONS"
+    CRYPTO = "CRYPTO"
+
+
+class Venue(str, Enum):
+    """Trading venues"""
+    NSE = "NSE"  # National Stock Exchange (India)
+    BSE = "BSE"  # Bombay Stock Exchange
+    KRAKEN_SPOT = "KRAKEN_SPOT"  # Kraken Spot
+    BINANCE_SPOT = "BINANCE_SPOT"  # Binance Spot
 
 
 class SignalSide(str, Enum):
@@ -57,6 +74,8 @@ class Instrument:
     # Metadata
     segment: Optional[str] = None
     isin: Optional[str] = None
+    venue: Optional[Venue] = None  # Trading venue
+    asset_type: Optional[AssetType] = None  # Asset type
     
     @property
     def is_option(self) -> bool:
@@ -133,6 +152,27 @@ class Bar:
     ema_slow: Optional[float] = None
     supertrend: Optional[float] = None
     supertrend_direction: Optional[int] = None
+    macd: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_lower: Optional[float] = None
+    
+    # Additional indicators for top 10 strategies
+    stoch_k: Optional[float] = None  # Stochastic %K
+    stoch_d: Optional[float] = None  # Stochastic %D
+    cci: Optional[float] = None  # Commodity Channel Index
+    sar: Optional[float] = None  # Parabolic SAR
+    ichi_tenkan: Optional[float] = None  # Ichimoku Tenkan-sen
+    ichi_kijun: Optional[float] = None  # Ichimoku Kijun-sen
+    ichi_senkou_a: Optional[float] = None  # Ichimoku Senkou Span A
+    ichi_senkou_b: Optional[float] = None  # Ichimoku Senkou Span B
+    pivot: Optional[float] = None  # Pivot Point
+    pivot_r1: Optional[float] = None  # Pivot Resistance 1
+    pivot_r2: Optional[float] = None  # Pivot Resistance 2
+    pivot_s1: Optional[float] = None  # Pivot Support 1
+    pivot_s2: Optional[float] = None  # Pivot Support 2
     
     @property
     def typical_price(self) -> float:

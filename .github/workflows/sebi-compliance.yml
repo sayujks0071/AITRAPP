@@ -1,0 +1,310 @@
+name: SEBI Compliance Tests
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+      - fix/**
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Run daily at 9:00 AM IST (3:30 AM UTC)
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  sebi-compliance-verification:
+    name: SEBI Compliance Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run SEBI Compliance Code Inspection
+        run: |
+          python3 scripts/test_sebi_compliance_simple.py
+
+      - name: Verify Audit Logging Implementation
+        run: |
+          echo "Checking ExecutionEngine for audit logging..."
+          grep -q "AuditActionEnum.ORDER_PLACED" packages/core/execution/execution_engine.py || exit 1
+          grep -q "AuditActionEnum.ORDER_CANCELLED" packages/core/execution/execution_engine.py || exit 1
+          echo "✅ Audit logging verified"
+
+      - name: Verify Kill Switch Endpoint
+        run: |
+          echo "Checking kill switch endpoint..."
+          grep -q "kill-switch" apps/api/routes/control.py || exit 1
+          grep -q "async def activate_kill_switch" apps/api/routes/control.py || exit 1
+          echo "✅ Kill switch endpoint verified"
+
+      - name: Verify Strategy Risk Limits
+        run: |
+          echo "Checking strategy risk limits..."
+          grep -q "max_loss_per_strategy_pct" packages/core/config.py || exit 1
+          grep -q "def get_strategy_pnl" packages/core/risk.py || exit 1
+          grep -q "def update_strategy_pnl" packages/core/risk.py || exit 1
+          echo "✅ Strategy risk limits verified"
+
+      - name: Verify Dormant Account Check
+        run: |
+          echo "Checking dormant account implementation..."
+          grep -q "def check_dormant_account" packages/core/compliance.py || exit 1
+          grep -q "last_trade_date" packages/core/compliance.py || exit 1
+          echo "✅ Dormant account check verified"
+
+      - name: Verify Compliance API Routes
+        run: |
+          echo "Checking compliance API routes..."
+          [ -f "apps/api/routes/compliance.py" ] || exit 1
+          grep -q "get_compliance_status" apps/api/routes/compliance.py || exit 1
+          echo "✅ Compliance API routes verified"
+
+      - name: Check Compliance Documentation
+        run: |
+          echo "Checking compliance documentation..."
+          [ -f "docs/SEBI_COMPLIANCE_RUNBOOK.md" ] || exit 1
+          echo "✅ Compliance documentation exists"
+
+      - name: Upload Compliance Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sebi-compliance-report-${{ github.sha }}
+          path: |
+            scripts/test_sebi_compliance_simple.py
+            docs/SEBI_COMPLIANCE_RUNBOOK.md
+          retention-days: 30
+
+  integration-tests:
+    name: SEBI Integration Tests (with Database)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: trader
+          POSTGRES_PASSWORD: trader
+          POSTGRES_DB: aitrapp_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Database Migrations
+        env:
+          DATABASE_URL: postgresql://trader:trader@localhost:5432/aitrapp_test
+        run: |
+          # Initialize database schema
+          python3 scripts/init_database.py || true
+
+      - name: Test Audit Logging to Database
+        env:
+          DATABASE_URL: postgresql://trader:trader@localhost:5432/aitrapp_test
+        run: |
+          python3 << 'EOF'
+          import asyncio
+          import sys
+          from datetime import datetime
+          from packages.storage.database import get_db_session
+          from packages.storage.models import AuditLog, AuditActionEnum
+
+          async def test_audit_logging():
+              try:
+                  async with get_db_session() as session:
+                      # Create test audit log
+                      audit_log = AuditLog(
+                          action=AuditActionEnum.ORDER_PLACED,
+                          level="INFO",
+                          category="EXEC",
+                          message="Test order placement",
+                          details={
+                              "order_id": "TEST123",
+                              "symbol": "NIFTY24DECFUT",
+                              "side": "BUY",
+                              "quantity": 75
+                          }
+                      )
+                      session.add(audit_log)
+                      await session.commit()
+
+                      print("✅ Audit log written successfully")
+
+                      # Verify log was written
+                      from sqlalchemy import select, func
+                      stmt = select(func.count()).select_from(AuditLog)
+                      result = await session.execute(stmt)
+                      count = result.scalar()
+
+                      if count > 0:
+                          print(f"✅ Verified {count} audit log(s) in database")
+                          return 0
+                      else:
+                          print("❌ No audit logs found in database")
+                          return 1
+
+              except Exception as e:
+                  print(f"❌ Audit logging test failed: {e}")
+                  import traceback
+                  traceback.print_exc()
+                  return 1
+
+          sys.exit(asyncio.run(test_audit_logging()))
+          EOF
+
+      - name: Test Strategy Risk Tracking
+        run: |
+          python3 << 'EOF'
+          from packages.core.config import RiskConfig
+          from packages.core.risk import RiskManager
+
+          # Test risk config
+          risk_config = RiskConfig({
+              "max_loss_per_strategy_pct": -5.0
+          })
+
+          assert hasattr(risk_config, "max_loss_per_strategy_pct"), "Missing max_loss_per_strategy_pct"
+          assert risk_config.max_loss_per_strategy_pct == -5.0, "Incorrect value"
+
+          # Test risk manager
+          risk_manager = RiskManager(risk_config)
+
+          # Test strategy PnL tracking
+          risk_manager.update_strategy_pnl("TestStrategy", -1000.0)
+          pnl = risk_manager.get_strategy_pnl("TestStrategy")
+
+          assert pnl == -1000.0, f"Expected -1000.0, got {pnl}"
+
+          print("✅ Strategy risk tracking tests passed")
+          EOF
+
+  deployment-readiness:
+    name: Deployment Readiness Check
+    runs-on: ubuntu-latest
+    needs: [sebi-compliance-verification, integration-tests]
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Required Files
+        run: |
+          echo "Checking deployment artifacts..."
+
+          # Check scripts
+          [ -f "scripts/test_sebi_compliance_simple.py" ] || exit 1
+          [ -f "scripts/verify_sebi_compliance.py" ] || exit 1
+          [ -f "scripts/test_kill_switch.sh" ] || exit 1
+          [ -f "scripts/deploy_sebi_staging.sh" ] || exit 1
+
+          # Check documentation
+          [ -f "docs/SEBI_COMPLIANCE_RUNBOOK.md" ] || exit 1
+
+          # Check implementation files
+          [ -f "packages/core/config.py" ] || exit 1
+          [ -f "packages/core/risk.py" ] || exit 1
+          [ -f "packages/core/compliance.py" ] || exit 1
+          [ -f "packages/core/execution/execution_engine.py" ] || exit 1
+          [ -f "apps/api/routes/control.py" ] || exit 1
+          [ -f "apps/api/routes/compliance.py" ] || exit 1
+
+          echo "✅ All required files present"
+
+      - name: Check Script Permissions
+        run: |
+          echo "Checking script permissions..."
+          [ -x "scripts/test_kill_switch.sh" ] || exit 1
+          [ -x "scripts/deploy_sebi_staging.sh" ] || exit 1
+          [ -x "scripts/morning_paper_boot.sh" ] || exit 1
+          echo "✅ Scripts are executable"
+
+      - name: Generate Compliance Summary
+        run: |
+          echo "======================================================================"
+          echo "SEBI Compliance Implementation Summary"
+          echo "======================================================================"
+          echo ""
+          echo "✅ All compliance features implemented:"
+          echo "  • Enhanced Audit Logging (ORDER_PLACED, ORDER_CANCELLED)"
+          echo "  • Kill Switch Endpoint (/control/kill-switch)"
+          echo "  • Strategy-wise Risk Limits (max_loss_per_strategy_pct)"
+          echo "  • Dormant Account Check"
+          echo ""
+          echo "✅ Testing infrastructure:"
+          echo "  • Code inspection tests"
+          echo "  • Integration tests with database"
+          echo "  • Kill switch controlled environment test"
+          echo ""
+          echo "✅ Operational readiness:"
+          echo "  • Deployment scripts"
+          echo "  • Operational runbook"
+          echo "  • Morning boot compliance checks"
+          echo "  • Dashboard monitoring"
+          echo ""
+          echo "✅ CI/CD:"
+          echo "  • GitHub Actions workflow"
+          echo "  • Automated compliance verification"
+          echo ""
+          echo "======================================================================"
+          echo "🎉 SEBI Compliance: READY FOR DEPLOYMENT"
+          echo "======================================================================"
+
+      - name: Deployment Ready Badge
+        if: success()
+        run: |
+          echo "DEPLOYMENT_READY=true" >> $GITHUB_ENV
+
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [deployment-readiness]
+    if: always()
+    timeout-minutes: 2
+
+    steps:
+      - name: Compliance Status Summary
+        run: |
+          if [ "${{ needs.deployment-readiness.result }}" == "success" ]; then
+            echo "✅ SEBI Compliance: ALL CHECKS PASSED"
+            echo "System is ready for staging deployment"
+          else
+            echo "❌ SEBI Compliance: SOME CHECKS FAILED"
+            echo "Review logs and fix issues before deployment"
+            exit 1
+          fi

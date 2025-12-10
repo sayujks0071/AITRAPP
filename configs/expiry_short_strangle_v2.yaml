@@ -1,0 +1,55 @@
+# Expiry Short Strangle V2 Configuration
+# Regime-Aware Weekly Income Engine
+
+expiry_short_strangle_v2:
+  enabled: true
+  mode: LIVE  # or PAPER for testing
+
+  # Position sizing
+  max_positions: 1              # ONE strangle max
+  max_lot_size: 1               # 1 lot NIFTY
+  instruments: [NIFTY]          # Start with NIFTY only
+
+  # Entry conditions
+  min_dte: 2                    # At least 2 days to expiry (Tue-Thu for Thu expiry)
+  max_dte: 5                    # Max 5 days (weekly)
+  target_delta_min: 0.18        # Minimum delta for strike selection
+  target_delta_max: 0.22        # Maximum delta for strike selection
+  min_ivp: 40                   # Minimum IV percentile
+  max_ivp: 85                   # Maximum IV percentile
+  min_premium_per_lot: 3000     # Collect ≥₹3,000 per lot
+
+  # Regime integration (R1)
+  allowed_regimes:
+    - LOW_MEAN_REVERT
+    - MEDIUM_TREND
+  blocked_regimes:
+    - HIGH_EVENT
+    - CHAOTIC
+
+  # Time gates
+  entry_window_start: "10:15"   # Entry window start (IST)
+  entry_window_end: "12:00"     # Entry window end (IST) - no fresh entries after
+
+  # Risk management
+  stop_loss_mult: 2.0           # Hard stop: 2× premium collected
+  soft_stop_mult: 1.0           # Soft stop: 1× premium (consider partial roll)
+  take_profit_pct: 50           # TP at 50% premium decay
+  max_portfolio_heat_pct: 1.0   # Block if global portfolio heat > 1%
+  max_margin_usage_pct: 30.0    # Block if margin usage > 30%
+
+  # Move/ATR filter
+  max_intraday_move_atr_mult: 1.5  # Block if intraday move > 1.5× ATR(1d)
+
+  # Realized vol filter
+  realized_vol_window_days: 5   # Use 5-10 day realized vol
+  require_iv_above_realized: true  # Only trade when IV > realized vol
+
+  # Time-based exit
+  exit_dte: 1                   # Close 1 day before expiry
+  exit_time: "15:00"            # Close by 15:00 on expiry day
+
+  # H1 Tail Coverage (automatic via H1 overlay)
+  # H1 will automatically allocate 10-15% of premium collected to tail hedges
+  # No manual configuration needed here
+

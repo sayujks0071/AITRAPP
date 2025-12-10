@@ -1,0 +1,71 @@
+# configs/calendar_arb.yaml
+
+calendar_arb:
+  enabled: true
+
+  underlyings:
+    - "NIFTY"
+    - "BANKNIFTY"
+
+  mode: "LIVE"
+
+  entry:
+    entry_window:
+      start: "10:00"              # Day-4: Conservative start (was 09:30)
+      end: "14:30"                # Day-4: Extended to 14:30 (was 13:30)
+
+    # Expiry selection
+    weekly_selector: "nearest_weekly"
+    monthly_selector: "nearest_monthly"
+    min_days_between_expiries: 5       # ensure real term-structure, not 1–2 day gap
+
+    # IV terms
+    iv_lookback_days: 60               # for z-scores & percentiles
+    min_iv_rank_monthly: 0.20          # avoid ultra-depressed long leg
+    max_iv_rank_monthly: 0.85          # avoid insane long leg IV
+
+    # Term-structure signals
+    term_ratio_long_cal_min: 1.20      # Global: IV_weekly >= 1.2 * IV_monthly → consider long calendar
+    term_spread_long_cal_min: 0.05     # Global: 5 vol-points higher (e.g. 22% vs 17%)
+    
+    # Optional per-underlying bands (fine tuning)
+    term_bands:
+      NIFTY:
+        term_ratio_long_cal_min: 1.20
+        term_spread_long_cal_min: 0.05
+      BANKNIFTY:
+        term_ratio_long_cal_min: 1.15
+        term_spread_long_cal_min: 0.04
+    term_ratio_extreme: 1.40           # for more aggressive sizing (optional)
+
+    # Market quality filters
+    min_liquidity_score: 7
+    max_bid_ask_spread_pct: 0.80
+
+    # Structure sizing
+    base_lots_per_underlying: 1
+    max_lots_per_underlying: 1    # Day-4: 1 lot only (was 3)
+    max_positions: 1               # Day-4: Max 1 calendar spread per underlying
+
+  exits:
+    hard_exit_time: "15:10"
+    max_hold_days: 3                     # safety – close if not auto-rolled earlier
+
+    pnl_target_pct: 1.0                 # 1% of capital used in this strategy
+    pnl_stop_pct: 0.7                   # -0.7% of capital used
+
+    decay_exit_days: 1                  # if weekly expiry is tomorrow & not moving → exit
+
+  risk:
+    max_capital_pct: 0.10               # Day-4: 10% of total capital (₹100k max)
+    max_daily_loss_pct: 0.5             # Day-4: 0.5% of capital = ₹5,000 daily loss cap
+    max_daily_loss_absolute: 5000       # Day-4: Hard cap ₹5,000 per day
+    max_open_calendars_per_underlying: 1 # Day-4: 1 calendar max (was 2)
+
+  integration:
+    require_r1_regime: true
+    allowed_r1_regimes:
+      - "LOW_MEAN_REVERT"
+      - "MEDIUM_TREND"
+      - "HIGH_EVENT"
+

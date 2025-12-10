@@ -1,0 +1,196 @@
+# Paper Trading Configuration for Indian Markets (NSE)
+# All strategies are wired to PAPER mode only - safe for research and testing
+
+app:
+  mode: PAPER
+  timezone: Asia/Kolkata
+  capital: 1000000  # ₹10 lakh simulated capital for paper trading
+
+venue:
+  name: NSE
+  api_key_env: KITE_API_KEY
+  api_secret_env: KITE_API_SECRET
+  access_token_env: KITE_ACCESS_TOKEN
+
+risk:
+  per_trade_risk_pct: 0.25
+  max_portfolio_heat_pct: 1.0
+  daily_loss_stop_pct: -2.5
+  max_positions: 3
+  max_position_size_multiplier: 1
+  slippage_bps: 5
+  fees_per_order: 20
+  fees_per_option_leg: 20
+
+market:
+  open_time: 09:15
+  close_time: '15:20'
+  eod_squareoff_time: '15:25'
+  eod_squareoff_enabled: true
+  premarket_sync_time: 08:55
+  event_aware: true
+  event_stop_mult: 1.5
+
+entry:
+  window_start: 09:15
+  window_end: '15:00'
+  max_entries_per_day: 5
+  cooldown_minutes: 15
+
+execution:
+  engine_gap_ms: 300
+  instrument_gap_ms: 300
+  price_band_bps: 40
+  burst: 2
+  fanout_per_sec: 4
+  use_native_oco: false
+  default_order_type: LIMIT
+  limit_chase_ticks: 2
+  limit_timeout_sec: 5
+  ioc_for_exits: true
+  max_order_retries: 3
+  retry_backoff_ms: 500
+  tops_cap_per_sec: 10
+  use_limit_chase: true
+  limit_chase_max_slippage_bps: 5.0
+  limit_chase_timeout_ms: 500
+  limit_chase_max_chases: 10
+  tick_size: 0.05
+
+universe:
+  indices:
+    - NIFTY 50
+    - NIFTY BANK
+  fo_stocks_liquidity_rank_top_n: 0
+  exclude_fo_ban: true
+  exclude_illiquid_threshold_turnover: 10000000
+  sync_time: 08:55
+
+# Strategy Configuration - India Market Ready Strategies
+# All strategies are designed for paper trading / research mode only
+strategies:
+  # Opening Range Breakout (already implemented)
+  - name: ORB
+    enabled: true
+    priority: 1
+    params:
+      window_min: 15
+      breakout_confirmation_ticks: 3
+      rr_min: 1.8
+      max_positions: 2
+      instruments: [NIFTY 50, NIFTY BANK]
+
+  # Trend Pullback (already implemented)
+  - name: TrendPullback
+    enabled: true
+    priority: 1
+    params:
+      ema_fast: 34
+      ema_slow: 89
+      atr_period: 14
+      pullback_atr_mult: 0.5
+      rr_min: 2.0
+      max_positions: 2
+
+  # SMA Momentum Strategy (vectorbt-inspired)
+  # Adapted for Indian markets with realistic costs
+  - name: SMAMomentum
+    enabled: true
+    priority: 2
+    params:
+      sma_fast: 13
+      sma_slow: 34
+      atr_period: 14
+      atr_stop_mult: 2.0
+      atr_target_mult: 3.0
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.2
+      rr_min: 1.5
+      max_positions: 2
+      instruments: [NIFTY 50, NIFTY BANK]
+
+  # Mean Reversion Strategy (bt-inspired)
+  # Uses ATR-based bands instead of fixed standard deviations
+  - name: MeanReversion
+    enabled: true
+    priority: 3
+    params:
+      ma_period: 20
+      ma_type: SMA  # or EMA
+      atr_period: 14
+      atr_band_mult: 2.0
+      atr_stop_mult: 1.5
+      atr_target_mult: 2.0
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.1
+      max_volatility_atr_mult: 3.0
+      rr_min: 1.5
+      max_positions: 2
+      instruments: [NIFTY 50, NIFTY BANK]
+
+  # RSI Mean Reversion Strategy (vectorbt-inspired)
+  # Uses tighter RSI thresholds (25/75) for Indian markets
+  - name: RSIMeanReversion
+    enabled: true
+    priority: 3
+    params:
+      rsi_period: 14
+      oversold_threshold: 25
+      overbought_threshold: 75
+      atr_period: 14
+      atr_stop_mult: 1.5
+      atr_target_mult: 2.0
+      volume_confirmation: true
+      volume_lookback: 20
+      min_volume_mult: 1.1
+      min_liquidity_turnover: 10000000
+      rr_min: 1.5
+      max_positions: 2
+      instruments: [NIFTY 50, NIFTY BANK]
+
+# Ranking Engine Configuration
+ranking:
+  weights:
+    momentum: 0.25
+    trend: 0.25
+    liquidity: 0.20
+    regime: 0.15
+    rr: 0.15
+  penalties:
+    illiquid_mult: 0.5
+    news_event_mult: 0.7
+    far_from_vwap_mult: 0.8
+  top_n: 5
+
+# Exit Management
+exits:
+  hard_stop_atr_mult: 2.0
+  trail_enabled: true
+  trail_atr_mult: 1.2
+  time_stop_enabled: true
+  time_stop_min: 30
+  eod_flatten_enabled: true
+  eod_flatten_time: '15:20'
+
+# Guards
+guards:
+  block_around_events_min: 10
+  max_spread_mid_pct: 0.5
+  min_liquidity_score: 0.7
+  require_unique_order_ids: true
+  audit_all_decisions: true
+  max_total_positions: 4
+  max_capital_deployed_pct: 15.0
+  max_margin_used_pct: 30.0
+
+# Cost Model Reference
+# See configs/costs/india_equities.yaml for detailed cost breakdown:
+# - Slippage: 5 bps
+# - Brokerage: ₹20 per order
+# - Exchange charges: 3 bps
+# - STT: 1 bps
+# - GST: 1.8 bps
+# - Total round-trip: ~12-15 bps for liquid instruments
+

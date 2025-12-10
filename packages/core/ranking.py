@@ -2,7 +2,7 @@
 
 import logging
 from decimal import Decimal
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from packages.core.models import RankedCandidate, Signal, TechnicalIndicators
 from scipy import stats
@@ -85,7 +85,7 @@ class RankingEngine:
     def _calculate_feature_scores(
         self,
         signal: Signal,
-        indicators: TechnicalIndicators | None,
+        indicators: Optional[TechnicalIndicators],
         liquidity: float,
     ) -> Dict[str, Decimal]:
         """Calculate normalized feature scores"""
@@ -114,7 +114,7 @@ class RankingEngine:
         return scores
 
     def _calculate_momentum_score(
-        self, signal: Signal, indicators: TechnicalIndicators | None
+        self, signal: Signal, indicators: Optional[TechnicalIndicators]
     ) -> Decimal:
         """Calculate momentum score (0-1)"""
         if not indicators or not indicators.rsi:
@@ -143,7 +143,7 @@ class RankingEngine:
         return Decimal(str(score))
 
     def _calculate_trend_score(
-        self, signal: Signal, indicators: TechnicalIndicators | None
+        self, signal: Signal, indicators: Optional[TechnicalIndicators]
     ) -> Decimal:
         """Calculate trend alignment score (0-1)"""
         if not indicators:
@@ -178,7 +178,7 @@ class RankingEngine:
         return Decimal(str(min(1.0, score)))
 
     def _calculate_regime_score(
-        self, signal: Signal, indicators: TechnicalIndicators | None
+        self, signal: Signal, indicators: Optional[TechnicalIndicators]
     ) -> Decimal:
         """Calculate market regime score (0-1)"""
         # TODO: Implement proper regime detection (volatility, IV rank, etc.)
@@ -210,7 +210,7 @@ class RankingEngine:
     def _calculate_penalties(
         self,
         signal: Signal,
-        indicators: TechnicalIndicators | None,
+        indicators: Optional[TechnicalIndicators],
         liquidity: float,
     ) -> Dict[str, Decimal]:
         """Calculate penalty scores"""
