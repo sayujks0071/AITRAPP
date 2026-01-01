@@ -57,7 +57,7 @@ class IronCondorStrategy(Strategy):
             return []
         
         # Only trade on indices
-        if context.instrument.symbol not in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+        if context.instrument.symbol not in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]:
             return []
         
         # Need underlying value for strike selection

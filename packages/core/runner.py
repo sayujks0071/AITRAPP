@@ -12,9 +12,22 @@ import structlog
 from packages.core.backtest import BacktestEngine
 from packages.core.config import app_config, AppMode
 from packages.core.strategies import ORBStrategy, OptionsRankerStrategy, TrendPullbackStrategy
+from packages.core.strategies.iron_condor import IronCondorStrategy
 from packages.core.paper_simulator import PaperSimulator
 from packages.core.models import Instrument, Tick, Bar, Signal, SignalSide
 from packages.core.strategies.base import StrategyContext
+
+# Import components for Live Mode
+from kiteconnect import KiteConnect
+from packages.core.instruments import InstrumentManager
+from packages.core.market_data import MarketDataStream
+from packages.core.risk import RiskManager
+from packages.core.execution import ExecutionEngine
+from packages.core.exits import ExitManager
+from packages.core.ranker import SignalRanker
+from packages.core.oco import OCOManager
+from packages.core.orchestrator import TradingOrchestrator
+from packages.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -50,6 +63,22 @@ class Runner:
             opt_config = app_config.get_strategy_by_name("OptionsRanker")
             if opt_config:
                 strategies.append(OptionsRankerStrategy("OptionsRanker", opt_config.params))
+
+        if strategy_name == "all" or strategy_name == "IronCondor":
+            # Assuming IronCondor config might not be in default config, use default params if missing
+            # In a real scenario, we should ensure app_config has this.
+            # Using dummy params for now if not found, or use defaults from class
+            strategies.append(IronCondorStrategy("IronCondor", {
+                "call_spread_width": 200,
+                "put_spread_width": 200,
+                "call_short_strike_offset": 200,
+                "put_short_strike_offset": 200,
+                "max_dte": 20,
+                "min_dte": 0,
+                "target_profit_pct": 50,
+                "max_loss_pct": 200
+            }))
+
         return strategies
 
     def run_backtest(self, start_date: str, end_date: str, capital: float):
@@ -199,6 +228,10 @@ class Runner:
 
     def run_live(self):
         """Run in Live Mode (Gated)"""
+        # Ensure async loop
+        asyncio.run(self._run_live_async())
+
+    async def _run_live_async(self):
         if os.environ.get("TRADING_MODE") != "live" or os.environ.get("I_UNDERSTAND_LIVE_TRADING") != "true":
             logger.error("❌ LIVE MODE REFUSED. Missing safety flags.")
             print("To run in live mode, you must set:")
@@ -208,16 +241,73 @@ class Runner:
 
         logger.info("⚠️ STARTING LIVE TRADING MODE ⚠️")
         logger.warning("Real orders will be placed. Press Ctrl+C to abort in 5 seconds...")
-        import time
         try:
-            time.sleep(5)
+            await asyncio.sleep(5)
         except KeyboardInterrupt:
             print("\nAborted.")
             sys.exit(0)
 
-        # For now, we just print a placeholder as instructed not to place real orders
-        logger.info("Live engine starting... (Safety: No real orders in this PR)")
-        # In future, this would instantiate the Orchestrator with a LiveBroker.
+        logger.info("Live engine initializing...")
+
+        # 1. Initialize Kite Connect
+        api_key = os.environ.get("KITE_API_KEY")
+        access_token = os.environ.get("KITE_ACCESS_TOKEN")
+
+        if not api_key or not access_token:
+            logger.error("Missing KITE_API_KEY or KITE_ACCESS_TOKEN")
+            sys.exit(1)
+
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+
+        # 2. Initialize Components
+        settings.kite_api_key = api_key
+        settings.kite_access_token = access_token
+
+        # Instrument Manager
+        instrument_manager = InstrumentManager(kite, app_config.universe, settings)
+        await instrument_manager.sync_instruments()
+        # Ensure we have our indices in universe
+        app_config.universe.indices.append(self.symbol)
+        if "SENSEX" not in app_config.universe.indices and self.symbol == "SENSEX":
+            app_config.universe.indices.append("SENSEX")
+        await instrument_manager.build_universe()
+
+        # Market Data
+        market_data_stream = MarketDataStream(settings, window_seconds=[1, 5])
+
+        # Risk & Execution
+        risk_manager = RiskManager(app_config.risk)
+        execution_engine = ExecutionEngine(kite, app_config.execution, settings)
+        exit_manager = ExitManager(app_config.exits)
+        ranker = SignalRanker(app_config.ranking)
+
+        # 3. Create Orchestrator
+        orchestrator = TradingOrchestrator(
+            kite=kite,
+            strategies=self.strategies,
+            instrument_manager=instrument_manager,
+            market_data_stream=market_data_stream,
+            risk_manager=risk_manager,
+            execution_engine=execution_engine,
+            exit_manager=exit_manager,
+            ranker=ranker
+        )
+
+        # 4. Start
+        try:
+            await orchestrator.start()
+
+            # Keep running until interrupted
+            while True:
+                await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            logger.info("Stopping...")
+        except KeyboardInterrupt:
+            logger.info("Interrupted")
+        finally:
+            await orchestrator.stop()
 
 def main():
     parser = argparse.ArgumentParser(description="Kite Strategy Runner")
