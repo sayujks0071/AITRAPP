@@ -141,9 +141,10 @@ def run():
                 
         except Exception as e:
             logger.warning(f"Failed to re-evaluate current champion: {e}")
-            # If re-evaluation fails, fall back to using top_candidate
-            logger.info("Falling back to top candidate due to re-evaluation failure")
-            new_champion = top_candidate
+            # If re-evaluation fails, keep the current champion with stale metrics
+            # This is safer than forcing a switch to an untested candidate
+            logger.info("Keeping current champion despite re-evaluation failure")
+            new_champion = current_champion
     else:
         logger.info("First Champion initialized.")
         new_champion = top_candidate
