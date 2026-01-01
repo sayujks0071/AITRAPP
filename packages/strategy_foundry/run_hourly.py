@@ -1,10 +1,13 @@
 """Strategy Foundry - Hourly Runner"""
 import os
+import sys
 import yaml
 import logging
 import pytz
 import pandas as pd
 from datetime import datetime
+import json
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("StrategyFoundry")
@@ -115,9 +118,12 @@ def run():
         curr_score = current_champion.get("score", 0)
         new_score = top_candidate.get("score", 0)
 
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
-            logger.info("New Champion Found! (Score Improvement)")
+        # Must beat by margin (configurable)
+        margin_pct = bt_config.get("selection", {}).get("promotion_margin_pct", 10.0)
+        margin_multiplier = 1 + (margin_pct / 100.0)
+
+        if new_score > curr_score * margin_multiplier:
+            logger.info(f"New Champion Found! (Score {new_score:.2f} > {curr_score:.2f} * {margin_multiplier:.2f})")
             new_champion = top_candidate
         else:
             logger.info("Current Champion remains.")

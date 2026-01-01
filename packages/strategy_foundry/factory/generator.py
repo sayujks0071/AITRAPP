@@ -31,7 +31,7 @@ class StrategyGenerator:
 
             # ID Generation
             c_str = json.dumps(candidate, sort_keys=True)
-            c_hash = hashlib.sha256(c_str.encode()).hexdigest()
+            c_hash = hashlib.md5(c_str.encode()).hexdigest()
 
             if c_hash not in seen_hashes:
                 candidate["id"] = c_hash
