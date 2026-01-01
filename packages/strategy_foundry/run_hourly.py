@@ -139,8 +139,11 @@ def run():
                 recalculated = rank_candidates([current_champion])
                 if recalculated:
                     current_champion = recalculated[0]
-                
-                logger.info(f"Current Champion Score (updated): {current_champion.get('score', 0):.2f}")
+                    logger.info(f"Current Champion Score (updated): {current_champion.get('score', 0):.2f}")
+                else:
+                    # Ranking failed, fall back to top candidate
+                    logger.warning("Failed to rank re-evaluated champion")
+                    new_champion = top_candidate
         except Exception as e:
             logger.warning(f"Failed to re-evaluate current champion: {e}")
             # If re-evaluation fails, fall back to top candidate
