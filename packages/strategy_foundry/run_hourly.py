@@ -32,6 +32,16 @@ def load_config(path):
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
+def calculate_strategy_score(metrics, walkforward, folds):
+    """
+    Calculate composite score for a strategy.
+    Score = Sharpe * 0.4 + (1 - MaxDD) * 0.3 + Stability * 0.3
+    """
+    sharpe = metrics.get("sharpe", 0)
+    max_dd = metrics.get("max_dd", 1)
+    stability = walkforward.get("positive_folds", 0) / float(folds)
+    return (sharpe * 0.4) + ((1 - max_dd) * 0.3) + (stability * 0.3)
+
 def run():
     logger.info("Starting Strategy Foundry Hourly Run")
 
@@ -72,6 +82,7 @@ def run():
     )
 
     validator = WalkForwardValidator(engine, folds=5)
+    walkforward_folds = 5
 
     for cand in candidates:
         try:
@@ -109,6 +120,7 @@ def run():
     current_champion = store.load_champion()
 
     new_champion = None
+    champion_re_evaluation_failed = False
 
     if current_champion:
         # Re-evaluate current champion with latest data
@@ -122,21 +134,22 @@ def run():
             current_champion["walkforward"] = wf_res
             
             # Recalculate score with updated metrics
-            m = current_champion["metrics"]
-            sharpe = m.get("sharpe", 0)
-            max_dd = m.get("max_dd", 1)
-            stability = wf_res.get("positive_folds", 0) / 5.0
-            current_champion["score"] = (sharpe * 0.4) + ((1 - max_dd) * 0.3) + (stability * 0.3)
+            current_champion["score"] = calculate_strategy_score(
+                current_champion["metrics"], 
+                wf_res, 
+                walkforward_folds
+            )
             
             logger.info(f"Current Champion re-evaluated. Updated score: {current_champion['score']:.2f}")
         except Exception as e:
             logger.warning(f"Failed to re-evaluate current champion: {e}")
-            # If re-evaluation fails, use the top candidate as fallback
-            new_champion = top_candidate
-            store.save_champion(new_champion)
-            logger.info("Using new candidate due to champion re-evaluation failure.")
+            champion_re_evaluation_failed = True
         
-        if new_champion is None:
+        if champion_re_evaluation_failed:
+            # If re-evaluation fails, use the top candidate as fallback
+            logger.info("Using new candidate due to champion re-evaluation failure.")
+            new_champion = top_candidate
+        else:
             # Compare using updated metrics
             curr_score = current_champion.get("score", 0)
             new_score = top_candidate.get("score", 0)
