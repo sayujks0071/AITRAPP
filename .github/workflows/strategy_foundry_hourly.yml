@@ -1,0 +1,50 @@
+name: Strategy Foundry Hourly
+
+on:
+  schedule:
+    - cron: "0 * * * *"  # Hourly
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/strategy_foundry/**'
+
+jobs:
+  run-foundry:
+    runs-on: ubuntu-latest
+
+    env:
+      FAST_MODE: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+      PYTHONPATH: .
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+        cache: "pip"
+
+    - name: Install dependencies
+      run: |
+        pip install pandas numpy requests pyyaml pytz
+        # If requirements.txt exists, use it too, but we keep it minimal here as requested
+        # pip install -r requirements.txt
+
+    - name: Cache Data
+      uses: actions/cache@v3
+      with:
+        path: packages/strategy_foundry/data/cache
+        key: data-cache-${{ runner.os }}-${{ github.run_id }}
+        restore-keys: |
+          data-cache-${{ runner.os }}-
+
+    - name: Run Hourly Pipeline
+      run: |
+        python -m packages.strategy_foundry.run_hourly
+
+    - name: Upload Results
+      uses: actions/upload-artifact@v3
+      with:
+        name: foundry-results
+        path: packages/strategy_foundry/results/

@@ -1,0 +1,17 @@
+# Instrument Map: Indices to Tradable Proxies
+
+# NIFTY 50 -> NIFTYBEES or Futures
+"^NSEI":
+  tradable: true
+  proxy_symbol: "NIFTYBEES"
+  exchange: "NSE"
+  lot_size: 1
+  instrument_type: "ETF" # or FUTURE
+
+# SENSEX -> SENSEXETF or Futures
+"^BSESN":
+  tradable: true
+  proxy_symbol: "SENSEXETF"
+  exchange: "BSE"
+  lot_size: 1
+  instrument_type: "ETF"
