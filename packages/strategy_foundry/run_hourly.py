@@ -128,13 +128,19 @@ def run():
             wf_res = validator.validate(current_champion)
             current_champion["walkforward"] = wf_res
             
-            # Recalculate score with updated metrics
-            # Note: rank_candidates expects a list
-            recalculated = rank_candidates([current_champion])
-            if recalculated and len(recalculated) > 0:
-                current_champion = recalculated[0]
-            
-            logger.info(f"Current Champion Score (updated): {current_champion.get('score', 0):.2f}")
+            # Sanity check with latest metrics
+            if not check_sanity(updated_metrics, bt_config["constraints"]):
+                logger.warning("Current champion failed sanity check on latest data")
+                # Fall back to top candidate
+                new_champion = top_candidate
+            else:
+                # Recalculate score with updated metrics
+                # Note: rank_candidates expects a list
+                recalculated = rank_candidates([current_champion])
+                if recalculated:
+                    current_champion = recalculated[0]
+                
+                logger.info(f"Current Champion Score (updated): {current_champion.get('score', 0):.2f}")
         except Exception as e:
             logger.warning(f"Failed to re-evaluate current champion: {e}")
             # If re-evaluation fails, fall back to top candidate
