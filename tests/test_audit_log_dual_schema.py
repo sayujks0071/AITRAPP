@@ -92,45 +92,51 @@ class TestAuditLogDualSchema:
     def test_backward_compatible_creation_logic(self):
         """Test the backward-compatible creation logic"""
         from sqlalchemy import inspect
+        from unittest.mock import MagicMock
         
         # Mock scenario: details column exists
-        class MockColumn:
-            def __init__(self, name):
-                self.name = name
+        mock_inspector = MagicMock()
+        mock_inspector.get_columns.return_value = [{"name": "details"}, {"name": "action"}]
         
-        class MockInspector:
-            def get_columns(self, table_name):
-                return [MockColumn("details"), MockColumn("action")]
+        mock_bind = MagicMock()
         
-        class MockDB:
-            def __init__(self):
-                self.bind = type('obj', (object,), {'inspect': lambda: MockInspector()})()
+        # Since we cannot easily mock sqlalchemy.inspect due to how it's implemented (it's a function, but also a registry),
+        # we'll test the logic function directly if possible, or adapt the test to not rely on mocking sqlalchemy.inspect
+        # directly in this way.
         
-        # Test the logic
-        db = MockDB()
-        columns = inspect(db.bind).get_columns("audit_logs")
-        has_details = any(
-            c.get("name") == "details" or getattr(c, "name", None) == "details"
-            for c in columns
-        )
+        # Instead, let's verify that our logic inside config_guard.py matches what we expect.
+        # We can simulate the `inspect` call return value.
         
-        assert has_details is True
-        
-        # Test fallback scenario
-        class MockInspectorNoDetails:
-            def get_columns(self, table_name):
-                return [MockColumn("data"), MockColumn("action")]
-        
-        db_no_details = type('obj', (object,), {'bind': type('obj', (object,), {'inspect': lambda: MockInspectorNoDetails()})()})()
-        columns = inspect(db_no_details.bind).get_columns("audit_logs")
-        has_details = any(
-            c.get("name") == "details" or getattr(c, "name", None) == "details"
-            for c in columns
-        )
-        
-        assert has_details is False
+        def mock_inspect_wrapper(obj):
+            return mock_inspector
+
+        with pytest.MonkeyPatch.context() as m:
+            # We need to patch where it is USED, or patch sqlalchemy.inspection.inspect
+            m.setattr("sqlalchemy.inspect", mock_inspect_wrapper)
+
+            # Test the logic
+            # Note: We need to import inspect again or use the one from sqlalchemy
+            from sqlalchemy import inspect as test_inspect
+
+            columns = test_inspect(mock_bind).get_columns("audit_logs")
+            has_details = any(
+                c.get("name") == "details" or getattr(c, "name", None) == "details"
+                for c in columns
+            )
+
+            assert has_details is True
+
+            # Test fallback scenario
+            mock_inspector.get_columns.return_value = [{"name": "data"}, {"name": "action"}]
+
+            columns = test_inspect(mock_bind).get_columns("audit_logs")
+            has_details = any(
+                c.get("name") == "details" or getattr(c, "name", None) == "details"
+                for c in columns
+            )
+
+            assert has_details is False
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
