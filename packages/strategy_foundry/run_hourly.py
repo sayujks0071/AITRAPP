@@ -31,7 +31,7 @@ INSTRUMENT_MAP = os.path.join(CONFIG_DIR, "instrument_map.yaml")
 RESULTS_DIR = "packages/strategy_foundry/results"
 
 # Champion selection threshold: new candidate must beat current champion by this margin
-CHAMPION_IMPROVEMENT_THRESHOLD = 1.1  # 10% improvement required
+CHAMPION_IMPROVEMENT_THRESHOLD = 1.1  # Multiplier: new score must be > current score * 1.1 (10% higher)
 
 def load_config(path):
     with open(path, "r") as f:
@@ -151,10 +151,10 @@ def run():
 
         # Must beat by margin
         if new_score > curr_score * CHAMPION_IMPROVEMENT_THRESHOLD:
-            logger.info("New Champion Found! (Score Improvement)")
+            logger.info(f"New Champion Found! (Score Improvement: {new_score:.2f} > {curr_score:.2f})")
             new_champion = top_candidate
         else:
-            logger.info("Current Champion remains.")
+            logger.info(f"Current Champion remains (Score: {curr_score:.2f} vs New: {new_score:.2f}).")
             new_champion = current_champion
     else:
         logger.info("First Champion initialized.")
