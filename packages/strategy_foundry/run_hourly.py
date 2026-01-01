@@ -81,8 +81,8 @@ def run():
         slippage_bps=bt_config["costs"]["slippage_bps"]
     )
 
-    validator = WalkForwardValidator(engine, folds=5)
     walkforward_folds = 5
+    validator = WalkForwardValidator(engine, folds=walkforward_folds)
 
     for cand in candidates:
         try:
