@@ -6,7 +6,9 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
-from packages.core.models import AppMode, SystemState
+from packages.core.config import AppMode
+from packages.core.models import SystemState
+from packages.core.strategies import ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -147,11 +149,50 @@ async def reload_strategies(request: Request) -> Dict:
     """Reload strategy configurations"""
     state = request.app.state.aitrapp
     
-    # TODO: Reload strategy configs from YAML
-    
-    return {
-        "status": "SUCCESS",
-        "strategies_count": len(state.strategies),
-        "message": "Strategies reloaded successfully",
-    }
+    try:
+        # Reload configuration
+        state.config.reload()
+
+        # Clear existing strategies
+        state.strategies.clear()
+
+        # Re-instantiate strategies from new config
+        for strategy_config in state.config.get_enabled_strategies():
+            if strategy_config.name == "ORB":
+                state.strategies.append(ORBStrategy(
+                    strategy_config.name,
+                    strategy_config.params
+                ))
+            elif strategy_config.name == "TrendPullback":
+                state.strategies.append(TrendPullbackStrategy(
+                    strategy_config.name,
+                    strategy_config.params
+                ))
+            elif strategy_config.name == "OptionsRanker":
+                state.strategies.append(OptionsRankerStrategy(
+                    strategy_config.name,
+                    strategy_config.params
+                ))
+
+        # Update strategies in orchestrator if it exists (for main.py structure)
+        if hasattr(state, "orchestrator") and state.orchestrator:
+            state.orchestrator.strategies = state.strategies
+
+        # Update strategy_list if it exists (for main.py structure)
+        if hasattr(state, "strategy_list"):
+             state.strategy_list = state.strategies
+
+        logger.info(f"Reloaded {len(state.strategies)} strategies")
+
+        return {
+            "status": "SUCCESS",
+            "strategies_count": len(state.strategies),
+            "message": "Strategies reloaded successfully",
+        }
+    except Exception as e:
+        logger.error(f"Failed to reload strategies: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reload strategies: {str(e)}"
+        )
 
