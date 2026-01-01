@@ -117,14 +117,17 @@ def run():
             # Re-run backtest on latest data
             bt_res = engine.run(current_champion)
             updated_metrics = bt_res["metrics"]
-            current_champion["metrics"] = updated_metrics
             
             # Re-run walk-forward validation
             wf_res = validator.validate(current_champion)
-            current_champion["walkforward"] = wf_res
             
             # Re-calculate score with updated metrics and walkforward results
-            current_champion["score"] = calculate_score(updated_metrics, wf_res)
+            updated_score = calculate_score(updated_metrics, wf_res)
+            
+            # Update champion fields atomically after all computations succeed
+            current_champion["metrics"] = updated_metrics
+            current_champion["walkforward"] = wf_res
+            current_champion["score"] = updated_score
             
             logger.info(f"Current Champion re-evaluated. Score: {current_champion.get('score'):.2f}")
         except Exception as e:

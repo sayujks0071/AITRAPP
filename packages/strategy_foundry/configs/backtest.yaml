@@ -26,7 +26,8 @@ constraints:
 selection:
   # Margin required for new champion to replace current champion
   # New champion must score at least this much higher (as a multiplier)
-  promotion_margin: 1.1  # 10% better
+  # e.g., 1.1 means new champion must be at least 10% better
+  promotion_margin: 1.1
 
 execution:
   mode: "NEXT_OPEN" # Execute on next bar's open

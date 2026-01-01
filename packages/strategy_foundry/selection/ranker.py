@@ -24,9 +24,8 @@ def calculate_score(metrics: Dict[str, Any], walkforward: Dict[str, Any]) -> flo
 def rank_candidates(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Rank candidates based on composite score.
+    Score = Sharpe * 0.4 + (1 - MaxDD) * 0.3 + Stability * 0.3
     """
-    # Score = Sharpe * 0.4 + (1 - MaxDD) * 0.3 + Sortino * 0.2 + Calmar * 0.1
-    # Adjust weights as needed.
 
     scored = []
     for res in results:
