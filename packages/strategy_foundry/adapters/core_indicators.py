@@ -92,14 +92,16 @@ class CoreIndicatorAdapter:
                 final_lowerband.iloc[i] = final_lowerband.iloc[i-1]
 
             if trend.iloc[i-1] == 1:
-                if close.iloc[i] <= final_upperband.iloc[i]:
+                # In uptrend: check if close crosses below lower band (support)
+                if close.iloc[i] <= final_lowerband.iloc[i]:
                     trend.iloc[i] = -1
                     supertrend.iloc[i] = final_upperband.iloc[i]
                 else:
                     trend.iloc[i] = 1
                     supertrend.iloc[i] = final_lowerband.iloc[i]
             else:
-                if close.iloc[i] >= final_lowerband.iloc[i]:
+                # In downtrend: check if close crosses above upper band (resistance)
+                if close.iloc[i] >= final_upperband.iloc[i]:
                     trend.iloc[i] = 1
                     supertrend.iloc[i] = final_lowerband.iloc[i]
                 else:
@@ -136,5 +138,10 @@ class CoreIndicatorAdapter:
         plus_di = 100 * plus_dm.rolling(window=period).mean() / atr
         minus_di = 100 * minus_dm.rolling(window=period).mean() / atr
 
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        # Avoid division by zero
+        denom = plus_di + minus_di
+        dx = pd.Series(0.0, index=denom.index)
+        non_zero = denom != 0
+        dx[non_zero] = 100 * abs(plus_di[non_zero] - minus_di[non_zero]) / denom[non_zero]
+        
         return dx.rolling(window=period).mean()

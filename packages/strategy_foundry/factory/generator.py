@@ -45,11 +45,13 @@ class StrategyGenerator:
         if logic_type == "trend_crossover":
             params["ma_fast"] = random.choice(PARAM_SPACE["ma_fast"])
             params["ma_slow"] = random.choice(PARAM_SPACE["ma_slow"])
-            # Ensure fast < slow
-            if params["ma_fast"] >= params["ma_slow"]:
+            # Ensure fast < slow for proper crossover logic
+            if params["ma_fast"] == params["ma_slow"]:
+                # If equal, increment slow period to ensure fast < slow
+                params["ma_slow"] += 5
+            elif params["ma_fast"] > params["ma_slow"]:
+                # If fast > slow, swap them
                 params["ma_fast"], params["ma_slow"] = params["ma_slow"], params["ma_fast"]
-                if params["ma_fast"] == params["ma_slow"]:
-                    params["ma_slow"] += 5
 
         elif logic_type == "rsi_mean_reversion":
             params["rsi_period"] = random.choice(PARAM_SPACE["rsi_period"])

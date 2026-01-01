@@ -14,7 +14,6 @@ def calculate_metrics(returns: pd.Series, equity_curve: pd.Series, trades: pd.Se
 
     # Sharpe
     risk_free_rate = 0.05 # 5% roughly
-    excess_returns = returns - (risk_free_rate / 252)
     std_dev = returns.std() * np.sqrt(252)
     sharpe = (cagr - risk_free_rate) / std_dev if std_dev != 0 else 0
 
@@ -32,8 +31,6 @@ def calculate_metrics(returns: pd.Series, equity_curve: pd.Series, trades: pd.Se
     calmar = cagr / max_dd if max_dd != 0 else 0
 
     # Trade Stats
-    # trades series contains 1.0, 2.0 (reversal), 0.0
-    num_trades = trades[trades > 0].sum() # approx number of turnover units.
     # Actual trades count:
     trade_events = (trades > 0).sum()
 

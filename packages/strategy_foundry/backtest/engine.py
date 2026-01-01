@@ -63,8 +63,9 @@ class BacktestEngine:
         market_returns = self.df["Open"].pct_change().fillna(0)
 
         # Strategy returns
-        # Position[t-1] determines exposure for Return[t]
-        strategy_returns = positions.shift(1).fillna(0) * market_returns
+        # positions[t] already represents the position based on signal[t-1],
+        # aligned with market_returns[t] (Open-to-Open return for period t).
+        strategy_returns = positions * market_returns
 
         # Subtract Costs
         # Trade happened at t-1 close (logically) or t open?

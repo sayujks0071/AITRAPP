@@ -1,5 +1,5 @@
 """Adapter for Market Hours and Holidays"""
-from datetime import datetime, time, date
+from datetime import datetime
 from typing import Set
 import pytz
 import logging

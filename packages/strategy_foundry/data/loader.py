@@ -31,9 +31,9 @@ class DataLoader:
         if os.path.exists(cache_path):
             try:
                 df = pd.read_csv(cache_path, parse_dates=["Date"], index_col="Date")
-                # Normalize timezone
+                # Normalize timezone: localize directly to IST for consistency
                 if df.index.tz is None:
-                    df.index = df.index.tz_localize("UTC").tz_convert(IST)
+                    df.index = df.index.tz_localize(IST)
 
                 # Check staleness
                 last_date = df.index[-1].date()

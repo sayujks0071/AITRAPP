@@ -27,31 +27,27 @@ class WalkForwardValidator:
         """
         df = self.engine.df
         total_len = len(df)
-        fold_size = total_len // (self.folds + 1)
+        # Divide data into `self.folds` contiguous segments
+        fold_size = total_len // self.folds if self.folds > 0 else total_len
 
         oos_metrics_list = []
-        equity_curves = []
 
         for i in range(self.folds):
-            # Define OOS window
-            # Simple approach: Fixed expanding window or Rolling?
-            # Let's do Rolling 80/20 splits roughly.
-            # Start: i * fold_size
-            # Train End: (i+1) * fold_size + buffer
-            # Test Start: Train End
-            # Test End: Test Start + fold_size
+            # Define OOS window as contiguous folds over the full dataset.
+            # Each fold uses a non-overlapping test segment:
+            #   Fold i: [i * fold_size, (i + 1) * fold_size)
+            # The last fold is extended to the end of the dataset to include any remainder.
 
-            # Simpler: Just divide into Folds and treat each as OOS for stability check?
-            # But we need "Train" if we were tuning.
-            # Here we just check performance on different periods.
-
-            start_idx = i * fold_size
-            end_idx = start_idx + fold_size * 2 # 2 chunks size window?
-
-            # Let's just slice the DF and run engine
             # Test Segment
-            test_start = (i + 1) * fold_size
-            test_end = test_start + fold_size
+            test_start = i * fold_size
+            if test_start >= total_len:
+                break
+
+            if i == self.folds - 1:
+                # Last fold: include all remaining data
+                test_end = total_len
+            else:
+                test_end = test_start + fold_size
 
             if test_end > total_len:
                 test_end = total_len

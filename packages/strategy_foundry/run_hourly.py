@@ -111,17 +111,49 @@ def run():
     new_champion = None
 
     if current_champion:
-        # Compare
-        curr_score = current_champion.get("score", 0)
-        new_score = top_candidate.get("score", 0)
-
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
-            logger.info("New Champion Found! (Score Improvement)")
-            new_champion = top_candidate
+        # Re-evaluate current champion on latest data to ensure fair comparison
+        logger.info("Re-evaluating current champion on latest data...")
+        champion_strategy = {
+            "logic_type": current_champion.get("logic_type"),
+            "params": current_champion.get("params")
+        }
+        
+        # Re-run backtest and walk-forward validation on current data
+        engine = BacktestEngine(df, bt_cfg["initial_capital"], bt_cfg["costs_bps"], bt_cfg["slippage_bps"])
+        champion_result = engine.run(champion_strategy)
+        
+        if champion_result:
+            wf_validator = WalkForwardValidator(engine, bt_cfg["wf_folds"])
+            wf_result = wf_validator.validate(champion_strategy)
+            champion_result["walkforward"] = wf_result
+            
+            # Re-rank to get updated score
+            champion_ranked = rank_candidates([champion_result])
+            if champion_ranked:
+                updated_champion = champion_ranked[0]
+                updated_champion["id"] = current_champion.get("id")  # Preserve ID
+                updated_champion["logic_type"] = champion_strategy["logic_type"]
+                updated_champion["params"] = champion_strategy["params"]
+                
+                # Compare updated champion with new top candidate
+                curr_score = updated_champion.get("score", 0)
+                new_score = top_candidate.get("score", 0)
+                
+                logger.info(f"Current Champion (re-evaluated) Score: {curr_score:.2f}")
+                
+                # Must beat by margin (e.g. 10%)
+                if new_score > curr_score * 1.1:
+                    logger.info("New Champion Found! (Score Improvement)")
+                    new_champion = top_candidate
+                else:
+                    logger.info("Current Champion remains.")
+                    new_champion = updated_champion
+            else:
+                logger.warning("Failed to re-evaluate champion, using new candidate")
+                new_champion = top_candidate
         else:
-            logger.info("Current Champion remains.")
-            new_champion = current_champion
+            logger.warning("Failed to re-evaluate champion, using new candidate")
+            new_champion = top_candidate
     else:
         logger.info("First Champion initialized.")
         new_champion = top_candidate
@@ -129,6 +161,9 @@ def run():
     store.save_champion(new_champion)
 
     # 7. Reporting
+    # Ensure results directory exists
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    
     # Save Leaderboard
     lb_path = os.path.join(RESULTS_DIR, "leaderboard.csv")
     lb_data = []

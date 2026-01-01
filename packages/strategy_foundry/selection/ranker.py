@@ -4,9 +4,8 @@ from typing import List, Dict, Any
 def rank_candidates(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Rank candidates based on composite score.
+    Score = Sharpe * 0.4 + (1 - MaxDD) * 0.3 + Stability * 0.3
     """
-    # Score = Sharpe * 0.4 + (1 - MaxDD) * 0.3 + Sortino * 0.2 + Calmar * 0.1
-    # Adjust weights as needed.
 
     scored = []
     for res in results:
@@ -16,8 +15,6 @@ def rank_candidates(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
         sharpe = m.get("sharpe", 0)
         max_dd = m.get("max_dd", 1) # Lower is better
-        sortino = m.get("sortino", 0)
-        calmar = m.get("calmar", 0)
 
         # Stability bonus from OOS
         wf = res.get("walkforward", {})

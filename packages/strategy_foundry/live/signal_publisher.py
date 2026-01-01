@@ -24,6 +24,8 @@ def publish_signal(champion: dict, signal: int, instrument: str, proxy_symbol: s
         "reason": reason,
         "risk": {
             "stop_model": "ATR",
+            # Note: atr_period defaults to 14 if not present in strategy params.
+            # Not all strategies explicitly use ATR; this is a placeholder default.
             "params": champion.get("params", {}).get("atr_period", 14)
         }
     }
