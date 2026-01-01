@@ -3,6 +3,7 @@ from datetime import datetime, time
 from typing import List, Set
 import pytz
 import structlog
+from packages.core.nse_holidays import get_trading_holidays
 
 logger = structlog.get_logger(__name__)
 
@@ -22,8 +23,10 @@ class MarketHoursGuard:
         Args:
             trading_holidays: List of holiday dates in YYYY-MM-DD format
         """
-        self.trading_holidays: Set[str] = set(trading_holidays or [])
-        # TODO: Load from NSE calendar API or DB
+        if trading_holidays:
+            self.trading_holidays = set(trading_holidays)
+        else:
+            self.trading_holidays = get_trading_holidays()
     
     def is_market_open(self, dt: datetime = None) -> bool:
         """
