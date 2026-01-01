@@ -1,1 +1,0 @@
-2026-01-01 07:18:56 [info     ] Starting Paper-Local Simulation duration_minutes=1
