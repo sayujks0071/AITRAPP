@@ -15,7 +15,7 @@ from packages.strategy_foundry.factory.generator import StrategyGenerator
 from packages.strategy_foundry.backtest.engine import BacktestEngine
 from packages.strategy_foundry.backtest.walkforward import WalkForwardValidator
 from packages.strategy_foundry.backtest.sanity import check_sanity
-from packages.strategy_foundry.selection.ranker import rank_candidates
+from packages.strategy_foundry.selection.ranker import rank_candidates, calculate_score
 from packages.strategy_foundry.selection.promote import can_promote
 from packages.strategy_foundry.selection.champion_store import ChampionStore
 from packages.strategy_foundry.live.signal_publisher import publish_signal
@@ -124,11 +124,7 @@ def run():
             current_champion["walkforward"] = wf_res
             
             # Re-calculate score with updated metrics and walkforward results
-            m = updated_metrics
-            sharpe = m.get("sharpe", 0)
-            max_dd = m.get("max_dd", 1)
-            stability = wf_res.get("positive_folds", 0) / 5.0
-            current_champion["score"] = (sharpe * 0.4) + ((1 - max_dd) * 0.3) + (stability * 0.3)
+            current_champion["score"] = calculate_score(updated_metrics, wf_res)
             
             logger.info(f"Current Champion re-evaluated. Score: {current_champion.get('score'):.2f}")
         except Exception as e:
@@ -138,12 +134,13 @@ def run():
         curr_score = current_champion.get("score", 0)
         new_score = top_candidate.get("score", 0)
 
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
-            logger.info("New Champion Found! (Score Improvement)")
+        # Must beat by margin (configurable)
+        promotion_margin = bt_config.get("selection", {}).get("promotion_margin", 1.1)
+        if new_score > curr_score * promotion_margin:
+            logger.info(f"New Champion Found! (Score Improvement: {new_score:.2f} > {curr_score:.2f} * {promotion_margin})")
             new_champion = top_candidate
         else:
-            logger.info("Current Champion remains.")
+            logger.info(f"Current Champion remains. (New: {new_score:.2f} vs Current: {curr_score:.2f} * {promotion_margin} = {curr_score * promotion_margin:.2f})")
             new_champion = current_champion
     else:
         logger.info("First Champion initialized.")

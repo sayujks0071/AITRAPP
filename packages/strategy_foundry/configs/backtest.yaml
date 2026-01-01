@@ -23,6 +23,11 @@ constraints:
   min_trades: 30
   min_oos_sharpe: 0.5
 
+selection:
+  # Margin required for new champion to replace current champion
+  # New champion must score at least this much higher (as a multiplier)
+  promotion_margin: 1.1  # 10% better
+
 execution:
   mode: "NEXT_OPEN" # Execute on next bar's open
 
