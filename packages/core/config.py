@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     market_close_time: str = Field(default="15:30", alias="MARKET_CLOSE_TIME")
     eod_squareoff_time: str = Field(default="15:25", alias="EOD_SQUAREOFF_TIME")
     
+    # NSE Holidays
+    nse_holiday_segment: str = Field(default="FO", alias="NSE_HOLIDAY_SEGMENT")
+    nse_holiday_cache_path: str = Field(default="packages/core/data/nse_holidays_trading.json", alias="NSE_HOLIDAY_CACHE_PATH")
+    nse_holiday_refresh_days: int = Field(default=30, alias="NSE_HOLIDAY_REFRESH_DAYS")
+    nse_holiday_allow_network: bool = Field(default=True, alias="NSE_HOLIDAY_ALLOW_NETWORK")
+
     # Alerts
     telegram_bot_token: Optional[str] = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")

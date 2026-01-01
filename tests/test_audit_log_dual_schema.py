@@ -89,7 +89,7 @@ class TestAuditLogDualSchema:
         assert logs[0].message == "Test 1"
         assert logs[1].message == "Test 2"
     
-    def test_backward_compatible_creation_logic(self):
+    def test_backward_compatible_creation_logic(self, mocker):
         """Test the backward-compatible creation logic"""
         from sqlalchemy import inspect
         from unittest.mock import MagicMock
@@ -136,6 +136,55 @@ class TestAuditLogDualSchema:
             )
 
             assert has_details is False
+        
+        # Mock scenario: details column exists
+        class MockColumn:
+            def __init__(self, name):
+                self.name = name
+
+            def get(self, key):
+                if key == "name":
+                    return self.name
+                return None
+        
+        class MockInspector:
+            def get_columns(self, table_name):
+                return [MockColumn("details"), MockColumn("action")]
+
+        class MockInspectorNoDetails:
+            def get_columns(self, table_name):
+                return [MockColumn("data"), MockColumn("action")]
+        
+        class MockDB:
+            def __init__(self):
+                self.bind = "mock_bind"
+
+        # Mock sqlalchemy.inspect
+        mock_inspect = mocker.patch("sqlalchemy.inspect")
+        
+        # Case 1: details column exists
+        mock_inspect.return_value = MockInspector()
+        db = MockDB()
+
+        columns = mock_inspect(db.bind).get_columns("audit_logs")
+        has_details = any(
+            c.get("name") == "details" or getattr(c, "name", None) == "details"
+            for c in columns
+        )
+        
+        assert has_details is True
+        
+        # Case 2: details column missing
+        mock_inspect.return_value = MockInspectorNoDetails()
+        db_no_details = MockDB()
+        
+        columns = mock_inspect(db_no_details.bind).get_columns("audit_logs")
+        has_details = any(
+            c.get("name") == "details" or getattr(c, "name", None) == "details"
+            for c in columns
+        )
+        
+        assert has_details is False
 
 
 if __name__ == "__main__":

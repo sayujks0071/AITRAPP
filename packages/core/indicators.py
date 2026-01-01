@@ -84,6 +84,9 @@ class IndicatorCalculator:
             # OBV (On-Balance Volume)
             indicators["obv"] = self._obv(df)
             
+            # Historical Volatility
+            indicators["historical_volatility"] = self._historical_volatility(df["close"])
+
             return indicators
         
         except Exception as e:
@@ -183,16 +186,25 @@ class IndicatorCalculator:
             (supertrend_value, direction) where direction is 1 for uptrend, -1 for downtrend
         """
         try:
-            high = df["high"]
-            low = df["low"]
-            close = df["close"]
+            high = df["high"].values
+            low = df["low"].values
+            close = df["close"].values
             
             # Calculate ATR
+            # We can use pandas for rolling, but let's be careful about overhead
+            # tr calculation is vectorized
             tr1 = high - low
-            tr2 = abs(high - close.shift())
-            tr3 = abs(low - close.shift())
-            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            atr = tr.rolling(window=self.supertrend_period).mean()
+            tr2 = np.abs(high - np.roll(close, 1))
+            tr3 = np.abs(low - np.roll(close, 1))
+            tr2[0] = tr1[0]  # First element of roll is invalid (last element wrapped around)
+            tr3[0] = tr1[0]
+
+            tr = np.maximum(tr1, np.maximum(tr2, tr3))
+
+            # ATR is moving average of TR
+            # Using pandas rolling for convenience/correctness matching previous
+            atr_series = pd.Series(tr).rolling(window=self.supertrend_period).mean()
+            atr = atr_series.values
             
             # Calculate basic upper and lower bands
             hl_avg = (high + low) / 2
@@ -200,38 +212,48 @@ class IndicatorCalculator:
             basic_lb = hl_avg - (self.supertrend_multiplier * atr)
             
             # Calculate final bands
-            final_ub = pd.Series(0.0, index=df.index)
-            final_lb = pd.Series(0.0, index=df.index)
+            # We must iterate because of recursive definition
+            n = len(df)
+            final_ub = np.zeros(n)
+            final_lb = np.zeros(n)
+            supertrend = np.zeros(n)
+            direction = np.ones(n, dtype=int)
             
-            for i in range(len(df)):
-                if i == 0:
-                    final_ub.iloc[i] = basic_ub.iloc[i]
-                    final_lb.iloc[i] = basic_lb.iloc[i]
+            # Initial values
+            final_ub[0] = basic_ub[0]
+            final_lb[0] = basic_lb[0]
+            
+            # Optimized loop using numpy arrays (avoiding pandas overhead)
+            for i in range(1, n):
+                # Final Upper Band
+                if np.isnan(final_ub[i-1]):
+                    final_ub[i] = basic_ub[i]
+                elif (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
+                    final_ub[i] = basic_ub[i]
                 else:
-                    final_ub.iloc[i] = basic_ub.iloc[i] if (basic_ub.iloc[i] < final_ub.iloc[i-1]) or (close.iloc[i-1] > final_ub.iloc[i-1]) else final_ub.iloc[i-1]
-                    final_lb.iloc[i] = basic_lb.iloc[i] if (basic_lb.iloc[i] > final_lb.iloc[i-1]) or (close.iloc[i-1] < final_lb.iloc[i-1]) else final_lb.iloc[i-1]
-            
-            # Determine supertrend
-            supertrend = pd.Series(0.0, index=df.index)
-            direction = pd.Series(1, index=df.index)
-            
-            for i in range(len(df)):
-                if i == 0:
-                    supertrend.iloc[i] = final_ub.iloc[i]
-                    direction.iloc[i] = -1
+                    final_ub[i] = final_ub[i-1]
+
+                # Final Lower Band
+                if np.isnan(final_lb[i-1]):
+                    final_lb[i] = basic_lb[i]
+                elif (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
+                    final_lb[i] = basic_lb[i]
                 else:
-                    if close.iloc[i] <= final_ub.iloc[i]:
-                        supertrend.iloc[i] = final_ub.iloc[i]
-                        direction.iloc[i] = -1
-                    else:
-                        supertrend.iloc[i] = final_lb.iloc[i]
-                        direction.iloc[i] = 1
+                    final_lb[i] = final_lb[i-1]
+
+                # Supertrend
+                if close[i] <= final_ub[i]:
+                    supertrend[i] = final_ub[i]
+                    direction[i] = -1
+                else:
+                    supertrend[i] = final_lb[i]
+                    direction[i] = 1
             
             return (
-                float(supertrend.iloc[-1]) if not pd.isna(supertrend.iloc[-1]) else None,
-                int(direction.iloc[-1])
+                float(supertrend[-1]) if not np.isnan(supertrend[-1]) else None,
+                int(direction[-1])
             )
-        except:
+        except Exception:
             return None, None
     
     def _bollinger_bands(self, series: pd.Series) -> tuple[Optional[float], Optional[float], Optional[float]]:
@@ -276,20 +298,42 @@ class IndicatorCalculator:
     def _obv(self, df: pd.DataFrame) -> Optional[float]:
         """On-Balance Volume"""
         try:
-            close = df["close"]
-            volume = df["volume"]
+            close = df["close"].values
+            volume = df["volume"].values
             
-            obv = pd.Series(0.0, index=df.index)
+            # Vectorized OBV calculation
+            diff = np.diff(close, prepend=close[0])
+            # Note: loop in original code started from 1, effectively treating diff[0] as 0 (no change)
             
-            for i in range(1, len(df)):
-                if close.iloc[i] > close.iloc[i-1]:
-                    obv.iloc[i] = obv.iloc[i-1] + volume.iloc[i]
-                elif close.iloc[i] < close.iloc[i-1]:
-                    obv.iloc[i] = obv.iloc[i-1] - volume.iloc[i]
-                else:
-                    obv.iloc[i] = obv.iloc[i-1]
+            direction = np.sign(diff)
+            # Ensure first element doesn't contribute (matching original logic where loop starts at 1)
+            direction[0] = 0
             
-            return float(obv.iloc[-1])
+            obv = np.cumsum(direction * volume)
+
+            return float(obv[-1])
+        except Exception:
+            return None
+
+    def _historical_volatility(self, series: pd.Series, window: int = 20) -> Optional[float]:
+        """
+        Calculate annualized historical volatility.
+        Uses standard deviation of log returns.
+
+        Note on IV Rank:
+        IV Rank calculation requires historical implied volatility data which is not available
+        in the standard OHLCV bars. It should be populated by an external service or
+        a different data loader if available.
+        """
+        try:
+            log_returns = np.log(series / series.shift(1))
+            vol = log_returns.rolling(window=window).std()
+
+            # Annualize (assuming 252 trading days)
+            # For intraday bars, this scaling might need adjustment, but sticking to standard annualization for consistency
+            annual_vol = vol * np.sqrt(252)
+
+            return float(annual_vol.iloc[-1]) if not pd.isna(annual_vol.iloc[-1]) else None
         except:
             return None
     
