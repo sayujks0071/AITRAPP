@@ -1,6 +1,6 @@
 """Walk Forward Analysis"""
 import pandas as pd
-from typing import List, Dict, Any, Tuple
+from typing import Dict, Any
 from packages.strategy_foundry.backtest.engine import BacktestEngine
 
 class WalkForwardValidator:
