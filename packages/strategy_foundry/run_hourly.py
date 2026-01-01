@@ -111,17 +111,39 @@ def run():
     new_champion = None
 
     if current_champion:
-        # Compare
-        curr_score = current_champion.get("score", 0)
-        new_score = top_candidate.get("score", 0)
+        # Re-evaluate current champion on latest data to ensure metrics are fresh
+        try:
+            logger.info("Re-evaluating current champion on latest data...")
+            bt_res_champion = engine.run(current_champion)
+            wf_res_champion = validator.validate(current_champion)
+            
+            # Update champion with fresh metrics
+            current_champion["metrics"] = bt_res_champion["metrics"]
+            current_champion["walkforward"] = wf_res_champion
+            
+            # Recalculate score with fresh metrics
+            # Re-rank to get updated score (rank_candidates expects a list)
+            re_ranked = rank_candidates([current_champion])
+            if re_ranked:
+                current_champion = re_ranked[0]  # Get updated champion with new score
+            
+            # Compare with fresh metrics
+            curr_score = current_champion.get("score", 0)
+            new_score = top_candidate.get("score", 0)
 
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
-            logger.info("New Champion Found! (Score Improvement)")
+            # Must beat by margin (e.g. 10%)
+            if new_score > curr_score * 1.1:
+                logger.info("New Champion Found! (Score Improvement)")
+                new_champion = top_candidate
+            else:
+                logger.info(f"Current Champion remains (re-evaluated score: {curr_score:.2f})")
+                new_champion = current_champion
+                
+        except Exception as e:
+            logger.warning(f"Failed to re-evaluate current champion: {e}")
+            # If re-evaluation fails, fall back to using top_candidate
+            logger.info("Falling back to top candidate due to re-evaluation failure")
             new_champion = top_candidate
-        else:
-            logger.info("Current Champion remains.")
-            new_champion = current_champion
     else:
         logger.info("First Champion initialized.")
         new_champion = top_candidate
