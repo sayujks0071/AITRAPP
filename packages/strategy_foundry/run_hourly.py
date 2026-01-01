@@ -30,6 +30,9 @@ BACKTEST_CONFIG = os.path.join(CONFIG_DIR, "backtest.yaml")
 INSTRUMENT_MAP = os.path.join(CONFIG_DIR, "instrument_map.yaml")
 RESULTS_DIR = "packages/strategy_foundry/results"
 
+# Champion selection threshold: new candidate must beat current champion by this margin
+CHAMPION_IMPROVEMENT_THRESHOLD = 1.1  # 10% improvement required
+
 def load_config(path):
     with open(path, "r") as f:
         return yaml.safe_load(f)
@@ -124,14 +127,19 @@ def run():
             wf_res = validator.validate(current_champion)
             current_champion["walkforward"] = wf_res
 
-            # Recalculate score with updated metrics
-            reevaluated = rank_candidates([current_champion])
-            if reevaluated:
-                current_champion = reevaluated[0]
-                logger.info(f"Current Champion re-evaluated score: {current_champion.get('score'):.2f}")
-            else:
+            # Check sanity before ranking (same as new candidates)
+            if not check_sanity(current_champion["metrics"], bt_config["constraints"]):
                 logger.warning("Current champion failed sanity checks on latest data, will be replaced")
                 current_champion = None
+            else:
+                # Recalculate score with updated metrics
+                reevaluated = rank_candidates([current_champion])
+                if reevaluated:
+                    current_champion = reevaluated[0]
+                    logger.info(f"Current Champion re-evaluated score: {current_champion.get('score'):.2f}")
+                else:
+                    logger.warning("Current champion ranking failed, will be replaced")
+                    current_champion = None
         except Exception as e:
             logger.warning(f"Failed to re-evaluate current champion: {e}, will be replaced")
             current_champion = None
@@ -141,8 +149,8 @@ def run():
         curr_score = current_champion.get("score", 0)
         new_score = top_candidate.get("score", 0)
 
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
+        # Must beat by margin
+        if new_score > curr_score * CHAMPION_IMPROVEMENT_THRESHOLD:
             logger.info("New Champion Found! (Score Improvement)")
             new_champion = top_candidate
         else:
