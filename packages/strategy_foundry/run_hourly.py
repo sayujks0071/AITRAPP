@@ -39,7 +39,8 @@ def calculate_strategy_score(metrics, walkforward, folds):
     """
     sharpe = metrics.get("sharpe", 0)
     max_dd = metrics.get("max_dd", 1)
-    stability = walkforward.get("positive_folds", 0) / float(folds)
+    # Protect against division by zero
+    stability = walkforward.get("positive_folds", 0) / float(folds) if folds > 0 else 0
     return (sharpe * 0.4) + ((1 - max_dd) * 0.3) + (stability * 0.3)
 
 def run():
