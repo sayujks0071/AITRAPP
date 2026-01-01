@@ -113,6 +113,27 @@ class Tick:
 
 
 @dataclass
+class TechnicalIndicators:
+    """Technical indicators container"""
+    vwap: Optional[float] = None
+    atr: Optional[float] = None
+    rsi: Optional[float] = None
+    adx: Optional[float] = None
+    ema_fast: Optional[float] = None
+    ema_slow: Optional[float] = None
+    supertrend: Optional[float] = None
+    supertrend_direction: Optional[int] = None
+    bb_upper: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_lower: Optional[float] = None
+    dc_upper: Optional[float] = None
+    dc_lower: Optional[float] = None
+    obv: Optional[float] = None
+    historical_volatility: Optional[float] = None
+    iv_rank: Optional[float] = None
+
+
+@dataclass
 class Bar:
     """Aggregated bar data"""
     token: int
@@ -125,6 +146,7 @@ class Bar:
     oi: Optional[int] = None
     
     # Technical indicators (computed)
+    # Note: These are attached dynamically in some flows, but defining them here or using TechnicalIndicators is better
     vwap: Optional[float] = None
     atr: Optional[float] = None
     rsi: Optional[float] = None
@@ -192,6 +214,19 @@ class RankedOpportunity:
     # Regime
     regime_score: float = 0.0
     iv_percentile: Optional[float] = None
+
+
+@dataclass
+class RankedCandidate:
+    """Ranked candidate signal (internal to ranking engine)"""
+    signal: Signal
+    score: Decimal
+    rank: int
+    feature_scores: Dict[str, Decimal]
+    penalties: Dict[str, Decimal]
+    market_regime: str
+    liquidity_score: Decimal
+    timestamp: datetime
 
 
 @dataclass

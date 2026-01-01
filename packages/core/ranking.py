@@ -180,16 +180,81 @@ class RankingEngine:
     def _calculate_regime_score(
         self, signal: Signal, indicators: TechnicalIndicators | None
     ) -> Decimal:
-        """Calculate market regime score (0-1)"""
-        # TODO: Implement proper regime detection (volatility, IV rank, etc.)
-        # For now, use ATR as a proxy
-        if not indicators or not indicators.atr:
+        """
+        Calculate market regime score (0-1) based on volatility and IV.
+
+        Higher score = Better regime for trading (usually higher volatility, but not extreme).
+        """
+        if not indicators:
             return Decimal("0.5")
+
+        score = 0.5
         
-        # Higher ATR = higher volatility = potentially better opportunities
-        # But also higher risk
-        # This is a simplified version
-        return Decimal("0.6")
+        # 1. Historical Volatility Component (0.0 - 0.5)
+        # Using annualized volatility (approx range 0.1 to 0.5 for normal markets)
+        # We favor higher volatility (up to a point)
+        if indicators.historical_volatility:
+            hv = float(indicators.historical_volatility)
+
+            # Normal range for Nifty/Stocks is usually 10% - 30% (0.1 - 0.3)
+            # If HV < 0.1: Low volatility (boring market) -> Score decreases
+            # If HV > 0.4: Extreme volatility (dangerous) -> Score decreases
+            # Sweet spot: 0.15 - 0.35
+
+            if hv < 0.10:
+                # Too quiet
+                hv_score = 0.3 + (hv / 0.10) * 0.2
+            elif hv > 0.40:
+                # Too volatile/panic
+                hv_score = max(0.2, 0.5 - ((hv - 0.40) * 2))
+            else:
+                # Sweet spot (linear mapping 0.1 -> 0.5, 0.4 -> 0.5)
+                # Actually let's peak at 0.25
+                if hv <= 0.25:
+                    hv_score = 0.5 + ((hv - 0.10) / 0.15) * 0.5  # 0.1->0.5, 0.25->1.0 (scaled down later)
+                else:
+                    hv_score = 1.0 - ((hv - 0.25) / 0.15) * 0.5
+
+            # Clamp and weight it (50% weight)
+            score += (min(1.0, max(0.0, hv_score)) - 0.5) * 0.5
+
+        # 2. ATR fallback (if Volatility not available)
+        elif indicators.atr and signal.entry_price:
+            # ATR %
+            atr_pct = (float(indicators.atr) / float(signal.entry_price)) * 100
+
+            # Typical daily ATR is 1-2% for volatile stocks, 0.5-1% for indices
+            # We want > 0.5%
+            if atr_pct < 0.5:
+                score -= 0.1
+            elif atr_pct > 2.0:
+                score += 0.1
+            else:
+                score += 0.05
+
+        # 3. IV Rank Component (0.0 - 0.5)
+        # IV Rank tells us if current IV is high relative to past year
+        # High IV Rank = Expensive options (Good for sellers, risky for buyers)
+        # Low IV Rank = Cheap options (Good for buyers)
+        # Since this is a generic ranker, we assume moderate IV is best (stability)
+        if indicators.iv_rank:
+            iv_rank = float(indicators.iv_rank)
+
+            # Prefer IV Rank between 30 and 70
+            if 30 <= iv_rank <= 70:
+                iv_score = 0.8
+            elif iv_rank < 30:
+                # Low IV - expected explosion? or just quiet
+                iv_score = 0.5
+            else:
+                # High IV - Fear
+                iv_score = 0.6
+
+            # Weight it (30% weight, assuming less important than realized vol for directional trades)
+            # We add to the baseline
+            score += (iv_score - 0.5) * 0.3
+
+        return Decimal(str(min(1.0, max(0.0, score))))
 
     def _calculate_rr_score(self, signal: Signal) -> Decimal:
         """Calculate risk:reward score (0-1)"""
