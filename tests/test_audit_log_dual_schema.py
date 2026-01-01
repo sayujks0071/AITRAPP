@@ -89,26 +89,39 @@ class TestAuditLogDualSchema:
         assert logs[0].message == "Test 1"
         assert logs[1].message == "Test 2"
     
-    def test_backward_compatible_creation_logic(self):
+    def test_backward_compatible_creation_logic(self, mocker):
         """Test the backward-compatible creation logic"""
-        from sqlalchemy import inspect
         
         # Mock scenario: details column exists
         class MockColumn:
             def __init__(self, name):
                 self.name = name
+
+            def get(self, key):
+                if key == "name":
+                    return self.name
+                return None
         
         class MockInspector:
             def get_columns(self, table_name):
                 return [MockColumn("details"), MockColumn("action")]
+
+        class MockInspectorNoDetails:
+            def get_columns(self, table_name):
+                return [MockColumn("data"), MockColumn("action")]
         
         class MockDB:
             def __init__(self):
-                self.bind = type('obj', (object,), {'inspect': lambda: MockInspector()})()
+                self.bind = "mock_bind"
+
+        # Mock sqlalchemy.inspect
+        mock_inspect = mocker.patch("sqlalchemy.inspect")
         
-        # Test the logic
+        # Case 1: details column exists
+        mock_inspect.return_value = MockInspector()
         db = MockDB()
-        columns = inspect(db.bind).get_columns("audit_logs")
+
+        columns = mock_inspect(db.bind).get_columns("audit_logs")
         has_details = any(
             c.get("name") == "details" or getattr(c, "name", None) == "details"
             for c in columns
@@ -116,13 +129,11 @@ class TestAuditLogDualSchema:
         
         assert has_details is True
         
-        # Test fallback scenario
-        class MockInspectorNoDetails:
-            def get_columns(self, table_name):
-                return [MockColumn("data"), MockColumn("action")]
+        # Case 2: details column missing
+        mock_inspect.return_value = MockInspectorNoDetails()
+        db_no_details = MockDB()
         
-        db_no_details = type('obj', (object,), {'bind': type('obj', (object,), {'inspect': lambda: MockInspectorNoDetails()})()})()
-        columns = inspect(db_no_details.bind).get_columns("audit_logs")
+        columns = mock_inspect(db_no_details.bind).get_columns("audit_logs")
         has_details = any(
             c.get("name") == "details" or getattr(c, "name", None) == "details"
             for c in columns

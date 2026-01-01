@@ -32,7 +32,7 @@ ta-lib>=0.4.28  # May need system install: brew install ta-lib
 ta>=0.11,<0.12
 
 # HTTP Client
-httpx>=0.27,<0.28
+httpx>=0.27
 aiohttp>=3.9,<4.0
 
 # Utilities (pinned)
@@ -46,7 +46,7 @@ pyyaml>=6.0,<7.0
 celery>=5.3,<6.0
 
 # Alerting (Optional)
-python-telegram-bot>=20.7,<21.0
+python-telegram-bot>=21.0
 slack-sdk>=3.26,<4.0
 
 # Authentication
