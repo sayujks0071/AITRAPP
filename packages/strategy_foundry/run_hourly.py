@@ -111,17 +111,43 @@ def run():
     new_champion = None
 
     if current_champion:
-        # Compare
-        curr_score = current_champion.get("score", 0)
-        new_score = top_candidate.get("score", 0)
-
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
-            logger.info("New Champion Found! (Score Improvement)")
+        # Re-evaluate current champion with latest data
+        try:
+            logger.info("Re-evaluating current champion with latest data...")
+            bt_res = engine.run(current_champion)
+            current_champion["metrics"] = bt_res["metrics"]
+            
+            # Re-run walk forward validation
+            wf_res = validator.validate(current_champion)
+            current_champion["walkforward"] = wf_res
+            
+            # Recalculate score with updated metrics
+            m = current_champion["metrics"]
+            sharpe = m.get("sharpe", 0)
+            max_dd = m.get("max_dd", 1)
+            stability = wf_res.get("positive_folds", 0) / 5.0
+            current_champion["score"] = (sharpe * 0.4) + ((1 - max_dd) * 0.3) + (stability * 0.3)
+            
+            logger.info(f"Current Champion re-evaluated. Updated score: {current_champion['score']:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to re-evaluate current champion: {e}")
+            # If re-evaluation fails, use the top candidate as fallback
             new_champion = top_candidate
-        else:
-            logger.info("Current Champion remains.")
-            new_champion = current_champion
+            store.save_champion(new_champion)
+            logger.info("Using new candidate due to champion re-evaluation failure.")
+        
+        if new_champion is None:
+            # Compare using updated metrics
+            curr_score = current_champion.get("score", 0)
+            new_score = top_candidate.get("score", 0)
+
+            # Must beat by margin (e.g. 10%)
+            if new_score > curr_score * 1.1:
+                logger.info("New Champion Found! (Score Improvement)")
+                new_champion = top_candidate
+            else:
+                logger.info("Current Champion remains.")
+                new_champion = current_champion
     else:
         logger.info("First Champion initialized.")
         new_champion = top_candidate
