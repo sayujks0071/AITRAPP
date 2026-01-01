@@ -134,7 +134,7 @@ def run():
             if recalculated and len(recalculated) > 0:
                 current_champion = recalculated[0]
             
-            logger.info(f"Current Champion Score (updated): {current_champion.get('score'):.2f}")
+            logger.info(f"Current Champion Score (updated): {current_champion.get('score', 0):.2f}")
         except Exception as e:
             logger.warning(f"Failed to re-evaluate current champion: {e}")
             # If re-evaluation fails, fall back to top candidate
@@ -148,7 +148,7 @@ def run():
 
             # Must beat by margin (e.g. 10%)
             if new_score > curr_score * PROMOTION_MARGIN:
-                logger.info("New Champion Found! (Score Improvement)")
+                logger.info(f"New Champion Found! (Score {new_score:.2f} > {curr_score:.2f} * {PROMOTION_MARGIN})")
                 new_champion = top_candidate
             else:
                 logger.info("Current Champion remains (re-evaluated).")
