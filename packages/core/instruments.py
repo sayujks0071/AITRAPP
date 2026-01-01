@@ -176,7 +176,9 @@ class InstrumentManager:
         index_map = {
             "NIFTY": "NIFTY",
             "BANKNIFTY": "BANKNIFTY",
-            "FINNIFTY": "FINNIFTY"
+            "FINNIFTY": "FINNIFTY",
+            "SENSEX": "SENSEX",
+            "BANKEX": "BANKEX"
         }
         
         base_symbol = index_map.get(index_name)
@@ -184,9 +186,13 @@ class InstrumentManager:
             logger.warning(f"Unknown index: {index_name}")
             return tokens
         
+        # Determine exchange based on index
+        spot_exchange = "BSE" if index_name in ["SENSEX", "BANKEX"] else "NSE"
+        deriv_exchange = "BFO" if index_name in ["SENSEX", "BANKEX"] else "NFO"
+
         # Get spot index token
         for token, inst in self._instruments.items():
-            if inst.symbol == base_symbol and inst.exchange == "NSE" and inst.instrument_type == InstrumentType.EQ:
+            if inst.symbol == base_symbol and inst.exchange == spot_exchange and inst.instrument_type == InstrumentType.EQ:
                 tokens.add(token)
                 break
         
@@ -194,7 +200,7 @@ class InstrumentManager:
         now = datetime.now()
         
         for token, inst in self._instruments.items():
-            if inst.symbol == base_symbol and inst.exchange == "NFO":
+            if inst.symbol == base_symbol and inst.exchange == deriv_exchange:
                 if inst.is_future and inst.expiry:
                     # Include futures expiring within next 60 days
                     if inst.expiry <= now + timedelta(days=60):
