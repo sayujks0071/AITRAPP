@@ -1,6 +1,5 @@
 """Backtest Engine and Core Logic"""
 import pandas as pd
-import numpy as np
 from typing import Dict, Any
 import logging
 from packages.strategy_foundry.factory.grammar import StrategyGrammar
