@@ -129,6 +129,9 @@ def run():
     store.save_champion(new_champion)
 
     # 7. Reporting
+    # Ensure results directory exists
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    
     # Save Leaderboard
     lb_path = os.path.join(RESULTS_DIR, "leaderboard.csv")
     lb_data = []
