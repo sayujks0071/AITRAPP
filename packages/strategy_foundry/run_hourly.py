@@ -1,6 +1,5 @@
 """Strategy Foundry - Hourly Runner"""
 import os
-import sys
 import yaml
 import logging
 import pytz
