@@ -4,6 +4,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -17,6 +19,7 @@ except ImportError:
 from packages.core.leader_lock import LeaderLock
 
 
+@pytest.mark.anyio
 async def test_leader_lock_redis_compatibility():
     """Test that leader lock works with both bytes and string Redis responses"""
     if not REDIS_AVAILABLE:

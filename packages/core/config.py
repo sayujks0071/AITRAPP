@@ -111,7 +111,9 @@ class Settings(BaseSettings):
     reload: bool = Field(default=False, alias="RELOAD")
     
     class Config:
-        env_file = ".env"
+        # Support both local dev and test environments.
+        # Environment variables still take precedence over these files.
+        env_file = (".env", ".env.test")
         case_sensitive = False
 
 
