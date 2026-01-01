@@ -111,17 +111,42 @@ def run():
     new_champion = None
 
     if current_champion:
-        # Compare
-        curr_score = current_champion.get("score", 0)
-        new_score = top_candidate.get("score", 0)
+        # Re-evaluate current champion with latest data to ensure fair comparison
+        # and to have up-to-date metrics for signal generation
+        logger.info("Re-evaluating current champion with latest data...")
+        try:
+            # Re-run backtest on current champion with latest data
+            bt_res = engine.run(current_champion)
+            current_champion["metrics"] = bt_res["metrics"]
+            
+            # Re-run walk forward validation
+            wf_res = validator.validate(current_champion)
+            current_champion["walkforward"] = wf_res
+            
+            # Recalculate score with updated metrics
+            ranked_champion = rank_candidates([current_champion])
+            if ranked_champion:
+                current_champion = ranked_champion[0]
+            
+            # Sanity check still passes?
+            if not check_sanity(current_champion["metrics"], bt_config["constraints"]):
+                logger.warning("Current champion failed sanity check with latest data. Will replace.")
+                new_champion = top_candidate
+            else:
+                # Compare with updated metrics
+                curr_score = current_champion.get("score", 0)
+                new_score = top_candidate.get("score", 0)
 
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
-            logger.info("New Champion Found! (Score Improvement)")
+                # Must beat by margin (e.g. 10%)
+                if new_score > curr_score * 1.1:
+                    logger.info("New Champion Found! (Score Improvement)")
+                    new_champion = top_candidate
+                else:
+                    logger.info("Current Champion remains (re-evaluated with latest data).")
+                    new_champion = current_champion
+        except Exception as e:
+            logger.warning(f"Failed to re-evaluate current champion: {e}. Using new candidate.")
             new_champion = top_candidate
-        else:
-            logger.info("Current Champion remains.")
-            new_champion = current_champion
     else:
         logger.info("First Champion initialized.")
         new_champion = top_candidate
