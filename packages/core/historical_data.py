@@ -2,7 +2,7 @@
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import pandas as pd
 import structlog
@@ -25,6 +25,13 @@ class HistoricalDataLoader:
     def __init__(self, data_dir: str = "docs/NSE OPINONS DATA"):
         self.data_dir = Path(data_dir)
         self._cache: Dict[str, pd.DataFrame] = {}
+
+        # Fallback to fixtures if configured dir doesn't exist
+        if not self.data_dir.exists():
+            fixtures_path = Path("tests/fixtures")
+            if fixtures_path.exists():
+                logger.warning(f"Data dir {self.data_dir} not found, falling back to {fixtures_path}")
+                self.data_dir = fixtures_path
     
     def load_file(
         self,
@@ -46,41 +53,80 @@ class HistoricalDataLoader:
             DataFrame with historical data
         """
         # Construct filename
+        # Allow flexible filename matching in future, but stick to pattern for now
         filename = f"OPTIDX_{symbol}_{option_type}_12-Aug-2025_TO_12-Nov-2025.csv"
         filepath = self.data_dir / filename
         
         if not filepath.exists():
-            raise FileNotFoundError(f"Historical data file not found: {filepath}")
+            # Try finding any matching file if exact match fails
+            pattern = f"OPTIDX_{symbol}_{option_type}*.csv"
+            matches = list(self.data_dir.glob(pattern))
+            if matches:
+                filepath = matches[0]
+                logger.info(f"Exact match not found, using {filepath.name}")
+            else:
+                raise FileNotFoundError(f"Historical data file not found: {filepath}")
         
         # Check cache
-        cache_key = f"{symbol}_{option_type}"
+        cache_key = f"{filepath.name}"
         if cache_key in self._cache:
             df = self._cache[cache_key].copy()
         else:
             # Load CSV
-            logger.info(f"Loading historical data from {filename}")
+            logger.info(f"Loading historical data from {filepath.name}")
+
+            # First read without parsing dates to inspect columns
+            df_preview = pd.read_csv(filepath, nrows=0, skipinitialspace=True)
+            columns = [c.strip() for c in df_preview.columns]
+
+            # Map common variations
+            date_col = next((c for c in columns if c.lower() == 'date'), 'Date')
+            expiry_col = next((c for c in columns if c.lower() == 'expiry'), 'Expiry')
             
+            # Load full CSV
             df = pd.read_csv(
                 filepath,
                 skipinitialspace=True,
-                parse_dates=['Date', 'Expiry'],
-                date_parser=lambda x: pd.to_datetime(x, format='%d-%b-%Y')
             )
             
-            # Clean column names (remove extra spaces)
+            # Clean column names
             df.columns = df.columns.str.strip()
             
+            # Handle date parsing manually to be more robust
+            if date_col in df.columns:
+                df['Date'] = pd.to_datetime(df[date_col], format='%d-%b-%Y', errors='coerce')
+                # Fallback format if needed
+                if df['Date'].isna().any():
+                     df['Date'] = df['Date'].fillna(pd.to_datetime(df[date_col], errors='coerce'))
+
+            if expiry_col in df.columns:
+                df['Expiry'] = pd.to_datetime(df[expiry_col], format='%d-%b-%Y', errors='coerce')
+                if df['Expiry'].isna().any():
+                    df['Expiry'] = df['Expiry'].fillna(pd.to_datetime(df[expiry_col], errors='coerce'))
+
             # Convert numeric columns
-            numeric_cols = [
-                'Strike Price', 'Open', 'High', 'Low', 'Close', 'LTP',
-                'Settle Price', 'No. of contracts', 'Turnover * in  ₹ Lakhs',
-                'Premium Turnover ** in   ₹ Lakhs', 'Open Int',
-                'Change in OI', 'Underlying Value'
-            ]
+            numeric_mapping = {
+                'Strike Price': ['Strike Price', 'Strike'],
+                'Open': ['Open'],
+                'High': ['High'],
+                'Low': ['Low'],
+                'Close': ['Close'],
+                'LTP': ['LTP', 'Last Price'],
+                'Settle Price': ['Settle Price'],
+                'No. of contracts': ['No. of contracts', 'Volume'],
+                'Open Int': ['Open Int', 'OI'],
+                'Underlying Value': ['Underlying Value', 'Spot']
+            }
             
-            for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            for standard_name, variations in numeric_mapping.items():
+                found_col = next((c for c in df.columns if c in variations), None)
+                if found_col:
+                    if found_col != standard_name:
+                         df[standard_name] = df[found_col]
+                    df[standard_name] = pd.to_numeric(df[standard_name], errors='coerce')
+
+            # Drop rows with invalid dates
+            df = df.dropna(subset=['Date'])
             
             # Cache
             self._cache[cache_key] = df
@@ -136,7 +182,8 @@ class HistoricalDataLoader:
         pe_df['Option type'] = 'PE'
         
         chain = pd.concat([ce_df, pe_df], ignore_index=True)
-        chain = chain.sort_values(['Strike Price', 'Option type'])
+        if not chain.empty:
+            chain = chain.sort_values(['Strike Price', 'Option type'])
         
         return chain
     
@@ -274,13 +321,18 @@ class HistoricalDataLoader:
         # Get underlying value (spot)
         underlying_value = chain['Underlying Value'].iloc[0] if 'Underlying Value' in chain.columns else None
         
-        if not underlying_value:
-            # Estimate from strike prices
+        if not underlying_value or pd.isna(underlying_value):
+            # Estimate from strike prices if underlying is missing
             strikes = sorted(chain['Strike Price'].unique())
+            if not strikes:
+                return []
             underlying_value = strikes[len(strikes) // 2]
         
         # Find ATM strike (closest to underlying)
         strikes = sorted(chain['Strike Price'].unique())
+        if not strikes:
+            return []
+
         atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - underlying_value))
         
         # Get strikes around ATM
@@ -300,20 +352,6 @@ class HistoricalDataLoader:
     ) -> Optional[float]:
         """
         Calculate implied volatility from historical data.
-        
-        Uses Black-Scholes model (simplified).
-        In production, use a proper IV calculator.
-        
-        Args:
-            symbol: NIFTY or BANKNIFTY
-            strike: Strike price
-            option_type: CE or PE
-            date: Trading date
-            expiry: Expiry date
-            risk_free_rate: Risk-free rate (default 6%)
-        
-        Returns:
-            Implied volatility (as decimal, e.g., 0.20 for 20%)
         """
         df = self.get_strike_data(symbol, option_type, strike)
         row = df[df['Date'] == date]
@@ -330,11 +368,6 @@ class HistoricalDataLoader:
             return None
         
         # Simplified IV calculation (placeholder)
-        # In production, use proper Black-Scholes solver
-        # For now, return a rough estimate based on premium/spot ratio
-        moneyness = spot / strike if option_type == 'CE' else strike / spot
-        
-        # Rough IV estimate (not accurate, just for demonstration)
         iv_estimate = abs(premium / spot) / (time_to_expiry ** 0.5) * 2
         
         return min(max(iv_estimate, 0.05), 2.0)  # Clamp between 5% and 200%
@@ -352,4 +385,3 @@ class HistoricalDataLoader:
         """Clear the data cache"""
         self._cache.clear()
         logger.info("Historical data cache cleared")
-
