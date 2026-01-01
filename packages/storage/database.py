@@ -2,9 +2,9 @@
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker, declarative_base
 import structlog
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from packages.core.config import settings
 
@@ -59,7 +59,7 @@ def get_db_session() -> Generator[Session, None, None]:
 def order_exists(client_order_id: str, status_in: tuple = None) -> bool:
     """Check if an order with given client_order_id exists (for idempotency)"""
     from packages.storage.models import Order, OrderStatusEnum
-    
+
     db = SessionLocal()
     try:
         query = db.query(Order).filter_by(client_order_id=client_order_id)
