@@ -84,6 +84,9 @@ class IndicatorCalculator:
             # OBV (On-Balance Volume)
             indicators["obv"] = self._obv(df)
             
+            # Historical Volatility
+            indicators["historical_volatility"] = self._historical_volatility(df["close"])
+
             return indicators
         
         except Exception as e:
@@ -290,6 +293,28 @@ class IndicatorCalculator:
                     obv.iloc[i] = obv.iloc[i-1]
             
             return float(obv.iloc[-1])
+        except:
+            return None
+
+    def _historical_volatility(self, series: pd.Series, window: int = 20) -> Optional[float]:
+        """
+        Calculate annualized historical volatility.
+        Uses standard deviation of log returns.
+
+        Note on IV Rank:
+        IV Rank calculation requires historical implied volatility data which is not available
+        in the standard OHLCV bars. It should be populated by an external service or
+        a different data loader if available.
+        """
+        try:
+            log_returns = np.log(series / series.shift(1))
+            vol = log_returns.rolling(window=window).std()
+
+            # Annualize (assuming 252 trading days)
+            # For intraday bars, this scaling might need adjustment, but sticking to standard annualization for consistency
+            annual_vol = vol * np.sqrt(252)
+
+            return float(annual_vol.iloc[-1]) if not pd.isna(annual_vol.iloc[-1]) else None
         except:
             return None
     
