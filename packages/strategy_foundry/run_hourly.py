@@ -28,6 +28,9 @@ BACKTEST_CONFIG = os.path.join(CONFIG_DIR, "backtest.yaml")
 INSTRUMENT_MAP = os.path.join(CONFIG_DIR, "instrument_map.yaml")
 RESULTS_DIR = "packages/strategy_foundry/results"
 
+# Champion promotion threshold (requires 10% improvement to replace current champion)
+PROMOTION_MARGIN = 1.1
+
 def load_config(path):
     with open(path, "r") as f:
         return yaml.safe_load(f)
@@ -128,7 +131,7 @@ def run():
             # Recalculate score with updated metrics
             # Note: rank_candidates expects a list
             recalculated = rank_candidates([current_champion])
-            if recalculated:
+            if recalculated and len(recalculated) > 0:
                 current_champion = recalculated[0]
             
             logger.info(f"Current Champion Score (updated): {current_champion.get('score'):.2f}")
@@ -137,9 +140,6 @@ def run():
             # If re-evaluation fails, fall back to top candidate
             logger.info("Falling back to top candidate")
             new_champion = top_candidate
-            store.save_champion(new_champion)
-            # Early return since we have a new champion
-            # Continue to reporting section below
         
         # Compare if re-evaluation succeeded
         if new_champion is None:
@@ -147,7 +147,7 @@ def run():
             new_score = top_candidate.get("score", 0)
 
             # Must beat by margin (e.g. 10%)
-            if new_score > curr_score * 1.1:
+            if new_score > curr_score * PROMOTION_MARGIN:
                 logger.info("New Champion Found! (Score Improvement)")
                 new_champion = top_candidate
             else:
