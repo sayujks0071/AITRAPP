@@ -27,8 +27,19 @@ class WalkForwardValidator:
         """
         df = self.engine.df
         total_len = len(df)
+        
+        # Validate folds parameter
+        if self.folds <= 0 or total_len < self.folds:
+            # If folds is invalid or insufficient data, treat entire dataset as one fold
+            return {
+                "avg_sharpe": 0,
+                "avg_max_dd": 0,
+                "positive_folds": 0,
+                "fold_results": []
+            }
+        
         # Divide data into `self.folds` contiguous segments
-        fold_size = total_len // self.folds if self.folds > 0 else total_len
+        fold_size = total_len // self.folds
 
         oos_metrics_list = []
 

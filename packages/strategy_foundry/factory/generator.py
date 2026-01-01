@@ -6,6 +6,9 @@ from typing import List, Dict, Any
 from datetime import datetime
 from packages.strategy_foundry.factory.parameter_space import PARAM_SPACE
 
+# Constants
+MA_PERIOD_INCREMENT = 5  # Increment value for ensuring ma_fast < ma_slow
+
 class StrategyGenerator:
     def __init__(self, seed: int = None):
         if seed is None:
@@ -48,7 +51,7 @@ class StrategyGenerator:
             # Ensure fast < slow for proper crossover logic
             if params["ma_fast"] == params["ma_slow"]:
                 # If equal, increment slow period to ensure fast < slow
-                params["ma_slow"] += 5
+                params["ma_slow"] += MA_PERIOD_INCREMENT
             elif params["ma_fast"] > params["ma_slow"]:
                 # If fast > slow, swap them
                 params["ma_fast"], params["ma_slow"] = params["ma_slow"], params["ma_fast"]
