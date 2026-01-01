@@ -111,17 +111,48 @@ def run():
     new_champion = None
 
     if current_champion:
-        # Compare
-        curr_score = current_champion.get("score", 0)
-        new_score = top_candidate.get("score", 0)
-
-        # Must beat by margin (e.g. 10%)
-        if new_score > curr_score * 1.1:
-            logger.info("New Champion Found! (Score Improvement)")
+        # Re-evaluate current champion on latest data
+        logger.info("Re-evaluating current champion on latest data...")
+        try:
+            # Run backtest on current data
+            bt_res = engine.run(current_champion)
+            updated_metrics = bt_res["metrics"]
+            
+            # Update champion with latest metrics
+            current_champion["metrics"] = updated_metrics
+            
+            # Re-run walk forward validation
+            wf_res = validator.validate(current_champion)
+            current_champion["walkforward"] = wf_res
+            
+            # Recalculate score with updated metrics
+            # Note: rank_candidates expects a list
+            recalculated = rank_candidates([current_champion])
+            if recalculated:
+                current_champion = recalculated[0]
+            
+            logger.info(f"Current Champion Score (updated): {current_champion.get('score'):.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to re-evaluate current champion: {e}")
+            # If re-evaluation fails, fall back to top candidate
+            logger.info("Falling back to top candidate")
             new_champion = top_candidate
-        else:
-            logger.info("Current Champion remains.")
-            new_champion = current_champion
+            store.save_champion(new_champion)
+            # Early return since we have a new champion
+            # Continue to reporting section below
+        
+        # Compare if re-evaluation succeeded
+        if new_champion is None:
+            curr_score = current_champion.get("score", 0)
+            new_score = top_candidate.get("score", 0)
+
+            # Must beat by margin (e.g. 10%)
+            if new_score > curr_score * 1.1:
+                logger.info("New Champion Found! (Score Improvement)")
+                new_champion = top_candidate
+            else:
+                logger.info("Current Champion remains (re-evaluated).")
+                new_champion = current_champion
     else:
         logger.info("First Champion initialized.")
         new_champion = top_candidate
