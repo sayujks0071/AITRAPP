@@ -1,26 +1,28 @@
 """Strategy Foundry - Hourly Runner"""
-import os
-import yaml
 import logging
-import pytz
-import pandas as pd
+import os
 from datetime import datetime
+
+import pandas as pd
+import pytz
+import yaml
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("StrategyFoundry")
 
 # Imports
+from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.backtest.sanity import check_sanity
+from packages.strategy_foundry.backtest.walkforward import WalkForwardValidator
 from packages.strategy_foundry.data.loader import DataLoader
 from packages.strategy_foundry.factory.generator import StrategyGenerator
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.walkforward import WalkForwardValidator
-from packages.strategy_foundry.backtest.sanity import check_sanity
-from packages.strategy_foundry.selection.ranker import rank_candidates
-from packages.strategy_foundry.selection.promote import can_promote
-from packages.strategy_foundry.selection.champion_store import ChampionStore
-from packages.strategy_foundry.live.signal_publisher import publish_signal
-from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
 from packages.strategy_foundry.factory.grammar import StrategyGrammar
+from packages.strategy_foundry.live.signal_publisher import publish_signal
+from packages.strategy_foundry.selection.champion_store import ChampionStore
+from packages.strategy_foundry.selection.promote import can_promote
+from packages.strategy_foundry.selection.ranker import rank_candidates
 
 # Config Paths
 CONFIG_DIR = "packages/strategy_foundry/configs"
@@ -109,6 +111,30 @@ def run():
     current_champion = store.load_champion()
 
     new_champion = None
+
+    if current_champion:
+        # Re-evaluate current champion on latest data before comparison
+        # This ensures we're comparing apples-to-apples and that the champion's
+        # metrics reflect current market conditions
+        logger.info("Re-evaluating current champion on latest data...")
+        try:
+            bt_res = engine.run(current_champion)
+            current_champion["metrics"] = bt_res["metrics"]
+
+            wf_res = validator.validate(current_champion)
+            current_champion["walkforward"] = wf_res
+
+            # Recalculate score with updated metrics
+            reevaluated = rank_candidates([current_champion])
+            if reevaluated:
+                current_champion = reevaluated[0]
+                logger.info(f"Current Champion re-evaluated score: {current_champion.get('score'):.2f}")
+            else:
+                logger.warning("Current champion failed sanity checks on latest data, will be replaced")
+                current_champion = None
+        except Exception as e:
+            logger.warning(f"Failed to re-evaluate current champion: {e}, will be replaced")
+            current_champion = None
 
     if current_champion:
         # Compare
