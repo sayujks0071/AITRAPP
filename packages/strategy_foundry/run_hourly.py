@@ -114,6 +114,29 @@ def run():
     new_champion = None
 
     if current_champion:
+        # Re-evaluate current champion with latest data
+        logger.info("Re-evaluating current champion with latest data...")
+        try:
+            # Re-run backtest on latest data
+            bt_res = engine.run(current_champion)
+            updated_metrics = bt_res["metrics"]
+            current_champion["metrics"] = updated_metrics
+            
+            # Re-run walk-forward validation
+            wf_res = validator.validate(current_champion)
+            current_champion["walkforward"] = wf_res
+            
+            # Re-calculate score with updated metrics and walkforward results
+            m = updated_metrics
+            sharpe = m.get("sharpe", 0)
+            max_dd = m.get("max_dd", 1)
+            stability = wf_res.get("positive_folds", 0) / 5.0
+            current_champion["score"] = (sharpe * 0.4) + ((1 - max_dd) * 0.3) + (stability * 0.3)
+            
+            logger.info(f"Current Champion re-evaluated. Score: {current_champion.get('score'):.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to re-evaluate current champion: {e}. Using stored metrics.")
+        
         # Compare
         curr_score = current_champion.get("score", 0)
         new_score = top_candidate.get("score", 0)
