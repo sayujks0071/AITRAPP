@@ -37,7 +37,7 @@ Before running the bootstrap script, ensure that the redirect URL is registered 
 
 1. Visit https://developers.kite.trade/apps
 2. Select your app
-3. Add `http://localhost:8080/callback` to the list of **Redirect URLs**
+3. Add **exactly** `http://localhost:8080/callback` to the list of **Redirect URLs** (the exact URL format is required)
 4. Save the changes
 
 Without this, the authentication flow will fail after you log in to Kite.

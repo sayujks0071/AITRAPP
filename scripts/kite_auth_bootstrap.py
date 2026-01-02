@@ -174,7 +174,7 @@ def main():
     login_url = kite.login_url()
 
     redirect_url = f"http://localhost:{REDIRECT_PORT}{REDIRECT_PATH}"
-    
+
     print(f"\n⚠️  IMPORTANT: Ensure the following redirect URL is registered in your Kite Connect app:")
     print(f"   {redirect_url}")
     print(f"   Visit https://developers.kite.trade/apps to verify/add it.")
