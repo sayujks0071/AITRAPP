@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="API_PORT")
     api_workers: int = Field(default=4, alias="API_WORKERS")
     api_secret_key: str = Field(alias="API_SECRET_KEY")
+    # Union[List[str], str] allows pydantic-settings to pass string values to the validator
+    # The validator always returns List[str], so the runtime type is always List[str]
     cors_origins: Union[List[str], str] = Field(default=["*"], alias="CORS_ORIGINS")
     
     @field_validator("cors_origins", mode="before")
@@ -105,7 +107,12 @@ class Settings(BaseSettings):
             # Fall back to comma-separated values
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         
-        return v
+        # Unexpected type - raise clear error
+        raise ValueError(
+            f"cors_origins must be a list or string, got {type(v).__name__}. "
+            "Expected formats: JSON array '[\"http://localhost:8000\"]' or "
+            "comma-separated 'http://localhost:8000,http://127.0.0.1:8000'"
+        )
     
     # WebSocket
     ws_ping_interval: int = Field(default=30, alias="WS_PING_INTERVAL")

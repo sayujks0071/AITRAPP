@@ -21,13 +21,10 @@ def test_cors_restrictive_behavior(monkeypatch):
     from packages.core import config as config_module
     reload(config_module)
     
-    # Re-import the updated settings and app
+    # Re-import the updated settings
     from packages.core.config import settings as reloaded_settings
     
     # Create a new FastAPI app instance with the updated settings
-    from fastapi import FastAPI
-    from fastapi.middleware.cors import CORSMiddleware
-    
     test_app = FastAPI()
     test_app.add_middleware(
         CORSMiddleware,
@@ -71,6 +68,8 @@ def test_cors_restrictive_behavior(monkeypatch):
     response = test_client.options("/health", headers=headers)
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "http://trusted.com"
+
+
 def test_default_is_permissive():
     """
     Verify the default is still permissive (to avoid breaking changes)
