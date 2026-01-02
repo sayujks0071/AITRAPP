@@ -51,16 +51,16 @@ def test_cors_restrictive_behavior():
                 "Expected CORS headers in permissive mode"
     else:
         # Restrictive mode - test with an origin that is definitely not in the allow list
+        # Using .test TLD which is reserved for testing and will never be in production config
         disallowed_origin = "http://definitely-not-allowed.test"
-        if disallowed_origin not in settings.cors_origins:
-            headers = {
-                "Origin": disallowed_origin,
-                "Access-Control-Request-Method": "POST",
-            }
-            response = client.options("/mode", headers=headers)
-            # Should either return 400 or 200 without CORS headers for disallowed origin
-            assert response.status_code in [200, 400], \
-                f"Unexpected status code for disallowed origin: {response.status_code}"
+        headers = {
+            "Origin": disallowed_origin,
+            "Access-Control-Request-Method": "POST",
+        }
+        response = client.options("/mode", headers=headers)
+        # Should either return 400 or 200 without CORS headers for disallowed origin
+        assert response.status_code in [200, 400], \
+            f"Unexpected status code for disallowed origin: {response.status_code}"
 
 def test_default_is_permissive():
     """
