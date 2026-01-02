@@ -35,8 +35,8 @@ def test_cors_origins_used_by_app():
     # Find the CORS middleware in the app's middleware stack
     cors_middleware = None
     for middleware in app.user_middleware:
-        # Check if this is the CORSMiddleware using type comparison
-        if middleware.cls is CORSMiddleware or middleware.cls.__name__ == "CORSMiddleware":
+        # Check if this is the CORSMiddleware using direct type comparison
+        if middleware.cls is CORSMiddleware:
             cors_middleware = middleware
             break
     

@@ -83,13 +83,17 @@ class Settings(BaseSettings):
         """Get CORS origins as a list.
         
         Parses comma-separated string from environment variable into a list of origins.
+        Returns ["*"] (permissive wildcard) if the input is empty for backward compatibility.
+        
         Examples:
             - "http://localhost:8000,http://127.0.0.1:8000" -> ["http://localhost:8000", "http://127.0.0.1:8000"]
             - "*" -> ["*"]
             - "http://localhost:8000" -> ["http://localhost:8000"]
+            - "" -> ["*"] (backward compatible default)
         """
         # Parse comma-separated string and strip whitespace
         origins = [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
+        # Fallback to permissive wildcard for backward compatibility if empty
         return origins if origins else ["*"]
     
     # WebSocket
