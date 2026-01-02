@@ -101,11 +101,19 @@ class Settings(BaseSettings):
                 parsed = json.loads(v)
                 if isinstance(parsed, list):
                     return parsed
-            except (json.JSONDecodeError, ValueError):
+                # If valid JSON but not a list, raise error
+                raise ValueError(
+                    f"CORS_ORIGINS must be a JSON array, got {type(parsed).__name__}. "
+                    "Expected format: '[\"http://localhost:8000\",\"http://127.0.0.1:8000\"]'"
+                )
+            except json.JSONDecodeError:
+                # Not valid JSON - try comma-separated parsing
                 pass
             
             # Fall back to comma-separated values
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
+            origins = [origin.strip() for origin in v.split(",") if origin.strip()]
+            # If empty after parsing, return default to maintain consistent behavior
+            return origins if origins else ["*"]
         
         # Unexpected type - raise clear error
         raise ValueError(
