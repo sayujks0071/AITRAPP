@@ -30,11 +30,13 @@ def test_cors_origins_used_by_app():
     with the origins from settings.
     """
     from apps.api.main import app
+    from fastapi.middleware.cors import CORSMiddleware
     
     # Find the CORS middleware in the app's middleware stack
     cors_middleware = None
     for middleware in app.user_middleware:
-        if middleware.cls.__name__ == "CORSMiddleware":
+        # Check if this is the CORSMiddleware using type comparison
+        if middleware.cls is CORSMiddleware or middleware.cls.__name__ == "CORSMiddleware":
             cors_middleware = middleware
             break
     

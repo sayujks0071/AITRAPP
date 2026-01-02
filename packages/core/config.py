@@ -80,10 +80,15 @@ class Settings(BaseSettings):
     
     @property
     def cors_origins(self) -> List[str]:
-        """Get CORS origins as a list"""
-        if isinstance(self.cors_origins_str, list):
-            return self.cors_origins_str
-        # Parse comma-separated string
+        """Get CORS origins as a list.
+        
+        Parses comma-separated string from environment variable into a list of origins.
+        Examples:
+            - "http://localhost:8000,http://127.0.0.1:8000" -> ["http://localhost:8000", "http://127.0.0.1:8000"]
+            - "*" -> ["*"]
+            - "http://localhost:8000" -> ["http://localhost:8000"]
+        """
+        # Parse comma-separated string and strip whitespace
         origins = [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
         return origins if origins else ["*"]
     
