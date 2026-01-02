@@ -1,0 +1,32 @@
+data:
+  cache_dir: "packages/strategy_foundry/data/cache"
+  lookback_days_intraday: 60
+  lookback_days_daily: 3650
+
+backtest:
+  timeframes: ["5m", "15m"]
+  sanity_timeframe: "1d"
+  initial_capital: 100000
+  costs:
+    bps_per_side: 3.0  # approximate taxes + brokerage
+    slippage_bps: 2.0
+    spread_guard_bps: 2.0
+
+generation:
+  candidates_count: 80
+  fast_mode_count: 15
+  folds: 4
+  fast_mode_folds: 2
+
+selection:
+  min_trades_5m: 80
+  min_trades_15m: 40
+  min_profit_factor: 1.1
+  max_drawdown_pct: 30.0
+  promotion:
+    improvement_threshold_pct: 10.0
+    dd_reduction_threshold_pct: 5.0
+
+live:
+  required_sharpe: 1.2
+  max_allowed_dd: 20.0
