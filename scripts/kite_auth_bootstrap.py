@@ -63,7 +63,12 @@ def update_env_file(access_token, user_id, mode):
         lines = f.readlines()
 
     new_lines = []
-    keys_updated = {"KITE_ACCESS_TOKEN": False, "KITE_USER_ID": False, "KITE_TOKEN_CREATED_AT_ISO": False}
+    keys_updated = {
+        "KITE_ACCESS_TOKEN": False, 
+        "KITE_USER_ID": False, 
+        "KITE_TOKEN_CREATED_AT_ISO": False,
+        "APP_MODE": False
+    }
 
     current_time = datetime.now().isoformat()
 
@@ -82,6 +87,9 @@ def update_env_file(access_token, user_id, mode):
         elif key == "KITE_TOKEN_CREATED_AT_ISO":
             new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
             keys_updated["KITE_TOKEN_CREATED_AT_ISO"] = True
+        elif key == "APP_MODE":
+            new_lines.append(f"APP_MODE={mode}\n")
+            keys_updated["APP_MODE"] = True
         else:
             new_lines.append(line)
 
@@ -92,11 +100,13 @@ def update_env_file(access_token, user_id, mode):
         new_lines.append(f"KITE_USER_ID={user_id}\n")
     if not keys_updated["KITE_TOKEN_CREATED_AT_ISO"]:
         new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
+    if not keys_updated["APP_MODE"]:
+        new_lines.append(f"APP_MODE={mode}\n")
 
     with open(env_path, "w") as f:
         f.writelines(new_lines)
 
-    print(f"✅ Updated .env with new credentials (Mode: {mode})")
+    print(f"✅ Updated .env with new credentials and set APP_MODE={mode}")
 
 def main():
     # Load environment variables from .env file
@@ -132,6 +142,26 @@ def main():
 
     api_key = os.environ.get("KITE_API_KEY", DEFAULT_API_KEY)
     api_secret = os.environ.get("KITE_API_SECRET", DEFAULT_API_SECRET)
+
+    # Validate that the credentials match the intended mode
+    using_default_credentials = (api_key == DEFAULT_API_KEY and api_secret == DEFAULT_API_SECRET)
+    
+    print(f"\n🔑 Using API Key: {api_key[:8]}...")
+    if using_default_credentials:
+        print("   (Using default credentials from script)")
+    else:
+        print("   (Using credentials from environment)")
+    
+    # Warn if mode doesn't match credential expectations
+    if args.mode == "LIVE":
+        print("\n⚠️  IMPORTANT: Ensure your API key is configured for LIVE trading.")
+        print("   The credentials you authenticate with will determine actual trading mode.")
+        print("   This script will set APP_MODE=LIVE in .env, but the API credentials")
+        print("   are what Zerodha uses to determine if orders are real or simulated.")
+    else:
+        print("\n💡 INFO: Authenticating for PAPER mode.")
+        print("   APP_MODE will be set to PAPER in .env file.")
+        print("   Ensure your API credentials match your intended trading environment.")
 
     kite = KiteConnect(api_key=api_key)
     login_url = kite.login_url()
