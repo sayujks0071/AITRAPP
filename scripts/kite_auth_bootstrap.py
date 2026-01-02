@@ -68,7 +68,6 @@ def validate_credentials_for_mode(api_key, api_secret, mode):
     if mode == "PAPER" and not is_using_paper_defaults:
         print("\n⚠️  WARNING: You're authenticating for PAPER mode but using custom API credentials.")
         print("    Make sure these credentials are for PAPER trading, not LIVE trading.")
-        print(f"    API Key: {api_key[:10]}...")
         
         if sys.stdin.isatty():
             confirmation = input("\n    Continue? (y/N): ")
