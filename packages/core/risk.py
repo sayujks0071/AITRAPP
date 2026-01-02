@@ -79,6 +79,16 @@ class RiskManager:
     - Handle lot sizing and freeze quantities
     """
     
+    # Tax Rates (2024-2025) - Official Government/Exchange Rates
+    STT_EQUITY_INTRADAY_SELL = 0.00025  # 0.025% - Securities Transaction Tax on equity intraday sell
+    STT_FUTURES_SELL = 0.000125         # 0.0125% - STT on futures sell
+    STT_OPTIONS_SELL = 0.000625         # 0.0625% - STT on options sell (on premium)
+    
+    # Exchange Transaction Charges (NSE)
+    TXN_NSE_EQUITY = 0.0000325          # 0.00325% - NSE transaction charge on equity
+    TXN_NSE_FUTURES = 0.000019          # 0.0019% - NSE transaction charge on futures
+    TXN_NSE_OPTIONS = 0.0005            # 0.05% - NSE transaction charge on options (on premium)
+    
     def __init__(self, config: RiskConfig):
         self.config = config
         
@@ -320,25 +330,15 @@ class RiskManager:
             # Note: fees_per_option_leg is removed as brokerage is usually flat per order for F&O.
             # If multi-leg order costs are needed, they should be modeled as multiple orders.
 
-        # Tax Rates (2024-2025)
-        # TODO: Move to config or constants
-        STT_EQUITY_INTRADAY_SELL = 0.00025  # 0.025%
-        STT_FUTURES_SELL = 0.000125         # 0.0125%
-        STT_OPTIONS_SELL = 0.000625         # 0.0625% (on premium)
-        
-        TXN_NSE_EQUITY = 0.0000325          # 0.00325%
-        TXN_NSE_FUTURES = 0.000019          # 0.0019%
-        TXN_NSE_OPTIONS = 0.0005            # 0.05% (on premium)
-
         # Exchange Transaction Charges
         txn_charges = 0.0
         if instrument.exchange in ["NSE", "BSE", "NFO"]:
             if instrument.is_equity:
-                txn_charges = turnover * TXN_NSE_EQUITY
+                txn_charges = turnover * self.TXN_NSE_EQUITY
             elif instrument.is_future:
-                txn_charges = turnover * TXN_NSE_FUTURES
+                txn_charges = turnover * self.TXN_NSE_FUTURES
             elif instrument.is_option:
-                txn_charges = turnover * TXN_NSE_OPTIONS
+                txn_charges = turnover * self.TXN_NSE_OPTIONS
         else:
             txn_charges = turnover * 0.00002  # Default fallback
         
@@ -352,11 +352,11 @@ class RiskManager:
         stt = 0.0
         if instrument.is_equity:
             # Assuming Intraday for now as safe default. For delivery it's higher (0.1% on both sides).
-            stt = (exit_price * quantity) * STT_EQUITY_INTRADAY_SELL
+            stt = (exit_price * quantity) * self.STT_EQUITY_INTRADAY_SELL
         elif instrument.is_future:
-            stt = (exit_price * quantity) * STT_FUTURES_SELL
+            stt = (exit_price * quantity) * self.STT_FUTURES_SELL
         elif instrument.is_option:
-            stt = (exit_price * quantity) * STT_OPTIONS_SELL
+            stt = (exit_price * quantity) * self.STT_OPTIONS_SELL
 
         fees += stt
         
