@@ -17,23 +17,24 @@ import os
 import argparse
 from datetime import datetime
 from kiteconnect import KiteConnect
+from dotenv import load_dotenv
 
-# Defaults now read from environment for security; no hardcoded credentials.
-DEFAULT_API_KEY = os.getenv("KITE_API_KEY")
-DEFAULT_API_SECRET = os.getenv("KITE_API_SECRET")
+# Defaults from get_kite_token.py
+DEFAULT_API_KEY = "nhe2vo0afks02ojs"
+DEFAULT_API_SECRET = "cs82nkkdvin37nrydnyou6cwn2b8zojl"
 REDIRECT_PORT = 8080
 REDIRECT_PATH = "/callback"
 
-auth_request_token = None
+captured_request_token = None
 
 class CallbackHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        global auth_request_token
+        global captured_request_token
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path == REDIRECT_PATH:
             query_params = urllib.parse.parse_qs(parsed_url.query)
             if "request_token" in query_params:
-                auth_request_token = query_params["request_token"][0]
+                captured_request_token = query_params["request_token"][0]
                 self.send_response(200)
                 self.send_header("Content-type", "text/html")
                 self.end_headers()
@@ -43,13 +44,9 @@ class CallbackHandler(http.server.SimpleHTTPRequestHandler):
                 threading.Thread(target=self.server.shutdown).start()
             else:
                 self.send_response(400)
-                self.send_header("Content-type", "text/plain")
-                self.end_headers()
                 self.wfile.write(b"Missing request_token")
         else:
             self.send_response(404)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
             self.wfile.write(b"Not Found")
 
     def log_message(self, format, *args):
@@ -71,51 +68,21 @@ def update_env_file(access_token, user_id, mode):
     current_time = datetime.now().isoformat()
 
     for line in lines:
-        # Preserve lines without '=', empty lines, and full-line comments as-is
-        stripped = line.lstrip()
-        if "=" not in line or stripped.startswith("#") or stripped.strip() == "":
+        if "=" not in line:
             new_lines.append(line)
             continue
 
-        # Split into key and value once; preserve the original value/comment suffix where possible
-        key_part, value_part = line.split("=", 1)
-        key = key_part.strip()
-
-        # Extract any inline comment suffix (e.g., "value  # comment")
-        comment_suffix = ""
-        if "#" in value_part:
-            value_body, inline_comment = value_part.split("#", 1)
-            comment_suffix = "#" + inline_comment.rstrip("\n")
-        else:
-            value_body = value_part.rstrip("\n")
-
+        key = line.split("=")[0].strip()
         if key == "KITE_ACCESS_TOKEN":
-            new_line = f"{key}=({access_token})"
-            if comment_suffix:
-                # Ensure a space before the inline comment if not already present
-                if not comment_suffix.startswith(" "):
-                    new_line += " "
-                new_line += comment_suffix
-            new_lines.append(new_line + "\n")
+            new_lines.append(f"KITE_ACCESS_TOKEN={access_token}\n")
             keys_updated["KITE_ACCESS_TOKEN"] = True
         elif key == "KITE_USER_ID":
-            new_line = f"{key}={user_id}"
-            if comment_suffix:
-                if not comment_suffix.startswith(" "):
-                    new_line += " "
-                new_line += comment_suffix
-            new_lines.append(new_line + "\n")
+            new_lines.append(f"KITE_USER_ID={user_id}\n")
             keys_updated["KITE_USER_ID"] = True
         elif key == "KITE_TOKEN_CREATED_AT_ISO":
-            new_line = f"{key}={current_time}"
-            if comment_suffix:
-                if not comment_suffix.startswith(" "):
-                    new_line += " "
-                new_line += comment_suffix
-            new_lines.append(new_line + "\n")
+            new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
             keys_updated["KITE_TOKEN_CREATED_AT_ISO"] = True
         else:
-            # For other keys, leave the line unchanged
             new_lines.append(line)
 
     # Append if not found
@@ -132,6 +99,9 @@ def update_env_file(access_token, user_id, mode):
     print(f"✅ Updated .env with new credentials (Mode: {mode})")
 
 def main():
+    # Load environment variables from .env file
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="Kite Auth Bootstrap")
     parser.add_argument("--mode", choices=["PAPER", "LIVE"], default="PAPER", help="Trading mode (default: PAPER)")
     args = parser.parse_args()
