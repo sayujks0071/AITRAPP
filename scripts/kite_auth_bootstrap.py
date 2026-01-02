@@ -62,8 +62,15 @@ def update_env_file(access_token, user_id, mode):
         print(f"⚠️  .env file not found at {env_path}")
         return
 
-    with open(env_path, "r") as f:
-        lines = f.readlines()
+    try:
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+    except PermissionError:
+        print(f"❌ Permission denied: Cannot read {env_path}")
+        sys.exit(1)
+    except IOError as e:
+        print(f"❌ Error reading {env_path}: {e}")
+        sys.exit(1)
 
     new_lines = []
     keys_updated = {"KITE_ACCESS_TOKEN": False, "KITE_USER_ID": False, "KITE_TOKEN_CREATED_AT_ISO": False}
@@ -126,8 +133,36 @@ def update_env_file(access_token, user_id, mode):
     if not keys_updated["KITE_TOKEN_CREATED_AT_ISO"]:
         new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
 
-    with open(env_path, "w") as f:
-        f.writelines(new_lines)
+    # Use atomic write pattern: write to temp file, then rename
+    import tempfile
+    temp_fd, temp_path = None, None
+    try:
+        # Create temp file in same directory as .env to ensure same filesystem
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(env_path), prefix=".env.", suffix=".tmp")
+        with os.fdopen(temp_fd, "w") as f:
+            temp_fd = None  # fdopen takes ownership of the file descriptor
+            f.writelines(new_lines)
+        # Atomically replace the original file
+        os.replace(temp_path, env_path)
+        temp_path = None  # Successfully replaced, no need to clean up
+    except PermissionError:
+        print(f"❌ Permission denied: Cannot write to {env_path}")
+        sys.exit(1)
+    except OSError as e:
+        print(f"❌ Error writing to {env_path}: {e}")
+        sys.exit(1)
+    finally:
+        # Clean up temp file if something went wrong
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except:
+                pass
+        if temp_path is not None and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
 
     print(f"✅ Updated .env with new credentials (Mode: {mode})")
 
