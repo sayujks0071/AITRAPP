@@ -1,0 +1,13 @@
+{
+  "timestamp_ist": "2026-01-02T00:38:27.410990",
+  "champion_id": "b679d810c1f4",
+  "instrument": "SENSEX",
+  "signal": 0,
+  "rule_summary": "[{'period': 'rsi_period', 'threshold': 'rsi_buy', 'type': 'rsi_oversold'}] / [{'period': 'rsi_period', 'threshold': 'rsi_sell', 'type': 'rsi_overbought'}, {'multiplier': 'stop_loss_atr', 'type': 'trailing_stop_atr'}]",
+  "risk": {
+    "stop_loss_atr": 1.5,
+    "max_hold": null
+  },
+  "status": "SKIPPED",
+  "reason": "Market closed"
+}
