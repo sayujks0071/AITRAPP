@@ -1,0 +1,41 @@
+name: Strategy Foundry Hourly
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/strategy_foundry/**'
+
+jobs:
+  run-hourly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # We don't add new deps, assume requirements.txt has requests, pandas, numpy, etc.
+          # If strict no-new-deps policy, ensure they are there.
+          # requests, pandas, numpy are standard.
+
+      - name: Run Strategy Foundry (Fast Mode for PRs)
+        env:
+          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
+          PYTHONPATH: .
+        run: python -m packages.strategy_foundry.run_hourly
+
+      - name: Archive Results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: foundry-results
+          path: packages/strategy_foundry/results/

@@ -58,3 +58,4 @@ aiolimiter>=1.1,<2.0
 
 # FastAPI form data support
 python-multipart>=0.0.6
+tabulate
