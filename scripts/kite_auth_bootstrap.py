@@ -166,6 +166,22 @@ def main():
     kite = KiteConnect(api_key=api_key)
     login_url = kite.login_url()
 
+    # Validate redirect URL registration
+    redirect_url = f"http://localhost:{REDIRECT_PORT}{REDIRECT_PATH}"
+    print(f"\n⚠️  PREREQUISITE CHECK:")
+    print(f"   Before proceeding, ensure the redirect URL is registered in your Kite Connect app settings.")
+    print(f"   Required redirect URL: {redirect_url}")
+    print(f"   Register at: https://developers.kite.trade/apps (under 'Redirect URL')")
+    print(f"\n   If this URL is not registered, authentication will fail after login.")
+    
+    if sys.stdin.isatty():
+        confirmation = input("\n   Type 'yes' to confirm the redirect URL is registered: ")
+        if confirmation.lower() != "yes":
+            print("❌ Please register the redirect URL and try again.")
+            sys.exit(1)
+    else:
+        print("   ⚠️  Non-interactive mode: Assuming redirect URL is registered.")
+
     print(f"\n1. Opening login URL in your browser...")
     print(f"   URL: {login_url}")
 
