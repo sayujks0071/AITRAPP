@@ -14,6 +14,7 @@ import webbrowser
 import threading
 import sys
 import os
+import errno
 import argparse
 from datetime import datetime
 from kiteconnect import KiteConnect
@@ -182,7 +183,7 @@ def main():
         with socketserver.TCPServer(("", REDIRECT_PORT), CallbackHandler) as httpd:
             httpd.serve_forever()
     except OSError as e:
-        if e.errno == 48: # Address already in use
+        if e.errno == errno.EADDRINUSE:
             print(f"\n❌ Port {REDIRECT_PORT} is busy. Is the script already running?")
         else:
             print(f"\n❌ Error starting server: {e}")
