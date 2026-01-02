@@ -82,8 +82,9 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="API_PORT")
     api_workers: int = Field(default=4, alias="API_WORKERS")
     api_secret_key: str = Field(alias="API_SECRET_KEY")
-    # Union[List[str], str] allows pydantic-settings to pass string values to the validator
-    # The validator always returns List[str], so the runtime type is always List[str]
+    # Union[List[str], str] allows pydantic-settings to pass string values to the validator.
+    # The validator always returns List[str], so the runtime type is always List[str].
+    # This is required to support both JSON and comma-separated formats from env vars.
     cors_origins: Union[List[str], str] = Field(default=["*"], alias="CORS_ORIGINS")
     
     @field_validator("cors_origins", mode="before")
@@ -104,7 +105,7 @@ class Settings(BaseSettings):
                 # If valid JSON but not a list, raise error
                 raise ValueError(
                     f"CORS_ORIGINS must be a JSON array, got {type(parsed).__name__}. "
-                    "Expected format: '[\"http://localhost:8000\",\"http://127.0.0.1:8000\"]'"
+                    "Expected: JSON array like [\"http://example.com\",\"http://example.org\"]"
                 )
             except json.JSONDecodeError:
                 # Not valid JSON - try comma-separated parsing
@@ -118,8 +119,7 @@ class Settings(BaseSettings):
         # Unexpected type - raise clear error
         raise ValueError(
             f"cors_origins must be a list or string, got {type(v).__name__}. "
-            "Expected formats: JSON array '[\"http://localhost:8000\"]' or "
-            "comma-separated 'http://localhost:8000,http://127.0.0.1:8000'"
+            "Expected: JSON array [\"http://example.com\"] or comma-separated \"http://example.com,http://example.org\""
         )
     
     # WebSocket
