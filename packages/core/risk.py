@@ -327,7 +327,7 @@ class RiskManager:
             fees += self.config.fees_per_order * 2  # Entry + Exit
         elif instrument.is_future or instrument.is_option:
             fees += self.config.fees_per_order * 2
-            # Note: fees_per_option_leg is removed as brokerage is usually flat per order for F&O.
+            # Note: fees_per_option_leg is removed as brokerage is usually flat per order for F&O (Futures & Options).
             # If multi-leg order costs are needed, they should be modeled as multiple orders.
 
         # Exchange Transaction Charges
