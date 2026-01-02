@@ -59,8 +59,22 @@ def update_env_file(access_token, user_id, mode):
         print(f"⚠️  .env file not found at {env_path}")
         return
 
-    with open(env_path, "r") as f:
-        lines = f.readlines()
+    # Read the existing .env file with error handling
+    try:
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+    except PermissionError:
+        print(f"❌ Error: Permission denied when reading {env_path}")
+        print("   Please check file permissions and try again.")
+        sys.exit(1)
+    except OSError as e:
+        # This catches file locked, disk errors, etc.
+        print(f"❌ Error reading {env_path}: {e}")
+        print("   The file may be locked by another process or there may be a disk error.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Unexpected error reading {env_path}: {e}")
+        sys.exit(1)
 
     new_lines = []
     keys_updated = {"KITE_ACCESS_TOKEN": False, "KITE_USER_ID": False, "KITE_TOKEN_CREATED_AT_ISO": False}
@@ -93,8 +107,22 @@ def update_env_file(access_token, user_id, mode):
     if not keys_updated["KITE_TOKEN_CREATED_AT_ISO"]:
         new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
 
-    with open(env_path, "w") as f:
-        f.writelines(new_lines)
+    # Write the updated content back to .env file with error handling
+    try:
+        with open(env_path, "w") as f:
+            f.writelines(new_lines)
+    except PermissionError:
+        print(f"❌ Error: Permission denied when writing to {env_path}")
+        print("   Please check file permissions and try again.")
+        sys.exit(1)
+    except OSError as e:
+        # This catches disk full, read-only filesystem, file locked, etc.
+        print(f"❌ Error writing to {env_path}: {e}")
+        print("   Please check disk space, filesystem status, and file locks.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Unexpected error writing to {env_path}: {e}")
+        sys.exit(1)
 
     print(f"✅ Updated .env with new credentials (Mode: {mode})")
 
