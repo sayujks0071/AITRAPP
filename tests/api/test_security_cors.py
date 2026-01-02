@@ -32,6 +32,8 @@ def test_cors_restrictive_behavior():
     # Since the app is created at module level, we verify it uses the same origins
     assert middleware_origins == settings.cors_origins, \
         f"CORS middleware origins {middleware_origins} don't match settings.cors_origins {settings.cors_origins}"
+
+
 def test_default_is_permissive():
     """
     Verify the default CORS configuration is permissive (allows all origins).
