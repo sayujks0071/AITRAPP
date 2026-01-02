@@ -43,9 +43,13 @@ class CallbackHandler(http.server.SimpleHTTPRequestHandler):
                 threading.Thread(target=self.server.shutdown).start()
             else:
                 self.send_response(400)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
                 self.wfile.write(b"Missing request_token")
         else:
             self.send_response(404)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
             self.wfile.write(b"Not Found")
 
     def log_message(self, format, *args):
