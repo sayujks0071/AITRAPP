@@ -19,6 +19,8 @@ from datetime import datetime
 from kiteconnect import KiteConnect
 
 # Defaults from get_kite_token.py
+# These are publicly known PAPER trading credentials for testing/development.
+# LIVE trading requires users to provide their own credentials via environment variables.
 DEFAULT_API_KEY = "nhe2vo0afks02ojs"
 DEFAULT_API_SECRET = "cs82nkkdvin37nrydnyou6cwn2b8zojl"
 REDIRECT_PORT = 8080
@@ -61,11 +63,7 @@ def validate_credentials_for_mode(api_key, api_secret, mode):
     to determine if credentials are for PAPER or LIVE, but we can check against
     known defaults and provide warnings.
     """
-    # Known PAPER mode defaults (from get_kite_token.py)
-    PAPER_API_KEY = "nhe2vo0afks02ojs"
-    PAPER_API_SECRET = "cs82nkkdvin37nrydnyou6cwn2b8zojl"
-    
-    is_using_paper_defaults = (api_key == PAPER_API_KEY and api_secret == PAPER_API_SECRET)
+    is_using_paper_defaults = (api_key == DEFAULT_API_KEY and api_secret == DEFAULT_API_SECRET)
     
     if mode == "PAPER" and not is_using_paper_defaults:
         print("\n⚠️  WARNING: You're authenticating for PAPER mode but using custom API credentials.")
