@@ -59,8 +59,18 @@ def update_env_file(access_token, user_id, mode):
         print(f"⚠️  .env file not found at {env_path}")
         return
 
-    with open(env_path, "r") as f:
-        lines = f.readlines()
+    # Read the .env file with error handling
+    try:
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+    except PermissionError:
+        print(f"❌ Permission denied: Cannot read {env_path}")
+        print("   Please check file permissions and try again.")
+        sys.exit(1)
+    except IOError as e:
+        print(f"❌ Error reading {env_path}: {e}")
+        print("   The file may be locked or inaccessible.")
+        sys.exit(1)
 
     new_lines = []
     keys_updated = {"KITE_ACCESS_TOKEN": False, "KITE_USER_ID": False, "KITE_TOKEN_CREATED_AT_ISO": False}
@@ -93,8 +103,18 @@ def update_env_file(access_token, user_id, mode):
     if not keys_updated["KITE_TOKEN_CREATED_AT_ISO"]:
         new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
 
-    with open(env_path, "w") as f:
-        f.writelines(new_lines)
+    # Write the updated .env file with error handling
+    try:
+        with open(env_path, "w") as f:
+            f.writelines(new_lines)
+    except PermissionError:
+        print(f"❌ Permission denied: Cannot write to {env_path}")
+        print("   Please check file permissions and try again.")
+        sys.exit(1)
+    except IOError as e:
+        print(f"❌ Error writing to {env_path}: {e}")
+        print("   The file may be locked, disk may be full, or the file system may be read-only.")
+        sys.exit(1)
 
     print(f"✅ Updated .env with new credentials (Mode: {mode})")
 
