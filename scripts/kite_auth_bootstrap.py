@@ -124,6 +124,7 @@ def main():
     parser = argparse.ArgumentParser(description="Kite Auth Bootstrap")
     parser.add_argument("--mode", choices=["PAPER", "LIVE"], default="PAPER", help="Trading mode (default: PAPER)")
     parser.add_argument("--check", action="store_true", help="Check if current token is valid and exit")
+    parser.add_argument("--confirm-live", action="store_true", help="Required flag to confirm LIVE mode in non-interactive environments")
     args = parser.parse_args()
 
     if args.check:
@@ -148,7 +149,13 @@ def main():
                 print("❌ Confirmation failed. Exiting.")
                 sys.exit(1)
         else:
-            print("⚠️  Non-interactive mode detected. Proceeding with caution for LIVE mode.")
+            # Non-interactive mode: require explicit --confirm-live flag
+            if not args.confirm_live:
+                print("❌ ERROR: Non-interactive mode detected.")
+                print("   For LIVE trading in non-interactive environments, you must provide --confirm-live flag.")
+                print("   Example: python3 scripts/kite_auth_bootstrap.py --mode LIVE --confirm-live")
+                sys.exit(1)
+            print("⚠️  Non-interactive mode with --confirm-live flag. Proceeding with LIVE mode.")
 
     # Try to load keys from env, otherwise use defaults
     # We don't load .env here automatically to avoid polluting environment if not needed,
@@ -166,7 +173,14 @@ def main():
     kite = KiteConnect(api_key=api_key)
     login_url = kite.login_url()
 
-    print(f"\n1. Opening login URL in your browser...")
+    redirect_url = f"http://localhost:{REDIRECT_PORT}{REDIRECT_PATH}"
+
+    print(f"\n⚠️  IMPORTANT: Ensure the following redirect URL is registered in your Kite Connect app:")
+    print(f"   {redirect_url}")
+    print(f"   Visit https://developers.kite.trade/apps to verify/add it.")
+    print(f"   Without this, authentication will fail after login.\n")
+
+    print(f"1. Opening login URL in your browser...")
     print(f"   URL: {login_url}")
 
     try:
@@ -174,7 +188,7 @@ def main():
     except Exception:
         print("   (Please open the URL manually if it didn't open)")
 
-    print(f"\n2. Waiting for callback on http://localhost:{REDIRECT_PORT}{REDIRECT_PATH}...")
+    print(f"\n2. Waiting for callback on {redirect_url}...")
 
     try:
         # allow_reuse_address is useful if we restart quickly

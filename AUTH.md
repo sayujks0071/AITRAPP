@@ -31,15 +31,34 @@ You will be asked to type `LIVE` to confirm.
 
 ---
 
-## Manual Method (Fallback)
+## Prerequisites
 
-If the automatic browser flow fails or you are on a headless server:
+Before running the bootstrap script, ensure that the redirect URL is registered in your Kite Connect app:
 
+1. Visit https://developers.kite.trade/apps
+2. Select your app
+3. Add **exactly** `http://localhost:8080/callback` to the list of **Redirect URLs** (the exact URL format is required)
+4. Save the changes
+
+Without this, the authentication flow will fail after you log in to Kite.
+
+---
+
+## Manual Method (Legacy Fallback)
+
+Use this only when the `kite_auth_bootstrap.py` flow cannot be used (for example, on a headless server or when debugging authentication issues).
+
+The legacy script achieves the *same final result* as the bootstrap script (a fresh Kite access token stored in your `.env`), but it does **not** open a browser or run a local callback server. Instead, you manually copy-paste the request token.
+
+Steps:
 1. Run the legacy script:
    ```bash
    python3 get_kite_token.py
    ```
-2. Follow the on-screen instructions to manually copy-paste the request token.
+2. Follow the on-screen instructions to manually copy-paste the request token from the Kite URL into the terminal.
+3. After completion, the `.env` file will be updated just as if you had used `kite_auth_bootstrap.py`.
+
+The legacy script is maintained for backward compatibility and headless/CI use cases; for normal desktop use, prefer `kite_auth_bootstrap.py`.
 
 ---
 
