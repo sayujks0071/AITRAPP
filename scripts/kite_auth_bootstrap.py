@@ -88,7 +88,7 @@ class EnvManager:
 
             for key, value in updates.items():
                 # Regex to match key=... or key = ...
-                pattern = re.compile(f'^{re.escape(key)}\s*=.*$', re.MULTILINE)
+                pattern = re.compile(fr'^{re.escape(key)}\s*=.*$', re.MULTILINE)
                 if pattern.search(new_content):
                     new_content = pattern.sub(f'{key}={value}', new_content)
                 else:
