@@ -63,7 +63,7 @@ def test_futures_fee_calculation(risk_manager):
         Buy Price: 20000
         Sell Price: 20100
         Quantity: 50
-        Turnover: 50 * (40100) = 2,005,000
+        Turnover: 50 * (20000 + 20100) = 2,005,000
 
     Expected Breakdown:
         Brokerage: 40
