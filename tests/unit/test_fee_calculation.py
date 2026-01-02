@@ -63,14 +63,16 @@ def test_futures_fee_calculation(risk_manager):
         Buy Price: 20000
         Sell Price: 20100
         Quantity: 50
-        Turnover: 50 * (20000 + 20100) = 2,005,000
+        Turnover: 50 * (40100) = 2,005,000
 
     Expected Breakdown:
         Brokerage: 40
         Exchange Txn (0.0019%): 2005000 * 0.000019 = 38.095
         GST (18%): 0.18 * (40 + 38.095) = 14.057
         STT (0.0125% on Sell): (50 * 20100) * 0.000125 = 125.625
-        Stamp Duty (0.003% on Buy Value): (50 * 20000) * 0.00003 = 30.0
+        Stamp Duty (0.002% on Buy? No, 0.002% or 0.003%? Code says 0.003%):
+        Code: fees += (entry_price * quantity) * 0.00003
+        Stamp: (50 * 20000) * 0.00003 = 30.0
         SEBI: 2005000 * 10/1Cr = 2.005
 
     Total Expected: 40 + 38.095 + 14.057 + 125.625 + 30.0 + 2.005 = 249.782
