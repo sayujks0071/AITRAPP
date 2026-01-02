@@ -1,12 +1,13 @@
 """Configuration management using Pydantic"""
+import json
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AppMode(str, Enum):
@@ -38,6 +39,12 @@ class ProductType(str, Enum):
 
 class Settings(BaseSettings):
     """Application settings from environment"""
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        env_parse_none_str='null'
+    )
     
     # Kite Connect
     kite_api_key: str = Field(alias="KITE_API_KEY")
@@ -75,7 +82,30 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="API_PORT")
     api_workers: int = Field(default=4, alias="API_WORKERS")
     api_secret_key: str = Field(alias="API_SECRET_KEY")
-    cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
+    cors_origins: Union[List[str], str] = Field(default=["*"], alias="CORS_ORIGINS")
+    
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v) -> List[str]:
+        """Parse CORS origins from JSON string, comma-separated values, or list"""
+        # If already a list, return as-is
+        if isinstance(v, list):
+            return v
+        
+        # If string, try to parse as JSON first, then fall back to comma-separated
+        if isinstance(v, str):
+            # Try JSON parsing
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+            
+            # Fall back to comma-separated values
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        
+        return v
     
     # WebSocket
     ws_ping_interval: int = Field(default=30, alias="WS_PING_INTERVAL")
@@ -110,10 +140,6 @@ class Settings(BaseSettings):
     # Development
     debug: bool = Field(default=False, alias="DEBUG")
     reload: bool = Field(default=False, alias="RELOAD")
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 
 class RiskConfig:
