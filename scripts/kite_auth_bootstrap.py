@@ -18,9 +18,9 @@ import argparse
 from datetime import datetime
 from kiteconnect import KiteConnect
 
-# Defaults from get_kite_token.py
-DEFAULT_API_KEY = "nhe2vo0afks02ojs"
-DEFAULT_API_SECRET = "cs82nkkdvin37nrydnyou6cwn2b8zojl"
+# Defaults now read from environment for security; no hardcoded credentials.
+DEFAULT_API_KEY = os.getenv("KITE_API_KEY")
+DEFAULT_API_SECRET = os.getenv("KITE_API_SECRET")
 REDIRECT_PORT = 8080
 REDIRECT_PATH = "/callback"
 
