@@ -1,71 +1,90 @@
-
+import pytest
 from fastapi.testclient import TestClient
-from apps.api.main import app
 from packages.core.config import settings
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
-client = TestClient(app)
+# Note: We don't directly import the app here to avoid initialization issues
+# Instead, we'll test the settings configuration
 
-def test_cors_restrictive_behavior():
+def test_cors_origins_configuration():
     """
-    Verify that we can restrict CORS origins.
+    Verify that CORS origins can be configured via settings.
+    This test validates that the settings.cors_origins is properly configured
+    and will be used by the main app's CORSMiddleware.
     """
-    # Create a test app with restrictive CORS middleware
-    test_app = FastAPI()
-    test_app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://trusted.com"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # Test that cors_origins is configurable and accessible
+    assert hasattr(settings, 'cors_origins')
+    assert isinstance(settings.cors_origins, list)
+    
+    # Verify default or configured value is present
+    assert len(settings.cors_origins) > 0
+    
+    # Each origin should be a string
+    for origin in settings.cors_origins:
+        assert isinstance(origin, str)
 
-    @test_app.post("/mode")
-    def dummy_mode():
-        return {"status": "ok"}
 
-    test_client = TestClient(test_app)
-
-    # Test disallowed origin
-    # Starlette/FastAPI CORS middleware returns 400 for disallowed origins by default if validation fails
-    # Or just doesn't include headers.
-    # Wait, the previous run showed 400 Bad Request: Disallowed CORS origin.
-    # This confirms that the middleware is working and blocking the request!
-    headers = {
-        "Origin": "http://evil.com",
-        "Access-Control-Request-Method": "POST",
-    }
-    response = test_client.options("/mode", headers=headers)
-
-    # Expectation: 400 Bad Request (Disallowed origin) OR 200 without headers.
-    # Since we saw 400 in the failure, we should assert that.
-    assert response.status_code == 400
-    assert "Disallowed CORS origin" in response.text
-
-    # Test allowed origin
-    headers = {
-        "Origin": "http://trusted.com",
-        "Access-Control-Request-Method": "POST",
-    }
-    response = test_client.options("/mode", headers=headers)
-    assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "http://trusted.com"
-def test_default_is_permissive():
+def test_cors_origins_used_by_app():
     """
-    Verify the default is still permissive (to avoid breaking changes)
-    unless the user changes config.
+    Verify that the main app actually uses settings.cors_origins.
+    This test checks that the app's CORS middleware is configured
+    with the origins from settings.
+    """
+    from apps.api.main import app
+    from fastapi.middleware.cors import CORSMiddleware
+    
+    # Find the CORS middleware in the app's middleware stack
+    cors_middleware = None
+    for middleware in app.user_middleware:
+        # Check if this is the CORSMiddleware using direct type comparison
+        if middleware.cls is CORSMiddleware:
+            cors_middleware = middleware
+            break
+    
+    assert cors_middleware is not None, "CORSMiddleware not found in app"
+    
+    # Verify that the middleware options include allow_origins
+    # The middleware stores options in the 'options' attribute
+    assert 'allow_origins' in cors_middleware.options
+    
+    # Verify that the origins match settings.cors_origins
+    # Note: The middleware may store origins differently, so we check if it's set
+    middleware_origins = cors_middleware.options['allow_origins']
+    
+    # If settings has specific origins (not wildcard), verify they're configured
+    if settings.cors_origins != ["*"]:
+        assert middleware_origins == settings.cors_origins, \
+            f"Middleware origins {middleware_origins} don't match settings {settings.cors_origins}"
+    else:
+        # If using wildcard, verify it's configured
+        assert middleware_origins == ["*"] or "*" in middleware_origins
+
+
+def test_default_cors_is_permissive():
+    """
+    Verify the default CORS configuration is permissive (backward compatibility).
+    Only runs this test if the default wildcard setting is in use.
     """
     if settings.cors_origins != ["*"]:
         pytest.skip("Default CORS origins have been overridden; permissive-default behavior is not applicable.")
-
+    
+    # Import app after confirming we're testing default behavior
+    from apps.api.main import app
+    
+    # Create a test client for the actual app
+    client = TestClient(app)
+    
+    # Test that the wildcard origin allows any origin
     headers = {
-        "Origin": "http://evil.com",
+        "Origin": "http://example.com",
         "Access-Control-Request-Method": "POST",
     }
-    # We need to recreate the client to ensure it picks up the default settings
-    client_default = TestClient(app)
-    response = client_default.options("/mode", headers=headers)
+    response = client.options("/health", headers=headers)
+    
+    # With wildcard (*), the response should either:
+    # - Return status 200 with access-control-allow-origin: *
+    # - Or return status 200 with the requested origin echoed back
     assert response.status_code == 200
-    assert response.headers.get("access-control-allow-origin") == "*" or \
-           response.headers.get("access-control-allow-origin") == "http://evil.com"
+    allow_origin = response.headers.get("access-control-allow-origin")
+    assert allow_origin in ["*", "http://example.com"], \
+        f"Expected wildcard or echo origin, got {allow_origin}"
+

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AppMode(str, Enum):
@@ -75,7 +75,26 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="API_PORT")
     api_workers: int = Field(default=4, alias="API_WORKERS")
     api_secret_key: str = Field(alias="API_SECRET_KEY")
-    cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
+    # CORS origins - comma-separated string that gets parsed to list
+    cors_origins_str: str = Field(default="*", alias="CORS_ORIGINS")
+    
+    @property
+    def cors_origins(self) -> List[str]:
+        """Get CORS origins as a list.
+        
+        Parses comma-separated string from environment variable into a list of origins.
+        Returns ["*"] (permissive wildcard) if the input is empty for backward compatibility.
+        
+        Examples:
+            - "http://localhost:8000,http://127.0.0.1:8000" -> ["http://localhost:8000", "http://127.0.0.1:8000"]
+            - "*" -> ["*"]
+            - "http://localhost:8000" -> ["http://localhost:8000"]
+            - "" -> ["*"] (backward compatible default)
+        """
+        # Parse comma-separated string and strip whitespace
+        origins = [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
+        # Fallback to permissive wildcard for backward compatibility if empty
+        return origins if origins else ["*"]
     
     # WebSocket
     ws_ping_interval: int = Field(default=30, alias="WS_PING_INTERVAL")
@@ -111,9 +130,10 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     reload: bool = Field(default=False, alias="RELOAD")
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False
+    )
 
 
 class RiskConfig:
