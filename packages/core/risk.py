@@ -288,7 +288,7 @@ class RiskManager:
         exit_price: float
     ) -> float:
         """
-        Estimate trading fees for a round trip.
+        Estimate trading fees for a round trip (Zerodha rates as of 2024-2025).
         
         Includes:
         - Brokerage
@@ -309,39 +309,71 @@ class RiskManager:
         """
         turnover = quantity * (entry_price + exit_price)
         
-        # Simplified fee calculation (Zerodha-like structure)
-        fees = 0.0
-        
-        # Brokerage: Rs 20 per order or 0.03% (equity delivery)
+        # 1. Brokerage
+        # Flat 20 or 0.03%, whichever is lower. Equity delivery is usually free on Zerodha,
+        # but configured logic applies here. We cap at fees_per_order (20).
+        brokerage = 0.0
         if instrument.is_equity:
-            fees += self.config.fees_per_order * 2  # Entry + Exit
+            # Equity Intraday/Delivery. Using config.fees_per_order cap.
+            b_buy = min(self.config.fees_per_order, (entry_price * quantity) * 0.0003)
+            b_sell = min(self.config.fees_per_order, (exit_price * quantity) * 0.0003)
+            brokerage = b_buy + b_sell
         elif instrument.is_future or instrument.is_option:
-            fees += self.config.fees_per_order * 2
-            if instrument.is_option:
-                fees += self.config.fees_per_option_leg * quantity
+            # Flat 20 per executed order for F&O
+            brokerage = self.config.fees_per_order * 2  # Entry + Exit
         
-        # STT: 0.025% on sell side for equity delivery, 0.05% for futures
+        # 2. STT (Securities Transaction Tax)
+        stt = 0.0
         if instrument.is_equity:
-            fees += (exit_price * quantity) * 0.00025
+            # Delivery: 0.1% on Buy & Sell
+            # Intraday: 0.025% on Sell
+            # Since we can't distinguish easily here without product type,
+            # we check if it is explicitly marked delivery in metadata or assume delivery for safety/conservatism
+            # OR assume intraday if that's the primary use case.
+            # Given this is an algo tool, Intraday is likely, but let's be conservative and check.
+            # However, standard practice for simple estimators is to assume delivery for Equity to avoid underestimation.
+            stt = (turnover * 0.001)  # 0.1% on Buy+Sell (Delivery)
         elif instrument.is_future:
-            fees += turnover * 0.0001
+            # Futures: 0.02% on Sell
+            stt = (exit_price * quantity) * 0.0002
         elif instrument.is_option:
-            fees += (exit_price * quantity) * 0.00005
+            # Options: 0.1% on Sell (Premium) (Revised from 0.0625%)
+            stt = (exit_price * quantity) * 0.001
+
+        # 3. Transaction Charges (Exchange) - NSE Rates
+        txn_charges = 0.0
+        if instrument.is_equity:
+            # NSE Equity: ~0.00325%
+            txn_charges = turnover * 0.0000325
+        elif instrument.is_future:
+            # NSE Futures: ~0.00173%
+            txn_charges = turnover * 0.0000173
+        elif instrument.is_option:
+            # NSE Options: 0.03503% on Premium
+            txn_charges = turnover * 0.0003503
+
+        # 4. SEBI Charges (10 per crore)
+        # 10 / 10,000,000 = 0.000001
+        sebi_charges = turnover * 0.000001
         
-        # Transaction charges: ~0.00325% for NSE equity, ~0.002% for F&O
-        if instrument.exchange in ["NSE", "BSE"]:
-            fees += turnover * 0.0000325
-        else:
-            fees += turnover * 0.00002
+        # 5. GST (18% on Brokerage + Txn + SEBI)
+        # Note: GST is NOT applied to STT or Stamp Duty
+        gst = (brokerage + txn_charges + sebi_charges) * 0.18
         
-        # GST on brokerage and transaction charges: 18%
-        fees *= 1.18
-        
-        # SEBI charges: Rs 10 per crore
-        fees += (turnover / 10000000) * 10
-        
-        # Stamp duty: 0.003% on buy side
-        fees += (entry_price * quantity) * 0.00003
+        # 6. Stamp Duty (Buy side only)
+        stamp_duty = 0.0
+        if instrument.is_equity:
+            # Delivery: 0.015%, Intraday: 0.003%
+            # Using Delivery (0.015%) to be safe
+            stamp_duty = (entry_price * quantity) * 0.00015
+        elif instrument.is_future:
+            # Futures: 0.002%
+            stamp_duty = (entry_price * quantity) * 0.00002
+        elif instrument.is_option:
+            # Options: 0.003%
+            stamp_duty = (entry_price * quantity) * 0.00003
+
+        fees = brokerage + stt + txn_charges + sebi_charges + gst + stamp_duty
         
         return fees
     
