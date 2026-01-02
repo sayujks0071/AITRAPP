@@ -24,16 +24,16 @@ DEFAULT_API_SECRET = os.getenv("KITE_API_SECRET")
 REDIRECT_PORT = 8080
 REDIRECT_PATH = "/callback"
 
-captured_request_token = None
+auth_request_token = None
 
 class CallbackHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        global captured_request_token
+        global auth_request_token
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path == REDIRECT_PATH:
             query_params = urllib.parse.parse_qs(parsed_url.query)
             if "request_token" in query_params:
-                captured_request_token = query_params["request_token"][0]
+                auth_request_token = query_params["request_token"][0]
                 self.send_response(200)
                 self.send_header("Content-type", "text/html")
                 self.end_headers()
