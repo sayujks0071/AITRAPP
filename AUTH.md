@@ -2,6 +2,17 @@
 
 AITRAPP uses Zerodha Kite Connect for market data and trading execution. This guide explains how to authenticate correctly.
 
+## Prerequisites
+
+**IMPORTANT**: Before running the authentication script, you must register the callback URL in your Kite Connect app:
+
+1. Go to: https://developers.kite.trade/apps/
+2. Find your app using your API key
+3. Add redirect URL: `http://localhost:8080/callback`
+4. **Save** the settings
+
+Without this step, the authentication will fail with an "Invalid redirect URI" error.
+
 ## Quick Start (Daily Routine)
 
 Every morning before trading (or when your token expires), run:
