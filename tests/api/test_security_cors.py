@@ -56,14 +56,16 @@ def test_default_is_permissive():
     Verify the default is still permissive (to avoid breaking changes)
     unless the user changes config.
     """
-    if settings.cors_origins == ["*"]:
-        headers = {
-            "Origin": "http://evil.com",
-            "Access-Control-Request-Method": "POST",
-        }
-        # We need to recreate the client to ensure it picks up the default settings
-        client_default = TestClient(app)
-        response = client_default.options("/mode", headers=headers)
-        assert response.status_code == 200
-        assert response.headers.get("access-control-allow-origin") == "*" or \
-               response.headers.get("access-control-allow-origin") == "http://evil.com"
+    if settings.cors_origins != ["*"]:
+        pytest.skip("Default CORS origins have been overridden; permissive-default behavior is not applicable.")
+
+    headers = {
+        "Origin": "http://evil.com",
+        "Access-Control-Request-Method": "POST",
+    }
+    # We need to recreate the client to ensure it picks up the default settings
+    client_default = TestClient(app)
+    response = client_default.options("/mode", headers=headers)
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "*" or \
+           response.headers.get("access-control-allow-origin") == "http://evil.com"
