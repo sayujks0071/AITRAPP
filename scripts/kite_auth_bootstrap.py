@@ -15,6 +15,7 @@ import threading
 import sys
 import os
 import argparse
+import tempfile
 from datetime import datetime
 from kiteconnect import KiteConnect
 
@@ -134,7 +135,6 @@ def update_env_file(access_token, user_id, mode):
         new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
 
     # Use atomic write pattern: write to temp file, then rename
-    import tempfile
     temp_fd, temp_path = None, None
     try:
         # Create temp file in same directory as .env to ensure same filesystem
@@ -156,12 +156,12 @@ def update_env_file(access_token, user_id, mode):
         if temp_fd is not None:
             try:
                 os.close(temp_fd)
-            except:
+            except Exception:
                 pass
         if temp_path is not None and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
-            except:
+            except Exception:
                 pass
 
     print(f"✅ Updated .env with new credentials (Mode: {mode})")
