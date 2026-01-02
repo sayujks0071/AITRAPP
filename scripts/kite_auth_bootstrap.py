@@ -52,6 +52,38 @@ class CallbackHandler(http.server.SimpleHTTPRequestHandler):
         # Suppress logging to keep terminal clean
         pass
 
+def validate_credentials_for_mode(api_key, api_secret, mode):
+    """
+    Validate that the API credentials match the intended trading mode.
+    This helps prevent accidentally using LIVE credentials in PAPER mode or vice versa.
+    
+    Note: This is a best-effort validation. The Kite API doesn't provide a direct way
+    to determine if credentials are for PAPER or LIVE, but we can check against
+    known defaults and provide warnings.
+    """
+    # Known PAPER mode defaults (from get_kite_token.py)
+    PAPER_API_KEY = "nhe2vo0afks02ojs"
+    PAPER_API_SECRET = "cs82nkkdvin37nrydnyou6cwn2b8zojl"
+    
+    is_using_paper_defaults = (api_key == PAPER_API_KEY and api_secret == PAPER_API_SECRET)
+    
+    if mode == "PAPER" and not is_using_paper_defaults:
+        print("\n⚠️  WARNING: You're authenticating for PAPER mode but using custom API credentials.")
+        print("    Make sure these credentials are for PAPER trading, not LIVE trading.")
+        print(f"    API Key: {api_key[:10]}...")
+        
+        if sys.stdin.isatty():
+            confirmation = input("\n    Continue? (y/N): ")
+            if confirmation.lower() != 'y':
+                print("❌ Aborted by user.")
+                sys.exit(1)
+    
+    elif mode == "LIVE" and is_using_paper_defaults:
+        print("\n❌ ERROR: You're trying to authenticate for LIVE mode but using PAPER credentials.")
+        print("    LIVE trading requires your own Kite Connect API key and secret.")
+        print("    Please set KITE_API_KEY and KITE_API_SECRET environment variables with your LIVE credentials.")
+        sys.exit(1)
+
 def update_env_file(access_token, user_id, mode):
     env_path = os.path.join(os.getcwd(), ".env")
     if not os.path.exists(env_path):
@@ -62,7 +94,12 @@ def update_env_file(access_token, user_id, mode):
         lines = f.readlines()
 
     new_lines = []
-    keys_updated = {"KITE_ACCESS_TOKEN": False, "KITE_USER_ID": False, "KITE_TOKEN_CREATED_AT_ISO": False}
+    keys_updated = {
+        "KITE_ACCESS_TOKEN": False, 
+        "KITE_USER_ID": False, 
+        "KITE_TOKEN_CREATED_AT_ISO": False,
+        "APP_MODE": False
+    }
 
     current_time = datetime.now().isoformat()
 
@@ -81,6 +118,9 @@ def update_env_file(access_token, user_id, mode):
         elif key == "KITE_TOKEN_CREATED_AT_ISO":
             new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
             keys_updated["KITE_TOKEN_CREATED_AT_ISO"] = True
+        elif key == "APP_MODE":
+            new_lines.append(f"APP_MODE={mode}\n")
+            keys_updated["APP_MODE"] = True
         else:
             new_lines.append(line)
 
@@ -91,6 +131,8 @@ def update_env_file(access_token, user_id, mode):
         new_lines.append(f"KITE_USER_ID={user_id}\n")
     if not keys_updated["KITE_TOKEN_CREATED_AT_ISO"]:
         new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
+    if not keys_updated["APP_MODE"]:
+        new_lines.append(f"APP_MODE={mode}\n")
 
     with open(env_path, "w") as f:
         f.writelines(new_lines)
@@ -128,6 +170,9 @@ def main():
 
     api_key = os.environ.get("KITE_API_KEY", DEFAULT_API_KEY)
     api_secret = os.environ.get("KITE_API_SECRET", DEFAULT_API_SECRET)
+
+    # Validate that credentials match the selected mode
+    validate_credentials_for_mode(api_key, api_secret, args.mode)
 
     kite = KiteConnect(api_key=api_key)
     login_url = kite.login_url()
