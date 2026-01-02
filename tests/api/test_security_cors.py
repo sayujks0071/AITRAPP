@@ -52,6 +52,8 @@ def test_cors_restrictive_behavior():
     response = test_client.options("/mode", headers=headers)
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://trusted.com"
+
+
 def test_default_is_permissive():
     """
     Verify the default is still permissive (to avoid breaking changes)

@@ -114,13 +114,17 @@ class Settings(BaseSettings):
     
     @field_validator("cors_origins", mode="after")
     @classmethod
-    def parse_cors_origins(cls, v: str) -> List[str]:
+    def parse_cors_origins(cls, v: Any) -> List[str]:
         """Parse CORS origins from JSON string or comma-separated string.
         
         Supports two formats:
         1. JSON array string: '["http://localhost:8000","http://127.0.0.1:8000"]'
         2. Comma-separated string: 'http://localhost:8000,http://127.0.0.1:8000'
         """
+        # If already a list, return as-is (might come from direct assignment or tests)
+        if isinstance(v, list):
+            return v if v else ["*"]
+        
         if isinstance(v, str):
             # Try to parse as JSON first
             try:
