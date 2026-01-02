@@ -66,9 +66,10 @@ def update_env_file(access_token, user_id, mode):
         print(f"❌ Error: Permission denied when reading {env_path}")
         print("   Please check file permissions and try again.")
         sys.exit(1)
-    except IOError as e:
+    except OSError as e:
+        # This catches file locked, disk errors, etc.
         print(f"❌ Error reading {env_path}: {e}")
-        print("   The file may be locked by another process.")
+        print("   The file may be locked by another process or there may be a disk error.")
         sys.exit(1)
     except Exception as e:
         print(f"❌ Unexpected error reading {env_path}: {e}")
@@ -144,13 +145,9 @@ def update_env_file(access_token, user_id, mode):
         print("   Please check file permissions and try again.")
         sys.exit(1)
     except OSError as e:
-        # This catches disk full, read-only filesystem, etc.
+        # This catches disk full, read-only filesystem, file locked, etc.
         print(f"❌ Error writing to {env_path}: {e}")
-        print("   Please check disk space and filesystem status.")
-        sys.exit(1)
-    except IOError as e:
-        print(f"❌ Error writing to {env_path}: {e}")
-        print("   The file may be locked by another process.")
+        print("   Please check disk space, filesystem status, and file locks.")
         sys.exit(1)
     except Exception as e:
         print(f"❌ Unexpected error writing to {env_path}: {e}")
