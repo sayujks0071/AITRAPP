@@ -20,8 +20,8 @@ from kiteconnect import KiteConnect
 from dotenv import load_dotenv
 
 # Defaults from get_kite_token.py
-DEFAULT_API_KEY = "nhe2vo0afks02ojs"
-DEFAULT_API_SECRET = "cs82nkkdvin37nrydnyou6cwn2b8zojl"
+DEFAULT_API_KEY = None
+DEFAULT_API_SECRET = None
 REDIRECT_PORT = 8080
 REDIRECT_PATH = "/callback"
 
@@ -132,6 +132,10 @@ def main():
 
     api_key = os.environ.get("KITE_API_KEY", DEFAULT_API_KEY)
     api_secret = os.environ.get("KITE_API_SECRET", DEFAULT_API_SECRET)
+
+    if not api_key or not api_secret:
+        print("\n❌ Error: KITE_API_KEY and KITE_API_SECRET must be set in environment variables or .env file.")
+        sys.exit(1)
 
     kite = KiteConnect(api_key=api_key)
     login_url = kite.login_url()
