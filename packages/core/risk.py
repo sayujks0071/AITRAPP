@@ -317,9 +317,9 @@ class RiskManager:
             fees += self.config.fees_per_order * 2  # Entry + Exit
         elif instrument.is_future or instrument.is_option:
             fees += self.config.fees_per_order * 2
-            # Note: fees_per_option_leg is removed as brokerage is usually flat per order for F&O.
-            # If multi-leg order costs are needed, they should be modeled as multiple orders.
-
+            # Note: Unlike the previous implementation, fees_per_option_leg is not added here
+            # as brokerage is usually flat per order for F&O. If multi-leg order costs are needed,
+            # they should be modeled as multiple orders.
         # Tax Rates (2024-2025)
         # TODO: Move to config or constants
         STT_EQUITY_INTRADAY_SELL = 0.00025  # 0.025%
