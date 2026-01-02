@@ -98,13 +98,39 @@ def update_env_file(access_token, user_id, mode):
 
     print(f"✅ Updated .env with new credentials (Mode: {mode})")
 
+def check_connection():
+    """Verify if current token works"""
+    api_key = os.environ.get("KITE_API_KEY")
+    access_token = os.environ.get("KITE_ACCESS_TOKEN")
+
+    if not api_key or not access_token:
+        print("❌ Credentials missing in environment/env file")
+        return False
+
+    try:
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+        # Lightweight call to verify session
+        kite.profile()
+        return True
+    except Exception as e:
+        print(f"❌ Connection check failed: {e}")
+        return False
+
 def main():
     # Load environment variables from .env file
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="Kite Auth Bootstrap")
     parser.add_argument("--mode", choices=["PAPER", "LIVE"], default="PAPER", help="Trading mode (default: PAPER)")
+    parser.add_argument("--check", action="store_true", help="Check if current token is valid and exit")
     args = parser.parse_args()
+
+    if args.check:
+        if check_connection():
+            sys.exit(0)
+        else:
+            sys.exit(1)
 
     print("=" * 60)
     print(f"🚀 Kite Auth Bootstrap (Mode: {args.mode})")
