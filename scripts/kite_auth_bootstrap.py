@@ -67,21 +67,51 @@ def update_env_file(access_token, user_id, mode):
     current_time = datetime.now().isoformat()
 
     for line in lines:
-        if "=" not in line:
+        # Preserve lines without '=', empty lines, and full-line comments as-is
+        stripped = line.lstrip()
+        if "=" not in line or stripped.startswith("#") or stripped.strip() == "":
             new_lines.append(line)
             continue
 
-        key = line.split("=")[0].strip()
+        # Split into key and value once; preserve the original value/comment suffix where possible
+        key_part, value_part = line.split("=", 1)
+        key = key_part.strip()
+
+        # Extract any inline comment suffix (e.g., "value  # comment")
+        comment_suffix = ""
+        if "#" in value_part:
+            value_body, inline_comment = value_part.split("#", 1)
+            comment_suffix = "#" + inline_comment.rstrip("\n")
+        else:
+            value_body = value_part.rstrip("\n")
+
         if key == "KITE_ACCESS_TOKEN":
-            new_lines.append(f"KITE_ACCESS_TOKEN={access_token}\n")
+            new_line = f"{key}=({access_token})"
+            if comment_suffix:
+                # Ensure a space before the inline comment if not already present
+                if not comment_suffix.startswith(" "):
+                    new_line += " "
+                new_line += comment_suffix
+            new_lines.append(new_line + "\n")
             keys_updated["KITE_ACCESS_TOKEN"] = True
         elif key == "KITE_USER_ID":
-            new_lines.append(f"KITE_USER_ID={user_id}\n")
+            new_line = f"{key}={user_id}"
+            if comment_suffix:
+                if not comment_suffix.startswith(" "):
+                    new_line += " "
+                new_line += comment_suffix
+            new_lines.append(new_line + "\n")
             keys_updated["KITE_USER_ID"] = True
         elif key == "KITE_TOKEN_CREATED_AT_ISO":
-            new_lines.append(f"KITE_TOKEN_CREATED_AT_ISO={current_time}\n")
+            new_line = f"{key}={current_time}"
+            if comment_suffix:
+                if not comment_suffix.startswith(" "):
+                    new_line += " "
+                new_line += comment_suffix
+            new_lines.append(new_line + "\n")
             keys_updated["KITE_TOKEN_CREATED_AT_ISO"] = True
         else:
+            # For other keys, leave the line unchanged
             new_lines.append(line)
 
     # Append if not found
