@@ -36,8 +36,9 @@ def test_cors_restrictive_behavior():
     
     # Also verify the behavior with actual requests to the real app
     # Test with an OPTIONS preflight request
+    test_origin = "http://example.com"
     headers = {
-        "Origin": "http://example.com",
+        "Origin": test_origin,
         "Access-Control-Request-Method": "POST",
     }
     response = client.options("/mode", headers=headers)
@@ -53,9 +54,14 @@ def test_cors_restrictive_behavior():
             assert "access-control-allow-origin" in response.headers, \
                 "Expected CORS headers in permissive mode"
     else:
-        # Restrictive mode - test with an origin not in the list
-        # If the origin is not in settings.cors_origins, it should be rejected
-        if "http://example.com" not in settings.cors_origins:
+        # Restrictive mode - test with an origin that is definitely not in the allow list
+        disallowed_origin = "http://definitely-not-allowed.test"
+        if disallowed_origin not in settings.cors_origins:
+            headers = {
+                "Origin": disallowed_origin,
+                "Access-Control-Request-Method": "POST",
+            }
+            response = client.options("/mode", headers=headers)
             # Should either return 400 or 200 without CORS headers for disallowed origin
             assert response.status_code in [200, 400], \
                 f"Unexpected status code for disallowed origin: {response.status_code}"
