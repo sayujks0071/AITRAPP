@@ -1,18 +1,14 @@
 # How to Get Kite Access Token
 
-## Quick Method (Using Helper Script)
+**⚠️ NOTICE: The recommended way to authenticate is now documented in [AUTH.md](./AUTH.md).**
 
-You already have a helper script! Run:
+Please use the automated script `scripts/kite_auth_bootstrap.py` for a smoother experience.
 
-```bash
-cd /Users/mac/AITRAPP
-source venv/bin/activate
-python get_kite_token.py YOUR_REQUEST_TOKEN
-```
+---
 
-But first, you need to get the `request_token` from Kite Connect.
+## Legacy Method (Manual)
 
-## Step-by-Step Process
+If the automated script fails, you can use the legacy manual method described below.
 
 ### Step 1: Visit Kite Connect Login URL
 
@@ -66,7 +62,7 @@ If you're using CI/CD, also add to GitHub Secrets:
 - Add: `KITE_ACCESS_TOKEN` = `<your_access_token>`
 - Add: `KITE_USER_ID` = `<your_user_id>`
 
-## Manual Method (Without Script)
+## Manual Python Method
 
 If you prefer to do it manually:
 
@@ -114,38 +110,3 @@ Your code has automatic token refresh guards, but:
 ### "Invalid API key"
 - Verify your API key is correct: `nhe2vo0afks02ojs`
 - Check that the API key is active in Kite Connect dashboard
-
-### Token not working in CI
-- Ensure GitHub secret `KITE_ACCESS_TOKEN` is updated
-- Tokens expire daily - update the secret each morning
-- Check the secret name matches exactly (case-sensitive)
-
-## Quick Reference
-
-**Login URL:**
-```
-https://kite.trade/connect/login?api_key=nhe2vo0afks02ojs&v=3
-```
-
-**Your API Credentials:**
-- API Key: `nhe2vo0afks02ojs`
-- API Secret: `cs82nkkdvin37nrydnyou6cwn2b8zojl`
-
-**Helper Script:**
-```bash
-python get_kite_token.py REQUEST_TOKEN
-```
-
-## Daily Routine
-
-Since tokens expire daily, your morning routine should include:
-
-1. **Before market open:**
-   - Visit login URL and get new request token
-   - Run `python get_kite_token.py REQUEST_TOKEN`
-   - Update GitHub secret if using CI
-
-2. **Or automate it:**
-   - Consider creating a script to auto-refresh tokens
-   - Use Kite Connect's refresh token API (if available)
-
