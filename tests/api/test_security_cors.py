@@ -36,17 +36,13 @@ def test_cors_restrictive_behavior():
     
     # Also verify the behavior with actual requests to the real app
     # Test with an OPTIONS preflight request
-    test_origin = "http://example.com"
-    headers = {
-        "Origin": test_origin,
-        "Access-Control-Request-Method": "POST",
-    }
-    response = client.options("/mode", headers=headers)
-    
-    # If settings.cors_origins is ["*"], any origin should be allowed
-    # If it's restrictive, only listed origins should have CORS headers
     if "*" in settings.cors_origins:
-        # Permissive mode - should return CORS headers
+        # Permissive mode - should return CORS headers for any origin
+        headers = {
+            "Origin": "http://example.com",
+            "Access-Control-Request-Method": "POST",
+        }
+        response = client.options("/mode", headers=headers)
         assert response.status_code in [200, 400], \
             f"Unexpected status code: {response.status_code}"
         # In permissive mode, we should get access-control-allow-origin header
