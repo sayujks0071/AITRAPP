@@ -64,8 +64,8 @@ def update_env_file(access_token, user_id, mode):
 
     new_lines = []
     keys_updated = {
-        "KITE_ACCESS_TOKEN": False, 
-        "KITE_USER_ID": False, 
+        "KITE_ACCESS_TOKEN": False,
+        "KITE_USER_ID": False,
         "KITE_TOKEN_CREATED_AT_ISO": False,
         "APP_MODE": False
     }
@@ -146,7 +146,7 @@ def main():
     # Validate that the credentials match the intended mode
     using_default_credentials = (api_key == DEFAULT_API_KEY and api_secret == DEFAULT_API_SECRET)
     
-    print(f"\n🔑 Using API Key: {api_key[:8]}...")
+    print(f"\n🔑 Using API Key: {api_key[:4]}...")
     if using_default_credentials:
         print("   (Using default credentials from script)")
     else:
