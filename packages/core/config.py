@@ -126,18 +126,22 @@ class Settings(BaseSettings):
             try:
                 parsed = json.loads(v)
                 if isinstance(parsed, list):
-                    return parsed
+                    # Return parsed list if it's non-empty
+                    if parsed:
+                        return parsed
+                    # Empty JSON array, return default
+                    return ["*"]
             except json.JSONDecodeError:
                 pass
             # If not JSON, split by comma
             if ',' in v:
-                return [origin.strip() for origin in v.split(',') if origin.strip()]
-            # Single origin
-            return [v]
-        # If already a list, return as-is
-        if isinstance(v, list):
-            return v
-        # Fallback
+                origins = [origin.strip() for origin in v.split(',') if origin.strip()]
+                return origins if origins else ["*"]
+            # Single origin (if not empty)
+            stripped = v.strip()
+            if stripped:
+                return [stripped]
+        # Fallback to default
         return ["*"]
     
     class Config:
