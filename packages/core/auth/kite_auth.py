@@ -1,5 +1,4 @@
 """Kite Authentication Module"""
-import datetime
 import os
 import structlog
 from typing import Optional, Dict
