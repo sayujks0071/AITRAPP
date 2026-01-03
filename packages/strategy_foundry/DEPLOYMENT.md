@@ -1,40 +1,32 @@
 # Deployment & Live Signals
 
 ## Philosophy
-
-StrategyFoundry is a **Paper-First** system. It assumes no real money execution until explicit manual intervention or a separate bridge is configured.
+Strategy Foundry is designed to be **safe by default**. It does not connect to brokers or place orders. It outputs a "Signal Artifact" which can be consumed by downstream systems or humans.
 
 ## Live Signal Artifact
+The hourly runner generates `packages/strategy_foundry/results/live_signal_{INSTRUMENT}.json`.
 
-The system produces `packages/strategy_foundry/results/live_signal.json` when:
-1. The market is open (NSE Trading Hours).
-2. A valid Champion exists and passes safety gates (MaxDD < 25%).
-
-### JSON Schema
-
+### Schema
 ```json
 {
   "timestamp_ist": "2023-10-27T10:00:00+05:30",
-  "champion_id": "a1b2c3d4",
+  "champion_id": "ab1234...",
   "instrument": "NIFTY",
-  "signal": 1,  // 1: Long, 0: Flat/Exit, -1: Short (not used yet)
-  "risk": {
-      "stop_loss_atr": 2.0
-  },
-  "status": "OK",
-  "reason": ""
+  "signal": 1,  // 1: LONG, 0: FLAT/NEUTRAL, -1: EXIT/SHORT
+  "rule_summary": "Entry: [EMA_Cross...] ...",
+  "risk": {"sl_atr": 2.0, ...},
+  "status": "OK" // or "SKIPPED"
 }
 ```
 
 ## Consumption
+To use this signal for trading:
+1. Ensure `ENABLE_LIVE=true` in environment.
+2. Ensure `approvals/ALLOW_LIVE.txt` exists.
+3. Write a bridge script that reads the JSON, verifies the timestamp is fresh (< 60 mins), and places orders via `packages/core`.
 
-To trade this signal:
-1. **Manual:** Read the JSON file or check the logs.
-2. **Automated (Core Bridge):** A separate process in `packages/core` (not enabled by default) can watch this file.
-   - It requires `ENABLE_LIVE=true` env var.
-   - It requires `approvals/ALLOW_LIVE.txt` file to exist.
-
-## Safety Gates
-
-- No signal is published if market is closed.
-- No signal is published if the Champion's recent OOS performance shows > 25% MaxDD.
+## Gating
+Signals are only generated if:
+1. Market is Open.
+2. A valid Champion exists.
+3. The Champion meets strict OOS criteria (Sharpe > 1.0, MaxDD < 25%).

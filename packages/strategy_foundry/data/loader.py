@@ -1,174 +1,171 @@
-"""
-Data loader for StrategyFoundry.
-Fetches daily history for NIFTY (^NSEI) and SENSEX (^BSESN) from Yahoo Finance.
-Caches data in CSV format to avoid redundant downloads.
-"""
 import os
-import csv
-import io
 import time
-import requests
-import logging
 from datetime import datetime, timedelta
+from typing import Optional, Dict
 import pandas as pd
-from pathlib import Path
+import httpx
+import structlog
+import pytz
+from io import StringIO
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
-CACHE_DIR = Path(__file__).parent / "cache"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+IST = pytz.timezone("Asia/Kolkata")
 
-# Map instrument names to Yahoo tickers
-TICKERS = {
+INSTRUMENTS = {
     "NIFTY": "^NSEI",
     "SENSEX": "^BSESN"
 }
 
-# Standard column names
-COLUMNS = ["Date", "Open", "High", "Low", "Close", "Adj Close", "Volume"]
+def ensure_cache_dir():
+    os.makedirs(CACHE_DIR, exist_ok=True)
 
-def get_data_path(instrument: str) -> Path:
-    """Get path to cached CSV file."""
-    return CACHE_DIR / f"{instrument}.csv"
-
-def fetch_yahoo_history(ticker: str, start_date: str = None) -> str:
+def fetch_yahoo_data(symbol: str, period_days: int = 365 * 5) -> Optional[pd.DataFrame]:
     """
-    Fetch historical data from Yahoo Finance as CSV string.
-    Uses period1/period2 parameters.
+    Fetch daily data from Yahoo Finance.
     """
-    if start_date:
-        start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
-    else:
-        # Default to 5 years ago
-        start_ts = int((datetime.now() - timedelta(days=5*365)).timestamp())
+    try:
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=period_days)
 
-    end_ts = int(datetime.now().timestamp())
+        period1 = int(start_dt.timestamp())
+        period2 = int(end_dt.timestamp())
 
-    # URL construction
-    # Note: Yahoo changed their API, but query1.finance.yahoo.com/v7/finance/download/ usually works with cookies
-    # or simple requests often work for download endpoints if not heavily blocked.
-    # Fallback to query2 if query1 fails.
+        url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}"
+        params = {
+            "period1": period1,
+            "period2": period2,
+            "interval": "1d",
+            "events": "history",
+            "includeAdjustedClose": "true"
+        }
 
-    # A simple reliable way for public tickers often involves setting a User-Agent
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+        }
 
-    url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}"
-    params = {
-        "period1": start_ts,
-        "period2": end_ts,
-        "interval": "1d",
-        "events": "history",
-        "includeAdjustedClose": "true"
-    }
+        logger.info("Fetching data from Yahoo", symbol=symbol)
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(url, params=params, headers=headers)
+            response.raise_for_status()
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-    }
+            # Parse CSV
+            df = pd.read_csv(StringIO(response.text))
+            return df
 
-    response = requests.get(url, params=params, headers=headers)
-    response.raise_for_status()
+    except Exception as e:
+        logger.error("Failed to fetch data", symbol=symbol, error=str(e))
+        return None
 
-    return response.text
-
-def normalize_data(csv_text: str) -> pd.DataFrame:
+def validate_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Parse CSV text, normalize columns and timezone.
+    Validate and clean OHLCV data.
     """
-    df = pd.read_csv(io.StringIO(csv_text))
+    required_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
 
-    # Ensure columns exist
-    for col in COLUMNS:
-        if col not in df.columns:
-            # Maybe differnet case?
-            found = False
-            for c in df.columns:
-                if c.lower() == col.lower().replace(" ", ""):
-                    df.rename(columns={c: col}, inplace=True)
-                    found = True
-                    break
-            if not found:
-                # If Volume is missing (some indices), fill 0
-                if col == "Volume":
-                    df["Volume"] = 0
-                else:
-                    raise ValueError(f"Missing column {col} in data")
+    # Check columns
+    if not all(col in df.columns for col in required_cols):
+        raise ValueError(f"Missing columns. Expected {required_cols}")
+
+    # Standardize column names
+    df = df.rename(columns={
+        "Date": "date",
+        "Open": "open",
+        "High": "high",
+        "Low": "low",
+        "Close": "close",
+        "Volume": "volume",
+        "Adj Close": "adj_close"
+    })
 
     # Parse dates
-    df["Date"] = pd.to_datetime(df["Date"])
+    df["date"] = pd.to_datetime(df["date"])
+
+    # Drop NaNs
+    df = df.dropna()
 
     # Sort
-    df.sort_values("Date", inplace=True)
+    df = df.sort_values("date")
 
-    # Drop rows with NaN in OHLC
-    df.dropna(subset=["Open", "High", "Low", "Close"], inplace=True)
+    # Sanity checks
+    df = df[df["high"] >= df["low"]]
+    df = df[df["high"] >= df["open"]]
+    df = df[df["high"] >= df["close"]]
+    df = df[df["low"] <= df["open"]]
+    df = df[df["low"] <= df["close"]]
+    df = df[df["volume"] >= 0]
 
-    # Localize to IST
-    # Yahoo dates are usually naive, effectively market local time (IST for NSE/BSE)
-    # We will localize to Asia/Kolkata
-    df["Date"] = df["Date"].dt.tz_localize("Asia/Kolkata", ambiguous='NaT', nonexistent='shift_forward')
+    # Remove duplicates
+    df = df.drop_duplicates(subset=["date"])
 
-    # Set index
-    df.set_index("Date", inplace=True)
+    # Localize to IST (assuming Yahoo daily dates are effectively market days)
+    # We set 09:15 IST as the time for the daily bar start for consistency
+    df["date"] = df["date"].dt.tz_localize(None).dt.tz_localize(IST) + timedelta(hours=9, minutes=15)
 
+    df = df.set_index("date")
     return df
 
-def load_instrument_data(instrument: str, force_download: bool = False) -> pd.DataFrame:
+def get_data(symbol_key: str, force_refresh: bool = False) -> pd.DataFrame:
     """
-    Load data for instrument.
-    1. Check cache.
-    2. If missing or stale (older than 18 hours) or force_download, fetch.
-    3. Return DataFrame.
+    Get data for a symbol (NIFTY or SENSEX).
+    Uses cache if available and fresh (< 24h).
     """
-    if instrument not in TICKERS:
-        raise ValueError(f"Unknown instrument: {instrument}")
+    if symbol_key not in INSTRUMENTS:
+        raise ValueError(f"Unknown symbol: {symbol_key}")
 
-    ticker = TICKERS[instrument]
-    path = get_data_path(instrument)
+    yahoo_symbol = INSTRUMENTS[symbol_key]
+    cache_file = os.path.join(CACHE_DIR, f"{symbol_key}.csv")
+    ensure_cache_dir()
 
-    needs_download = force_download
+    load_from_cache = False
+    if os.path.exists(cache_file) and not force_refresh:
+        # Check freshness
+        mtime = os.path.getmtime(cache_file)
+        if time.time() - mtime < 3600 * 12: # 12 hours freshness
+            load_from_cache = True
+            logger.info("Using cached data", symbol=symbol_key)
 
-    if not path.exists():
-        needs_download = True
-    else:
-        # Check if stale (file modified > 18 hours ago)
-        mtime = datetime.fromtimestamp(path.stat().st_mtime)
-        if datetime.now() - mtime > timedelta(hours=18):
-            needs_download = True
-
-    if needs_download:
+    if load_from_cache:
         try:
-            logger.info(f"Downloading data for {instrument} ({ticker})...")
-            csv_text = fetch_yahoo_history(ticker)
-            # Validate before saving
-            df = normalize_data(csv_text)
-
-            if df.empty:
-                 logger.warning(f"Downloaded data for {instrument} is empty.")
-            else:
-                # Save to cache
-                df.to_csv(path)
-                logger.info(f"Saved {len(df)} rows to {path}")
-                return df
+            df = pd.read_csv(cache_file)
+            df["date"] = pd.to_datetime(df["date"])
+            if df["date"].dt.tz is None:
+                 df["date"] = df["date"].dt.tz_localize(IST)
+            df = df.set_index("date")
+            return df
         except Exception as e:
-            logger.error(f"Failed to download {instrument}: {e}")
-            if not path.exists():
-                raise
-            logger.info("Falling back to cached data.")
+            logger.warn("Failed to read cache, fetching fresh", error=str(e))
 
-    # Load from cache
-    logger.info(f"Loading {instrument} from cache...")
-    df = pd.read_csv(path, index_col="Date", parse_dates=True)
+    # Fetch fresh
+    raw_df = fetch_yahoo_data(yahoo_symbol)
+    if raw_df is None:
+        if os.path.exists(cache_file):
+            logger.warning("Download failed, using stale cache", symbol=symbol_key)
+            df = pd.read_csv(cache_file)
+            df["date"] = pd.to_datetime(df["date"])
+            if df["date"].dt.tz is None:
+                 df["date"] = df["date"].dt.tz_localize(IST)
+            df = df.set_index("date")
+            return df
+        else:
+            raise RuntimeError(f"Could not fetch data for {symbol_key} and no cache available")
 
-    # Ensure index is timezone aware if read from CSV (CSV loses tz usually)
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("Asia/Kolkata")
+    # Validate and clean
+    clean_df = validate_data(raw_df)
 
-    return df
+    # Save to cache
+    clean_df.to_csv(cache_file, index=False)
+    logger.info("Cached data", symbol=symbol_key, rows=len(clean_df))
 
-if __name__ == "__main__":
-    # Test
-    logging.basicConfig(level=logging.INFO)
-    try:
-        df = load_instrument_data("NIFTY")
-        print(df.tail())
-    except Exception as e:
-        print(f"Error: {e}")
+    return clean_df
+
+def get_all_data() -> Dict[str, pd.DataFrame]:
+    """Get data for all supported instruments"""
+    data = {}
+    for key in INSTRUMENTS:
+        try:
+            data[key] = get_data(key)
+        except Exception as e:
+            logger.error("Skipping instrument due to error", symbol=key, error=str(e))
+    return data
