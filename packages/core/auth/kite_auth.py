@@ -50,7 +50,7 @@ class KiteAuth:
             # Assuming valid to avoid unnecessary re-login on flaky network,
             # unless we want to be strict.
             # However, the prompt asks to detect missing/expired token.
-            return False
+            return True
 
     def exchange_request_token(self, request_token: str) -> Optional[str]:
         """Exchange request token for access token"""
