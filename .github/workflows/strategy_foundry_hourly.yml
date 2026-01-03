@@ -5,12 +5,13 @@ on:
     - cron: "0 * * * *"
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'packages/strategy_foundry/**'
 
 jobs:
-  run-hourly:
+  run-foundry:
     runs-on: ubuntu-latest
+    env:
+      FAST_MODE: "1"
+      PYTHONPATH: "."
     steps:
       - uses: actions/checkout@v3
 
@@ -21,20 +22,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # We don't add new deps, assume requirements.txt has requests, pandas, numpy, etc.
-          # If strict no-new-deps policy, ensure they are there.
-          # requests, pandas, numpy are standard.
+          pip install pandas numpy requests structlog pyyaml
 
-      - name: Run Strategy Foundry (Fast Mode for PRs)
-        env:
-          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
-          PYTHONPATH: .
+      - name: Run Hourly Process
         run: python -m packages.strategy_foundry.run_hourly
 
       - name: Archive Results
-        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: foundry-results

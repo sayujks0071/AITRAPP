@@ -1,173 +1,192 @@
-"""
-Hourly Runner for StrategyFoundry.
-"""
 import os
-import sys
-import json
-import logging
 import argparse
-from datetime import datetime
+import structlog
 from pathlib import Path
+from datetime import datetime, time
 import pandas as pd
+import pytz
 
-from packages.strategy_foundry.data.loader import load_instrument_data
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.adapters.core_indicators import calculate_indicators
 from packages.strategy_foundry.factory.generator import StrategyGenerator
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.selection.ranker import WalkForwardEvaluator, Ranker
+from packages.strategy_foundry.backtest.metrics import compute_metrics
+from packages.strategy_foundry.selection.ranker import Ranker
 from packages.strategy_foundry.live.signal_publisher import SignalPublisher
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("StrategyFoundry")
+logger = structlog.get_logger(__name__)
 
-BASE_DIR = Path(__file__).parent
-RESULTS_DIR = BASE_DIR / "results"
-RUNS_DIR = RESULTS_DIR / "runs"
-CHAMPIONS_DIR = RESULTS_DIR / "champions"
+def is_market_open() -> bool:
+    """
+    Check if NSE market is open (09:15 - 15:30 IST).
+    """
+    tz = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(tz)
 
-INSTRUMENTS = ["NIFTY", "SENSEX"]
+    # Weekends
+    if now.weekday() >= 5:
+        return False
 
-def ensure_dirs():
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    CHAMPIONS_DIR.mkdir(parents=True, exist_ok=True)
+    current_time = now.time()
+    market_start = time(9, 15)
+    market_end = time(15, 30)
 
-def save_champion(candidate, score, filepath):
-    data = candidate.to_json()
-    with open(filepath, "w") as f:
-        f.write(data)
+    return market_start <= current_time <= market_end
 
-def load_champion(filepath):
-    if not filepath.exists():
-        return None
-    with open(filepath, "r") as f:
-        return StrategyCandidate.from_json(f.read())
+def run_instrument(instrument: str, fast_mode: bool, loader: DataLoader, results_dir: Path):
+    logger.info(f"Processing {instrument}")
 
-def main():
-    ensure_dirs()
+    # 1. Load Data
+    df_15m = loader.get_data(instrument, "15m")
+    df_5m = loader.get_data(instrument, "5m")
+    df_1d = loader.get_data(instrument, "1d")
 
-    # Determine Mode
-    fast_mode = os.environ.get("FAST_MODE", "0") == "1"
+    if df_15m.empty or df_5m.empty:
+        logger.error(f"No intraday data available for {instrument}. Skipping.")
+        return
 
-    # Config
-    n_candidates = 10 if fast_mode else 50
-    n_folds = 2 if fast_mode else 3
+    # Add Indicators
+    df_15m = calculate_indicators(df_15m)
+    df_5m = calculate_indicators(df_5m)
+    if not df_1d.empty:
+        df_1d = calculate_indicators(df_1d)
 
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    current_run_dir = RUNS_DIR / run_ts
-    current_run_dir.mkdir(parents=True, exist_ok=True)
+    # 2. Generate Candidates
+    gen = StrategyGenerator(instrument=instrument, timeframe="15m")
+    count = 10 if fast_mode else 50
+    candidates = gen.generate(n=count)
 
-    logger.info(f"Starting run {run_ts} (FAST_MODE={fast_mode})")
+    # 3. Backtest (Walk-Forward / Split)
+    split_idx_15 = int(len(df_15m) * 0.7)
+    train_15 = df_15m.iloc[:split_idx_15]
+    test_15 = df_15m.iloc[split_idx_15:]
 
-    # Initialize Generator
-    generator = StrategyGenerator()
+    evaluated = []
 
-    leaderboard = []
+    for cand in candidates:
+        # Backtest on 15m Test (OOS)
+        engine_15 = BacktestEngine(test_15, cand)
+        res_15 = engine_15.run()
+        met_15 = compute_metrics(res_15['trades'])
 
-    # Process Instruments for Strategy Generation
-    for instrument in INSTRUMENTS:
-        logger.info(f"Processing {instrument}...")
+        # Backtest on 5m
+        engine_5 = BacktestEngine(df_5m.iloc[-1000:], cand)
+        res_5 = engine_5.run()
+        met_5 = compute_metrics(res_5['trades'])
 
-        # 1. Load Data
-        try:
-            df = load_instrument_data(instrument)
-        except Exception as e:
-            logger.error(f"Failed to load data for {instrument}: {e}")
-            continue
+        # 1D Sanity Check
+        met_1d = {}
+        if not df_1d.empty:
+            # We treat 1D as just another backtest.
+            # Note: Strategy logic is intraday (EOD exit), but for 1D we might relax EOD exit
+            # OR we just check if logic holds on Daily bars (Swing).
+            # The prompt says: "Daily sanity overlay... if daily performance is catastrophically negative... reject"
+            # Strategy rules (time stops, EOD exits) might not make sense on 1D unless adjusted.
+            # But "run 1D sanity backtest" implies running the SAME logic on 1D bars.
+            # So "EOD exit" on 1D means "End of Year"? No, EOD means End of Bar usually in intraday ctx.
+            # On 1D, "EOD exit" (15:25) check will fail or pass depending on timestamp.
+            # Engine logic: `if times[i].hour == 15 and times[i].minute >= 25`.
+            # Daily bars usually have 00:00 or 15:30 timestamp.
+            # If timestamp is 00:00, EOD logic won't trigger.
+            # So it becomes a swing strategy.
 
-        # 2. Generate Candidates
-        candidates = generator.generate(n_candidates)
-        logger.info(f"Generated {len(candidates)} candidates")
+            engine_1d = BacktestEngine(df_1d, cand, force_eod_exit=False)
+            res_1d = engine_1d.run()
+            met_1d = compute_metrics(res_1d['trades'])
 
-        # 3. Backtest & Evaluate
-        engine = BacktestEngine(df)
-        evaluator = WalkForwardEvaluator(df, n_folds=n_folds)
+        # Sanity Check Logic
+        passed_sanity = True
+        if met_1d:
+            if met_1d['sharpe'] < -0.2 or met_1d['max_dd'] > 0.45:
+                passed_sanity = False
 
-        best_score = -999
-        best_candidate = None
-        best_metrics = None
-
-        for cand in candidates:
-            wf_res = evaluator.evaluate(cand, engine)
-
-            if wf_res.get("status") == "skipped":
-                continue
-
-            score = Ranker.score(wf_res)
-
-            # Sanity filters
-            if wf_res["max_dd"] > 0.35: continue
-            if wf_res["positive_folds"] < (1 if fast_mode else 2): continue
-
-            leaderboard.append({
-                "instrument": instrument,
-                "id": cand.id,
-                "score": score,
-                "sharpe": wf_res["avg_sharpe"],
-                "cagr": wf_res["avg_cagr"],
-                "max_dd": wf_res["max_dd"]
+        if passed_sanity:
+            evaluated.append({
+                "candidate": cand,
+                "metrics_oos_15m": met_15,
+                "metrics_oos_5m": met_5,
+                "metrics_1d": met_1d,
+                "score": 0 # filled by ranker
             })
 
-            if score > best_score:
-                best_score = score
-                best_candidate = cand
-                best_metrics = wf_res
-
-        # 4. Promotion Logic
-        if best_candidate:
-            logger.info(f"Best candidate for {instrument}: {best_candidate.id} Score: {best_score:.4f}")
-
-            current_champ_file = CHAMPIONS_DIR / f"current_{instrument}.json"
-
-            promote = False
-            # Simple threshold promotion if no existing champion
-            if not current_champ_file.exists():
-                if best_score > 0.2:
-                    promote = True
-            else:
-                # In a real system, we'd compare against current champion's score on NEW data
-                # For now, we assume if score is very high we promote
-                if best_score > 0.5:
-                     promote = True
-
-            if promote:
-                logger.info(f"Promoting new champion for {instrument}")
-                save_champion(best_candidate, best_score, current_champ_file)
-                # Archive
-                save_champion(best_candidate, best_score, CHAMPIONS_DIR / f"{run_ts}_{instrument}_{best_candidate.id}.json")
+    # 4. Rank
+    ranker = Ranker()
+    ranked = ranker.rank(evaluated)
 
     # Save Leaderboard
-    lb_df = pd.DataFrame(leaderboard)
-    if not lb_df.empty:
-        lb_df.sort_values("score", ascending=False, inplace=True)
-        lb_df.to_csv(RESULTS_DIR / "leaderboard.csv", index=False)
-        with open(RESULTS_DIR / "leaderboard.md", "w") as f:
-            f.write(lb_df.head(20).to_markdown())
+    leaderboard = []
+    for r in ranked:
+        row = {
+            "id": r['candidate'].id,
+            "instrument": instrument,
+            "score": r['score'],
+            "sharpe_15m": r['metrics_oos_15m']['sharpe'],
+            "net_15m": r['metrics_oos_15m']['net_return'],
+            "dd_15m": r['metrics_oos_15m']['max_dd'],
+            "sharpe_5m": r['metrics_oos_5m']['sharpe'],
+            "sharpe_1d": r['metrics_1d'].get('sharpe', 0)
+        }
+        leaderboard.append(row)
 
-    # 5. Live Signal Generation (using persisted champions)
-    publisher = SignalPublisher(RESULTS_DIR)
+    pd.DataFrame(leaderboard).to_csv(results_dir / f"leaderboard_{instrument}.csv", index=False)
 
-    for instrument in INSTRUMENTS:
-         champ_file = CHAMPIONS_DIR / f"current_{instrument}.json"
-         if champ_file.exists():
-             try:
-                 champ = load_champion(champ_file)
-                 df = load_instrument_data(instrument)
-                 engine = BacktestEngine(df)
+    # 5. Select Champion & Publish Live Signal
+    if ranked:
+        champion = ranked[0]
+        logger.info(f"Champion selected for {instrument}: {champion['candidate'].id} Score: {champion['score']}")
 
-                 # Run on FULL data to get current position
-                 res = engine.run(champ)
-                 current_pos = res.get("current_position", 0)
-                 metrics = res.get("metrics", {})
+        # Check eligibility
+        is_eligible = True
+        if champion['score'] < 0.5:
+            is_eligible = False
+            logger.info("Champion score too low, skipping live signal")
 
-                 logger.info(f"Champion {champ.id} for {instrument}: Position={current_pos}")
+        signal = 0
+        reason = ""
+        status = "SKIPPED"
 
-                 publisher.publish(champ, current_pos, instrument, metrics)
+        if not is_market_open():
+             reason = "Market Closed"
+        elif is_eligible:
+            # Calculate LIVE Signal
+            # Run engine on FULL 15m data with force_eod_exit=False (to see if we should hold/enter now)
+            # Actually, the logic is:
+            # We want to know if we should be Long or Flat RIGHT NOW.
 
-             except Exception as e:
-                 logger.error(f"Failed to publish signal for {instrument}: {e}")
+            # Since we run hourly, we might be mid-trade.
+            engine_live = BacktestEngine(df_15m, champion['candidate'], force_eod_exit=False)
+            res_live = engine_live.run()
 
-    logger.info("Run complete.")
+            signal = res_live.get('current_signal', 0)
+            status = "OK" if signal != 0 else "SKIPPED"
+            if signal == 0:
+                reason = "No Signal / Flat"
+        else:
+             reason = "No eligible champion"
+
+        publisher = SignalPublisher(Path("packages/strategy_foundry/results"))
+        publisher.publish(champion, signal, reason=reason)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fast", action="store_true", help="Run in fast mode")
+    args = parser.parse_args()
+
+    fast_mode = args.fast or os.environ.get("FAST_MODE") == "1"
+
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_dir = Path(f"packages/strategy_foundry/results/runs/{run_ts}")
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    loader = DataLoader()
+
+    instruments = ["NIFTY", "SENSEX"]
+
+    for instrument in instruments:
+        try:
+            run_instrument(instrument, fast_mode, loader, results_dir)
+        except Exception as e:
+            logger.error(f"Failed to process {instrument}", error=str(e))
 
 if __name__ == "__main__":
     main()
