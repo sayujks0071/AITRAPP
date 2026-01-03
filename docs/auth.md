@@ -40,7 +40,7 @@ Zerodha Kite Connect **mandates** a manual login once every 24 hours to generate
 Add this cron job to run at 8:00 AM IST:
 
 ```bash
-# Run Auth Bootstrap at 8:00 AM IST (2:30 AM UTC)
+# On a UTC-configured server: run at 2:30 AM UTC (8:00 AM IST; IST is UTC+5:30)
 30 2 * * * cd /path/to/repo && python scripts/kite_auth_bootstrap.py
 ```
 
