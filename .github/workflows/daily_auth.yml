@@ -13,38 +13,23 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
       - name: Install dependencies
         run: |
-          pip install kiteconnect python-dotenv structlog pydantic-settings
+          pip install kiteconnect python-dotenv structlog pydantic-settings pyyaml
 
       - name: Check Session Validity
         env:
           KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
           KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
           KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
+          PYTHONPATH: .
         run: |
-          # Create a minimal script to check session
-          cat <<EOF > check_session.py
-          import os
-          import sys
-          from kiteconnect import KiteConnect
-
-          try:
-              kite = KiteConnect(api_key=os.environ["KITE_API_KEY"])
-              kite.set_access_token(os.environ["KITE_ACCESS_TOKEN"])
-              kite.profile()
-              print("Session valid")
-              sys.exit(0)
-          except Exception as e:
-              print(f"Session invalid: {e}")
-              sys.exit(1)
-          EOF
-
-          python check_session.py
+          # Check session using the core auth module
+          python -c "from packages.core.auth.kite_auth import KiteAuth; import sys; sys.exit(0 if KiteAuth().is_session_valid() else 1)"
         continue-on-error: true
         id: check_session
 

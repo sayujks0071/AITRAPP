@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from packages.core.auth.kite_auth import KiteAuth
 
 @pytest.fixture

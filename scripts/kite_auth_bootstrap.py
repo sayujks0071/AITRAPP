@@ -5,6 +5,7 @@ Runs daily at 8:00 AM to ensure valid Kite Connect session.
 """
 import sys
 import os
+import time
 import webbrowser
 import structlog
 import http.server
@@ -96,8 +97,8 @@ def main():
     # Try to open browser automatically if possible
     try:
         webbrowser.open(login_url)
-    except Exception as e:
-        logger.warning(f"Failed to open browser automatically: {e}")
+    except:
+        pass
 
     # 5. Start Callback Receiver
     request_token = wait_for_callback(CALLBACK_PORT)
