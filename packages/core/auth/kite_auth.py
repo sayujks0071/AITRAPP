@@ -1,5 +1,4 @@
 """Kite Authentication Module"""
-import os
 import structlog
 from typing import Optional
 from kiteconnect import KiteConnect, exceptions
