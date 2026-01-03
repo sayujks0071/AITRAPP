@@ -1,4 +1,5 @@
 """Kite Authentication Module"""
+import os
 import structlog
 from typing import Optional
 from kiteconnect import KiteConnect, exceptions
@@ -59,7 +60,13 @@ class KiteAuth:
     def persist_access_token(self, access_token: str) -> None:
         """Save access token to .env file securely"""
         try:
-            env_file = ".env"
+            # Resolve .env path relative to project root, with optional override
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
+            )
+            default_env_file = os.path.join(project_root, ".env")
+            env_file = os.getenv("ENV_FILE_PATH", default_env_file)
+            
             # Update the current instance
             self.access_token = access_token
             self.kite.set_access_token(access_token)
