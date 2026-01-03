@@ -1,0 +1,38 @@
+{
+  "id": "ba68feb9eb65",
+  "entry": [
+    {
+      "name": "Donchian_Breakout",
+      "params": {}
+    },
+    {
+      "name": "ADX_Filter",
+      "params": {
+        "threshold": 25
+      }
+    }
+  ],
+  "exit": [],
+  "risk": {
+    "sl_atr": 2.1,
+    "tp_atr": 0,
+    "max_bars": 5,
+    "trailing_sl": true
+  },
+  "metrics": {
+    "total_return": 0.16814798442279777,
+    "cagr": 0.14290059387307363,
+    "sharpe": 1.4369854641239364,
+    "sortino": 0.06511904376362987,
+    "max_drawdown": 0.03511737195995531,
+    "calmar": 4.069228017290833,
+    "win_rate": 0.6363636363636364,
+    "profit_factor": 4.67292596861558,
+    "trades": 11,
+    "avg_trade_return": 0.013645270236455535,
+    "ann_vol": 0.0656303888326524
+  },
+  "score": 122.71497352716086,
+  "instrument": "NIFTY",
+  "timestamp": "2026-01-03T00:39:32.471378"
+}

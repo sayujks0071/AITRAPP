@@ -1,356 +1,156 @@
-"""
-Backtest Engine.
-"""
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import Dict, Any, List
 from packages.strategy_foundry.factory.grammar import StrategyCandidate
-from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
 class BacktestEngine:
-    def __init__(self, data: pd.DataFrame, slippage_bps: float = 5.0, all_in_cost_bps: float = 10.0):
-        self.raw_data = data.copy()
-        # Pre-calculate indicators
-        self.data = IndicatorsAdapter.add_all_indicators(self.raw_data.copy())
-        self.slippage_bps = slippage_bps
-        self.cost_bps = all_in_cost_bps
+    def __init__(self, initial_capital: float = 100000.0, cost_bps: float = 5.0, slippage_bps: float = 5.0):
+        self.initial_capital = initial_capital
+        self.cost_bps = cost_bps / 10000.0
+        self.slippage_bps = slippage_bps / 10000.0
 
-    def run(self, candidate: StrategyCandidate, start_date=None, end_date=None) -> Dict:
+    def run(self, strategy: StrategyCandidate, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Run backtest for a single candidate.
-        Returns stats dict.
+        Run backtest for a single instrument.
+        Returns metrics, trades, and equity curve.
         """
-        df = self.data.copy()
-        if start_date:
-            df = df[df.index >= start_date]
-        if end_date:
-            df = df[df.index <= end_date]
-
-        if df.empty:
-            return {"trades": 0, "return": 0.0, "max_dd": 0.0, "sharpe": 0.0}
-
-        # Logic interpretation
-        signals = self._generate_signals(df, candidate)
-
-        # Sim execution
-        trades, equity_curve, final_position = self._simulate_execution(df, signals, candidate)
-
-        # Calculate metrics (simplified here, detailed in metrics.py if needed)
-        metrics = self._calculate_metrics(trades, equity_curve)
-
-        return {
-            "metrics": metrics,
-            "trades": trades, # List of dicts
-            "equity_curve": equity_curve, # Series
-            "current_position": final_position
-        }
-
-    def _generate_signals(self, df: pd.DataFrame, candidate: StrategyCandidate) -> pd.Series:
-        """
-        Evaluate entry/exit rules to generate a signal series (-1, 0, 1).
-        """
-        entries = pd.Series(False, index=df.index)
-        exits = pd.Series(False, index=df.index)
-
-        # Evaluate Entry Rules (AND logic for now)
-        first_entry = True
-        for rule in candidate.entry_rules:
-            condition = self._evaluate_rule(df, rule, candidate.params)
-            if first_entry:
-                entries = condition
-                first_entry = False
-            else:
-                entries = entries & condition
-
-        # Evaluate Exit Rules (OR logic usually, but let's stick to explicit signals)
-        # Actually, for exits, if ANY exit rule triggers, we exit.
-        for rule in candidate.exit_rules:
-             # Skip stop loss rules here, they are handled in simulation usually?
-             # Or we can approximate them as boolean series if possible.
-             # Trailing stops are path dependent, must be handled in loop.
-             if rule["type"] in ["trailing_stop_atr", "time_stop"]:
-                 continue
-
-             condition = self._evaluate_rule(df, rule, candidate.params)
-             exits = exits | condition
-
-        return entries # We assume loop will handle exits + entries combined
-
-    def _evaluate_rule(self, df: pd.DataFrame, rule: Dict, params: Dict) -> pd.Series:
-        rtype = rule["type"]
-
-        if rtype == "ema_cross_above":
-            fast_col = f"ema_{params[rule['fast']]}"
-            slow_col = f"ema_{params[rule['slow']]}"
-            # Crossover logic: Fast > Slow AND Fast.shift(1) <= Slow.shift(1)
-            return (df[fast_col] > df[slow_col]) & (df[fast_col].shift(1) <= df[slow_col].shift(1))
-
-        elif rtype == "ema_cross_below":
-            fast_col = f"ema_{params[rule['fast']]}"
-            slow_col = f"ema_{params[rule['slow']]}"
-            return (df[fast_col] < df[slow_col]) & (df[fast_col].shift(1) >= df[slow_col].shift(1))
-
-        elif rtype == "supertrend_bullish":
-            # Assuming 'supertrend' column is the value, and we need direction.
-            # Often implemented as Close > Supertrend for bullish.
-            return df['Close'] > df['supertrend']
-
-        elif rtype == "rsi_oversold":
-            p = params[rule['period']]
-            t = params[rule['threshold']]
-            # RSI < Threshold
-            col = f"rsi_{p}"
-            return df[col] < t
-
-        elif rtype == "rsi_overbought":
-            p = params[rule['period']]
-            t = params[rule['threshold']]
-            # RSI > Threshold
-            col = f"rsi_{p}"
-            return df[col] > t
-
-        elif rtype == "price_below_bb_lower":
-            return df['Close'] < df['bb_lower']
-
-        return pd.Series(False, index=df.index)
-
-    def _simulate_execution(self, df: pd.DataFrame, entry_signals: pd.Series, candidate: StrategyCandidate):
-        """
-        Path-dependent simulation for accurate costs and trailing stops.
-        """
-        position = 0 # 0: Flat, 1: Long
-        entry_price = 0.0
-        entry_idx = None
-        highest_price = 0.0
+        # Get raw signals (1=Enter, -10=Exit, 0=None)
+        raw_signals = strategy.generate_raw_signals(df)
 
         trades = []
-        equity = [100.0] # start with 100 units
+        equity_curve = [self.initial_capital] * len(df)
+        cash = self.initial_capital
+        position_qty = 0
 
+        # Helper vars
+        entry_price = 0.0
+        entry_idx = 0
+        stop_loss = 0.0
+        take_profit = 0.0
+
+        # Params
+        sl_mult = strategy.risk_params.get("sl_atr", 2.0)
+        tp_mult = strategy.risk_params.get("tp_atr", 0.0)
+        max_bars = strategy.risk_params.get("max_bars", 0)
+        trailing_sl = strategy.risk_params.get("trailing_sl", False)
+
+        # Arrays for speed
+        opens = df["open"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        closes = df["close"].values
         dates = df.index
-        opens = df['Open'].values
-        highs = df['High'].values
-        lows = df['Low'].values
-        closes = df['Close'].values
-        atrs = df.get('atr_14', pd.Series(0, index=df.index)).values # Default 0 if missing
+        atrs = df["atr_14"].values if "atr_14" in df else (df["atr"].values if "atr" in df else np.zeros(len(df)))
+        sigs = raw_signals.values
 
-        # Parse params for risk
-        stop_atr_mult = candidate.params.get("stop_loss_atr")
-        max_hold = candidate.params.get("max_bars_hold")
+        pending_entry = False
+        pending_sl = 0.0
+        pending_tp = 0.0
 
-        entries_arr = entry_signals.values
-
-        # Find explicit exit rules (boolean series)
-        explicit_exits = pd.Series(False, index=df.index)
-        for rule in candidate.exit_rules:
-            if rule["type"] not in ["trailing_stop_atr", "time_stop"]:
-                explicit_exits = explicit_exits | self._evaluate_rule(df, rule, candidate.params)
-        explicit_exits_arr = explicit_exits.values
-
-        # Iterating bar by bar
         for i in range(1, len(df)):
             current_date = dates[i]
-            open_p = opens[i]
-            high_p = highs[i]
-            low_p = lows[i]
-            close_p = closes[i]
 
-            # PnL update (mark to market)
-            # Simplified: we update equity only on trade close for this fast engine?
-            # Or daily? Let's do daily for equity curve.
+            # 1. Execute Pending Entry (Market Open)
+            if pending_entry:
+                exec_price = opens[i] * (1 + self.slippage_bps) # Buy slippage
+                # Position sizing: Fixed fractional or Fixed capital?
+                # Let's use 100% equity for simplicity (compounding) or fixed?
+                # Metrics usually assume compounding.
+                # Qty = Cash / Price
+                qty = cash / exec_price
+                cost = qty * exec_price * self.cost_bps
 
-            # Check exits first if we are long
-            if position == 1:
-                exit_price = None
-                reason = ""
+                cash -= (qty * exec_price + cost)
+                position_qty = qty
+                entry_price = exec_price
+                entry_idx = i
 
-                # Update highest price for trailing stop
-                if high_p > highest_price:
-                    highest_price = high_p
+                stop_loss = pending_sl
+                take_profit = pending_tp
 
-                # 1. Trailing Stop
-                if stop_atr_mult:
-                    # Trailing from highest high since entry
-                    # Using previous bar's ATR for stop calculation to avoid lookahead?
-                    # Or current? Usually trigger is intraday.
-                    # Stop level = highest_price - ATR * mult
-                    # Check if Low < Stop Level
-                    # Use ATR from previous bar (i-1)
-                    prev_atr = atrs[i-1]
-                    stop_level = highest_price - (prev_atr * stop_atr_mult)
+                pending_entry = False
 
-                    if low_p < stop_level:
-                        exit_price = max(open_p, stop_level) # Assume slippage later
-                        # If gap down below stop, we exit at Open (or worse)
-                        # If open is above stop, we exit at stop.
-                        # Conservative: exit at min(Open, Stop) -> No, if gap down we exit at Open.
-                        if open_p < stop_level:
-                             exit_price = open_p
-                        else:
-                             exit_price = stop_level
-                        reason = "trailing_stop"
+            # 2. Manage Position (Intraday Exits)
+            if position_qty > 0:
+                exit_price = 0.0
+                exit_reason = ""
 
-                # 2. Time Stop
-                if not exit_price and max_hold:
-                    if (i - entry_idx) >= max_hold:
-                        exit_price = open_p
-                        reason = "time_stop"
+                # Check Stops (Low/High)
+                if lows[i] <= stop_loss:
+                    exit_price = stop_loss * (1 - self.slippage_bps) # Sell slippage
+                    exit_reason = "SL"
+                elif tp_mult > 0 and highs[i] >= take_profit:
+                    exit_price = take_profit * (1 - self.slippage_bps)
+                    exit_reason = "TP"
+                elif max_bars > 0 and (i - entry_idx) >= max_bars:
+                    # Time exit: Exit at Close (simplification)
+                    exit_price = closes[i] * (1 - self.slippage_bps)
+                    exit_reason = "TIME"
+                elif sigs[i] == -10:
+                    # Technical exit at Close
+                    exit_price = closes[i] * (1 - self.slippage_bps)
+                    exit_reason = "SIGNAL"
 
-                # 3. Explicit Signal Exit
-                if not exit_price and explicit_exits_arr[i]:
-                    # Exit at Open of NEXT bar? Or Close of current?
-                    # "Execution: next-bar open".
-                    # So if signal was generated at i-1, we enter/exit at i Open.
-                    # But here we are iterating i.
-                    # If signal is True at i (based on Close[i]), we exit at i+1 Open.
-                    # Wait, let's align.
-                    # If we use `entries_arr` which is calculated on Close[i],
-                    # we should act on it at i+1.
-                    pass
-
-                # Check explicit exit from PREVIOUS bar
-                if not exit_price and explicit_exits_arr[i-1]:
-                    exit_price = open_p
-                    reason = "signal_exit"
-
-                if exit_price:
+                if exit_price > 0:
                     # Execute Exit
-                    # Apply costs
-                    # Slippage: assume worst case on exit (sell lower)
-                    exec_price = exit_price * (1 - self.slippage_bps/10000)
-                    gross_ret = (exec_price / entry_price) - 1
-                    net_ret = gross_ret - (self.cost_bps/10000) # One way cost? Or round trip?
-                    # We apply cost on entry and exit.
-                    # Let's apply total cost here to simplify logic or per side.
-                    # "all_in_cost_bps per side"
+                    proceeds = position_qty * exit_price
+                    cost = proceeds * self.cost_bps
+                    cash += (proceeds - cost)
 
-                    # Update equity
-                    # (Exit/Entry) * (1-costs) ...
-                    # Precise:
-                    # units = equity / (entry * (1+cost))
-                    # new_equity = units * (exit * (1-cost))
+                    # Record Trade
+                    pnl = proceeds - cost - (position_qty * entry_price * (1 + self.cost_bps)) # Approx
+                    # Better PnL: Cash Delta
+                    # We updated Cash on Entry and Exit.
+                    # PnL = (ExitVal - ExitCost) - (EntryVal + EntryCost)
+                    # But we are compounding, so cash tracks it.
 
-                    trade_ret = (exit_price/entry_price) * (1 - self.cost_bps/10000) * (1 - self.slippage_bps/10000) - 1
-                    # Note: entry cost was paid already?
-                    # Let's compute PnL multiplier:
-                    # P_exit_net = exit * (1 - cost - slip)
-                    # P_entry_net = entry * (1 + cost + slip)
-                    # Ret = P_exit_net / P_entry_net - 1
-
-                    p_entry_net = entry_price * (1 + (self.cost_bps + self.slippage_bps)/10000)
-                    p_exit_net = exit_price * (1 - (self.cost_bps + self.slippage_bps)/10000)
-
-                    pnl_pct = (p_exit_net / p_entry_net) - 1
+                    trade_pnl = (exit_price - entry_price) * position_qty - (position_qty * entry_price * self.cost_bps) - (position_qty * exit_price * self.cost_bps)
 
                     trades.append({
                         "entry_date": dates[entry_idx],
                         "exit_date": current_date,
                         "entry_price": entry_price,
                         "exit_price": exit_price,
-                        "pnl": pnl_pct,
-                        "reason": reason
+                        "pnl": trade_pnl,
+                        "return_pct": (exit_price / entry_price) - 1,
+                        "reason": exit_reason
                     })
 
-                    equity[-1] = equity[-1] * (1 + pnl_pct) # Update today's equity
-                    position = 0
-                    highest_price = 0.0
-                    entry_idx = None
-                    continue # Finished this bar logic
-
-            # If Flat, check Entry
-            if position == 0:
-                # Check entry signal from PREVIOUS bar
-                if entries_arr[i-1]:
-                    # Enter at Open
-                    entry_price = open_p
-                    entry_idx = i
-                    highest_price = high_p # Initialize for trailing stop
-                    position = 1
-
-            # Record Daily Equity (Mark to market if position open)
-            if position == 1:
-                # MTM
-                # current val = equity * (close / entry) ... approx
-                # We won't apply costs to daily MTM, just final
-                curr_val = equity[-1] * (close_p / entry_price) # VERY rough, ignores prior trade compounding within day?
-                # Actually equity array stores end-of-day equity.
-                # If we just traded (exit), equity[-1] is updated.
-                # If we just entered, equity is roughly same minus spread.
-                # If holding, it moves with price.
-
-                # Better: track 'cash' and 'units'.
-                # But simple series:
-                # previous_equity * (change in price)
-                change = close_p / opens[i] # Intra-day change
-                # This is getting complex for single loop.
-                # Simple approximation:
-                # If holding, equity = last_equity * (close_i / close_i-1)
-                # But we entered at open.
-                if entry_idx == i:
-                    # Entered today
-                    change = close_p / open_p
+                    position_qty = 0
                 else:
-                    change = close_p / closes[i-1]
+                    # Update Trailing SL
+                    if trailing_sl:
+                        new_sl = closes[i] - atrs[i] * sl_mult
+                        if new_sl > stop_loss:
+                            stop_loss = new_sl
 
-                equity.append(equity[-1] * change)
+            # 3. Check New Entry Signal
+            if position_qty == 0 and not pending_entry:
+                if sigs[i] == 1:
+                    pending_entry = True
+                    ref_price = closes[i]
+                    ref_atr = atrs[i]
+                    pending_sl = ref_price - ref_atr * sl_mult
+                    if tp_mult > 0:
+                        pending_tp = ref_price + ref_atr * tp_mult
+                    else:
+                        pending_tp = 0
+
+            # Update Equity Curve
+            # If in position, mark-to-market at Close
+            if position_qty > 0:
+                mtm = position_qty * closes[i]
+                equity_curve[i] = cash + mtm
             else:
-                # Flat, no change (assume 0% interest on cash)
-                equity.append(equity[-1])
+                equity_curve[i] = cash
 
-        return trades, pd.Series(equity, index=df.index[:len(equity)]), position
-
-    def _calculate_metrics(self, trades: List[Dict], equity_curve: pd.Series) -> Dict:
-        """
-        Compute standard metrics.
-        """
-        if not trades:
-            return {
-                "cagr": 0.0,
-                "sharpe": 0.0,
-                "max_dd": 0.0,
-                "trades": 0,
-                "win_rate": 0.0
-            }
-
-        # CAGR
-        days = (equity_curve.index[-1] - equity_curve.index[0]).days
-        if days <= 0: days = 1
-        years = days / 365.25
-        final_eq = equity_curve.iloc[-1]
-        cagr = (final_eq / 100.0) ** (1/years) - 1 if final_eq > 0 else -0.99
-
-        # Max DD
-        rolling_max = equity_curve.cummax()
-        drawdown = (equity_curve - rolling_max) / rolling_max
-        max_dd = abs(drawdown.min())
-
-        # Sharpe
-        daily_ret = equity_curve.pct_change().dropna()
-        if daily_ret.std() > 0:
-            sharpe = (daily_ret.mean() / daily_ret.std()) * (252**0.5)
-        else:
-            sharpe = 0.0
-
-        # Win Rate
-        wins = sum(1 for t in trades if t['pnl'] > 0)
-        win_rate = wins / len(trades)
-
-        # Sortino
-        neg_ret = daily_ret[daily_ret < 0]
-        if neg_ret.std() > 0:
-            sortino = (daily_ret.mean() / neg_ret.std()) * (252**0.5)
-        else:
-            sortino = 0.0
-
-        # Calmar
-        calmar = cagr / max_dd if max_dd > 0 else 0.0
+        # Calculate Metrics
+        equity_series = pd.Series(equity_curve, index=dates)
+        metrics = calculate_metrics(trades, equity_series)
 
         return {
-            "cagr": cagr,
-            "sharpe": sharpe,
-            "sortino": sortino,
-            "max_dd": max_dd,
-            "calmar": calmar,
-            "trades": len(trades),
-            "win_rate": win_rate,
-            "pf": 0.0 # TODO calculate profit factor
+            "metrics": metrics,
+            "trades": pd.DataFrame(trades),
+            "equity_curve": equity_series
         }

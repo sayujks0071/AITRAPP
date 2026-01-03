@@ -1,68 +1,75 @@
-
-import pytest
+import unittest
 import pandas as pd
 import numpy as np
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, Rule
 
-def test_engine_basic():
-    # Mock data
-    dates = pd.date_range("2023-01-01", periods=100)
-    data = pd.DataFrame({
-        "Open": np.linspace(100, 110, 100),
-        "High": np.linspace(101, 111, 100),
-        "Low": np.linspace(99, 109, 100),
-        "Close": np.linspace(100, 110, 100),
-        "Volume": 1000
-    }, index=dates)
+class TestBacktestEngine(unittest.TestCase):
+    def setUp(self):
+        # Create dummy data
+        dates = pd.date_range("2023-01-01", periods=10, freq="D")
+        self.df = pd.DataFrame({
+            "open": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
+            "high": [105, 106, 107, 108, 109, 110, 111, 112, 113, 114],
+            "low": [95, 96, 97, 98, 99, 100, 101, 102, 103, 104],
+            "close": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110],
+            "atr_14": [1]*10
+        }, index=dates)
 
-    # Mock candidate
-    candidate = StrategyCandidate(
-        id="test",
-        entry_rules=[],
-        exit_rules=[],
-        params={}
-    )
+    def test_run_simple_strategy(self):
+        # Strategy: Enter if Open > 0 (Always True)
+        # Entry at i=1 (since i starts at 1)
 
-    engine = BacktestEngine(data)
-    res = engine.run(candidate)
+        def rule_always_true(df, params):
+            return pd.Series(True, index=df.index)
 
-    assert "metrics" in res
-    assert "trades" in res
-    assert "equity_curve" in res
-    assert "current_position" in res
+        strat = StrategyCandidate(
+            strategy_id="test",
+            entry_rules=[Rule("Always", rule_always_true, {})],
+            exit_rules=[],
+            risk_params={"sl_atr": 10.0, "tp_atr": 0.0, "max_bars": 0} # Wide stop
+        )
 
-def test_engine_with_trade():
-    dates = pd.date_range("2023-01-01", periods=50)
-    data = pd.DataFrame({
-        "Open": [100]*50,
-        "High": [105]*50,
-        "Low": [95]*50,
-        "Close": [100]*50,
-        "Volume": 1000
-    }, index=dates)
+        engine = BacktestEngine(initial_capital=10000)
+        res = engine.run(strat, self.df)
 
-    # Add indicators manually or rely on adapter defaults (which might fail if calc needs meaningful data)
-    # The adapter calculates EMA/RSI. RSI needs price changes.
-    # Let's make price move.
-    data["Close"] = np.linspace(100, 200, 50)
-    data["Open"] = data["Close"]
-    data["High"] = data["Close"] + 1
-    data["Low"] = data["Close"] - 1
+        trades = res["trades"]
+        # Should enter at i=1 (Close[1] signal -> Open[2])?
+        # My logic:
+        # i=1: sig=1 (based on rule). pending_entry=True.
+        # i=2: Execute pending. Entry at Open[2]=102.
 
-    # Strategy: EMA Cross
-    # Fast (10) > Slow (20)
-    # Price is increasing, so Fast EMA > Slow EMA eventually.
+        # Check if we have trades
+        # If we never exit, we might not have a completed trade in "trades" list depending on implementation?
+        # BacktestEngine records trade on EXIT.
+        # If open at end, it is not in trades list?
+        # My implementation: "if position_qty > 0... check exit".
+        # It does NOT close at end of data explicitly.
+        # So "trades" might be empty if hold till end.
 
-    candidate = StrategyCandidate(
-        id="test_cross",
-        entry_rules=[{"type": "ema_cross_above", "fast": "fast", "slow": "slow"}],
-        exit_rules=[{"type": "ema_cross_below", "fast": "fast", "slow": "slow"}],
-        params={"fast": 10, "slow": 20}
-    )
+        # Let's add an exit rule.
+        def rule_exit_at_5(df, params):
+            s = pd.Series(False, index=df.index)
+            s.iloc[5] = True
+            return s
 
-    engine = BacktestEngine(data)
-    res = engine.run(candidate)
+        strat.exit_rules = [Rule("Exit", rule_exit_at_5, {})]
 
-    # Should have some trades or at least metrics calculated
-    assert res["metrics"]["trades"] >= 0
+        res = engine.run(strat, self.df)
+        trades = res["trades"]
+
+        # i=1: Entry Sig -> Pending.
+        # i=2: Enter at Open=102.
+        # i=5: Exit Sig?
+        # s.iloc[5] is True.
+        # Loop i=5. Exit Sig detected. Exit at Close[5]=106.
+        # Trade: Entry 102, Exit 106.
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades.iloc[0]["entry_price"], 102 * (1 + engine.slippage_bps))
+        # Note: BacktestEngine uses slippage on entry and exit.
+
+        self.assertGreater(res["metrics"]["total_return"], 0)
+
+if __name__ == "__main__":
+    unittest.main()

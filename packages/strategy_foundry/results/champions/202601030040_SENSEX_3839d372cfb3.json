@@ -1,0 +1,38 @@
+{
+  "id": "3839d372cfb3",
+  "entry": [
+    {
+      "name": "Supertrend_Bull",
+      "params": {}
+    },
+    {
+      "name": "ADX_Filter",
+      "params": {
+        "threshold": 30
+      }
+    }
+  ],
+  "exit": [],
+  "risk": {
+    "sl_atr": 4.0,
+    "tp_atr": 0,
+    "max_bars": 5,
+    "trailing_sl": true
+  },
+  "metrics": {
+    "total_return": 0.34408766295095305,
+    "cagr": 0.2893540415253375,
+    "sharpe": 2.6806749977947604,
+    "sortino": 0.1880594324426,
+    "max_drawdown": 0.028226942557313808,
+    "calmar": 10.25098771989968,
+    "win_rate": 0.8260869565217391,
+    "profit_factor": 8.796946735521976,
+    "trades": 23,
+    "avg_trade_return": 0.014079774669260142,
+    "ann_vol": 0.06624667146341512
+  },
+  "score": 251.34300058512255,
+  "instrument": "SENSEX",
+  "timestamp": "2026-01-03T00:40:02.445785"
+}
