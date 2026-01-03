@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     api_secret_key: str = Field(alias="API_SECRET_KEY")
     cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
     
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Parse CORS origins from JSON string or return as-is if already a list"""
+        if isinstance(v, str):
+            import json
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                # If it's not valid JSON, treat it as a single origin
+                return [v]
+        return v
+    
     # WebSocket
     ws_ping_interval: int = Field(default=30, alias="WS_PING_INTERVAL")
     ws_reconnect_delay: int = Field(default=5, alias="WS_RECONNECT_DELAY")
