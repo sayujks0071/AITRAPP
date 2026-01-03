@@ -1,0 +1,72 @@
+name: Daily Auth Check
+
+on:
+  schedule:
+    # 8:00 AM IST is 2:30 AM UTC
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  auth-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install kiteconnect python-dotenv structlog pydantic-settings
+
+      - name: Check Session Validity
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
+        run: |
+          # Create a minimal script to check session
+          cat <<EOF > check_session.py
+          import os
+          import sys
+          from kiteconnect import KiteConnect
+
+          try:
+              kite = KiteConnect(api_key=os.environ["KITE_API_KEY"])
+              kite.set_access_token(os.environ["KITE_ACCESS_TOKEN"])
+              kite.profile()
+              print("Session valid")
+              sys.exit(0)
+          except Exception as e:
+              print(f"Session invalid: {e}")
+              sys.exit(1)
+          EOF
+
+          python check_session.py
+        continue-on-error: true
+        id: check_session
+
+      - name: Create Issue if Auth Required
+        if: steps.check_session.outcome == 'failure'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const loginUrl = `https://kite.trade/connect/login?api_key=${process.env.KITE_API_KEY}&v=3`;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔐 Action Required: Renew Kite Access Token',
+              body: `The daily auth check failed at 8:00 AM IST.
+
+              **Steps to Renew:**
+              1. Run \`python scripts/kite_auth_bootstrap.py\` on your local machine or server.
+              2. Follow the prompt to login securely.
+              3. The token will be refreshed in your environment.
+
+              [Click here to Login to Kite](${loginUrl}) (Only for manual flow reference)`
+            });
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
