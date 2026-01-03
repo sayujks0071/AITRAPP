@@ -67,6 +67,8 @@ def test_default_is_permissive():
     unless the user changes config.
     """
     if settings.cors_origins != ["*"]:
+        # We need to import pytest here or at the top of the file
+        import pytest
         pytest.skip("Default CORS origins have been overridden; permissive-default behavior is not applicable.")
 
     headers = {
