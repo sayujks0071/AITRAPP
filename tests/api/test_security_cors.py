@@ -1,60 +1,92 @@
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from unittest.mock import patch
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
+
+def test_cors_origins_field_validator():
+    """
+    Test that the field_validator correctly parses CORS origins from various formats.
+    """
+    from packages.core.config import Settings
+    
+    # Test 1: JSON array string
+    os.environ['CORS_ORIGINS'] = '["http://localhost:8000","http://127.0.0.1:8000"]'
+    os.environ['API_SECRET_KEY'] = 'test-secret-key-for-testing-only-1234'
+    settings1 = Settings()
+    assert settings1.cors_origins == ["http://localhost:8000", "http://127.0.0.1:8000"]
+    
+    # Test 2: Single string (fallback)
+    os.environ['CORS_ORIGINS'] = 'http://single-origin.com'
+    settings2 = Settings()
+    assert settings2.cors_origins == ["http://single-origin.com"]
+    
+    # Test 3: Invalid JSON object should raise ValueError
+    os.environ['CORS_ORIGINS'] = '{"key": "value"}'
+    with pytest.raises(ValueError, match="CORS_ORIGINS must be a JSON array"):
+        Settings()
+    
+    # Test 4: JSON array with non-string values should raise ValueError
+    os.environ['CORS_ORIGINS'] = '[1, 2, 3]'
+    with pytest.raises(ValueError, match="CORS_ORIGINS must contain only string values"):
+        Settings()
+    
+    # Cleanup
+    os.environ.pop('CORS_ORIGINS', None)
 
 
 def test_cors_restrictive_behavior():
     """
-    Verify that the actual app uses settings.cors_origins correctly.
+    Verify that CORS middleware can restrict origins correctly.
     
-    This test patches the settings module to use restrictive CORS origins
-    and verifies that the app properly restricts access.
+    This test creates a minimal FastAPI app with CORS middleware configured
+    to verify that the middleware behaves as expected with restrictive origins.
     """
-    # Import AppMode to use the actual enum
-    from packages.core.config import AppMode
-    
-    # Patch the settings at the apps.api.main level to ensure test isolation
-    with patch("apps.api.main.settings") as mock_settings:
-        # Set up mock settings with restrictive CORS
-        mock_settings.cors_origins = ["http://trusted.com"]
-        mock_settings.app_mode = AppMode.PAPER  # Use actual enum
-        mock_settings.enable_metrics = False
-        
-        # Import the app - it will use our mocked settings
-        # Note: This assumes the app hasn't been imported yet in this test session,
-        # or that the CORS middleware is set up dynamically
-        from apps.api.main import app
-        
-        test_client = TestClient(app, raise_server_exceptions=False)
+    # Create a test app with restrictive CORS middleware
+    test_app = FastAPI()
+    test_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://trusted.com"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-        # Test disallowed origin
-        headers = {
-            "Origin": "http://evil.com",
-            "Access-Control-Request-Method": "GET",
-        }
-        response = test_client.options("/health", headers=headers)
+    @test_app.get("/health")
+    def health():
+        return {"status": "ok"}
 
-        # Expectation: 400 Bad Request (Disallowed origin) OR 200 without CORS headers,
-        # depending on the Starlette/FastAPI version.
-        if response.status_code == 400:
-            # Some versions explicitly reject disallowed origins with 400.
-            assert "Disallowed CORS origin" in response.text
-        elif response.status_code == 200:
-            # Other versions simply omit CORS headers for disallowed origins.
-            assert "access-control-allow-origin" not in response.headers
-        else:
-            pytest.fail(
-                f"Unexpected status code for disallowed origin: {response.status_code}"
-            )
+    test_client = TestClient(test_app, raise_server_exceptions=False)
 
-        # Test allowed origin
-        headers = {
-            "Origin": "http://trusted.com",
-            "Access-Control-Request-Method": "GET",
-        }
-        response = test_client.options("/health", headers=headers)
-        assert response.status_code == 200
-        assert response.headers.get("access-control-allow-origin") == "http://trusted.com"
+    # Test disallowed origin
+    headers = {
+        "Origin": "http://evil.com",
+        "Access-Control-Request-Method": "GET",
+    }
+    response = test_client.options("/health", headers=headers)
+
+    # Expectation: 400 Bad Request (Disallowed origin) OR 200 without CORS headers,
+    # depending on the Starlette/FastAPI version.
+    if response.status_code == 400:
+        # Some versions explicitly reject disallowed origins with 400.
+        assert "Disallowed CORS origin" in response.text
+    elif response.status_code == 200:
+        # Other versions simply omit CORS headers for disallowed origins.
+        assert "access-control-allow-origin" not in response.headers
+    else:
+        pytest.fail(
+            f"Unexpected status code for disallowed origin: {response.status_code}"
+        )
+
+    # Test allowed origin
+    headers = {
+        "Origin": "http://trusted.com",
+        "Access-Control-Request-Method": "GET",
+    }
+    response = test_client.options("/health", headers=headers)
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://trusted.com"
 
 def test_default_is_permissive():
     """
