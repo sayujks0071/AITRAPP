@@ -93,11 +93,18 @@ class Settings(BaseSettings):
             List[str]: List of CORS origin URLs
         
         Raises:
-            No exceptions raised - invalid JSON is treated as a single origin string
+            ValueError: If parsed JSON is not a list or contains non-string values
         """
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                parsed = json.loads(v)
+                # Validate that the parsed JSON is a list
+                if not isinstance(parsed, list):
+                    raise ValueError(f"CORS_ORIGINS must be a JSON array, got: {type(parsed).__name__}")
+                # Validate that all items are strings
+                if not all(isinstance(item, str) for item in parsed):
+                    raise ValueError("CORS_ORIGINS must contain only string values")
+                return parsed
             except json.JSONDecodeError:
                 # If it's not valid JSON, treat it as a single origin
                 return [v]
