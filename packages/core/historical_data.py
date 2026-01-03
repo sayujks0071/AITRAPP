@@ -236,7 +236,9 @@ class HistoricalDataLoader:
         """
         bars = []
         
-        for _, row in df.iterrows():
+        # Use to_dict('records') for faster iteration
+        records = df.to_dict('records')
+        for row in records:
             bar = Bar(
                 token=0,  # Will be set by instrument manager
                 timestamp=row['Date'],
@@ -275,7 +277,9 @@ class HistoricalDataLoader:
         """
         ticks = []
         
-        for _, row in df.iterrows():
+        # Use to_dict('records') for faster iteration
+        records = df.to_dict('records')
+        for row in records:
             # Use LTP as last price, fallback to Close
             last_price = row['LTP'] if pd.notna(row['LTP']) else row['Close']
             
