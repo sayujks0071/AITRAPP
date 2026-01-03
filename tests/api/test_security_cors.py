@@ -1,14 +1,15 @@
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
+import sys
 
 
 def test_cors_restrictive_behavior():
     """
     Verify that the actual app uses settings.cors_origins correctly.
     """
-    # Mock the settings before importing the app
-    with patch("packages.core.config.settings") as mock_settings:
+    # Patch the settings at the apps.api.main level to ensure test isolation
+    with patch("apps.api.main.settings") as mock_settings:
         # Set up mock settings with restrictive CORS
         mock_settings.cors_origins = ["http://trusted.com"]
         
@@ -19,8 +20,14 @@ def test_cors_restrictive_behavior():
         
         mock_settings.enable_metrics = False
         
-        # Import app after mocking settings to ensure it uses our mocked values
-        from apps.api.main import app
+        # If the app module is already imported, we need to reload it to pick up the mock
+        if "apps.api.main" in sys.modules:
+            import importlib
+            import apps.api.main
+            importlib.reload(apps.api.main)
+            app = apps.api.main.app
+        else:
+            from apps.api.main import app
         
         test_client = TestClient(app, raise_server_exceptions=False)
 

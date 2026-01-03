@@ -81,7 +81,20 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, v):
-        """Parse CORS origins from JSON string or return as-is if already a list"""
+        """Parse CORS origins from various input formats.
+        
+        Args:
+            v: Input value which can be:
+               - List[str]: Returned as-is
+               - str (JSON array): Parsed using json.loads() (e.g., '["http://a.com","http://b.com"]')
+               - str (single value): Wrapped in a list (e.g., 'http://a.com' -> ['http://a.com'])
+        
+        Returns:
+            List[str]: List of CORS origin URLs
+        
+        Raises:
+            No exceptions raised - invalid JSON is treated as a single origin string
+        """
         if isinstance(v, str):
             try:
                 return json.loads(v)
