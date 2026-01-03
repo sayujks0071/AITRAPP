@@ -96,8 +96,8 @@ def main():
     # Try to open browser automatically if possible
     try:
         webbrowser.open(login_url)
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to open browser automatically: {e}")
 
     # 5. Start Callback Receiver
     request_token = wait_for_callback(CALLBACK_PORT)
