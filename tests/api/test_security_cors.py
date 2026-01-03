@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 def test_cors_restrictive_behavior():
@@ -11,7 +11,12 @@ def test_cors_restrictive_behavior():
     with patch("packages.core.config.settings") as mock_settings:
         # Set up mock settings with restrictive CORS
         mock_settings.cors_origins = ["http://trusted.com"]
-        mock_settings.app_mode.value = "PAPER"
+        
+        # Mock app_mode as an enum-like object
+        mock_app_mode = MagicMock()
+        mock_app_mode.value = "PAPER"
+        mock_settings.app_mode = mock_app_mode
+        
         mock_settings.enable_metrics = False
         
         # Import app after mocking settings to ensure it uses our mocked values

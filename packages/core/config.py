@@ -1,4 +1,5 @@
 """Configuration management using Pydantic"""
+import json
 import os
 from enum import Enum
 from pathlib import Path
@@ -82,7 +83,6 @@ class Settings(BaseSettings):
     def parse_cors_origins(cls, v):
         """Parse CORS origins from JSON string or return as-is if already a list"""
         if isinstance(v, str):
-            import json
             try:
                 return json.loads(v)
             except json.JSONDecodeError:
