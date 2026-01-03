@@ -33,6 +33,14 @@ jobs:
           import sys
           from kiteconnect import KiteConnect
 
+          # Validate required environment variables
+          required_vars = ["KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN"]
+          missing_vars = [var for var in required_vars if not os.environ.get(var)]
+          
+          if missing_vars:
+              print(f"Error: Missing required environment variables: {', '.join(missing_vars)}")
+              sys.exit(1)
+
           try:
               kite = KiteConnect(api_key=os.environ["KITE_API_KEY"])
               kite.set_access_token(os.environ["KITE_ACCESS_TOKEN"])

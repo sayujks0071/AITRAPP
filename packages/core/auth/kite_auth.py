@@ -1,8 +1,7 @@
 """Kite Authentication Module"""
-import datetime
 import os
 import structlog
-from typing import Optional, Dict
+from typing import Optional
 from kiteconnect import KiteConnect, exceptions
 from dotenv import set_key
 
@@ -38,19 +37,15 @@ class KiteAuth:
         except exceptions.TokenException:
             logger.warning("Token expired or invalid")
             return False
-        except Exception as e:
-            # Network errors etc shouldn't invalidate token immediately,
-            # but for safety we might treat as invalid or retry.
-            # Here we assume if it fails it might be network or invalid.
-            # But specific TokenException is the sure sign of expiry.
-            if "token" in str(e).lower() or "unauthorized" in str(e).lower():
-                return False
-            logger.error(f"Error checking session validity: {e}")
-            # If it's a network error, we don't know if token is valid.
-            # Assuming valid to avoid unnecessary re-login on flaky network,
-            # unless we want to be strict.
-            # However, the prompt asks to detect missing/expired token.
+        except exceptions.NetworkException as e:
+            # Network-related errors shouldn't immediately invalidate the token.
+            logger.error(f"Network error while checking session validity: {e}")
+            # Assume token is still valid to avoid unnecessary re-login on flaky networks.
             return True
+        except Exception as e:
+            # Unexpected errors: log and conservatively treat session as invalid
+            logger.error("Unexpected error checking session validity", exc_info=True)
+            return False
 
     def exchange_request_token(self, request_token: str) -> Optional[str]:
         """Exchange request token for access token"""
@@ -65,7 +60,13 @@ class KiteAuth:
     def persist_access_token(self, access_token: str) -> None:
         """Save access token to .env file securely"""
         try:
-            env_file = ".env"
+            # Resolve .env path relative to project root, with optional override
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
+            )
+            default_env_file = os.path.join(project_root, ".env")
+            env_file = os.getenv("ENV_FILE_PATH", default_env_file)
+            
             # Update the current instance
             self.access_token = access_token
             self.kite.set_access_token(access_token)
