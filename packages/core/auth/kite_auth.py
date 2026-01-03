@@ -61,11 +61,10 @@ class KiteAuth:
         """Save access token to .env file securely"""
         try:
             # Resolve .env path relative to project root, with optional override
-            project_root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
-            )
-            default_env_file = os.path.join(project_root, ".env")
-            env_file = os.getenv("ENV_FILE_PATH", default_env_file)
+            from pathlib import Path
+            project_root = Path(__file__).parents[3]
+            default_env_file = project_root / ".env"
+            env_file = os.getenv("ENV_FILE_PATH", str(default_env_file))
             
             # Update the current instance
             self.access_token = access_token
@@ -73,10 +72,6 @@ class KiteAuth:
 
             # Persist to .env
             set_key(env_file, "KITE_ACCESS_TOKEN", access_token)
-
-            # Also update settings singleton if possible, though it's Pydantic
-            # settings.kite_access_token = access_token
-            # (Pydantic BaseSettings are mutable by default but better to rely on env reload)
 
             logger.info("Access token persisted successfully")
         except Exception as e:

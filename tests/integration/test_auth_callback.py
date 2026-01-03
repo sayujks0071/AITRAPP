@@ -73,7 +73,8 @@ def test_callback_server_missing_token():
     # We need to manually stop it by making a valid request
     try:
         requests.get(f"http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}?request_token=cleanup", timeout=1)
-    except:
+    except requests.exceptions.RequestException:
+        # Expected - server may have already shut down
         pass
     
     server_thread.join(timeout=2)
