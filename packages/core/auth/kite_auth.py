@@ -61,9 +61,17 @@ class KiteAuth:
         """Save access token to .env file securely"""
         try:
             # Resolve .env path relative to project root, with optional override
-            project_root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
-            )
+            # Find project root by looking for pyproject.toml
+            current_file = os.path.abspath(__file__)
+            current_dir = os.path.dirname(current_file)
+            
+            # Traverse up until we find pyproject.toml or reach root
+            project_root = current_dir
+            while project_root != os.path.dirname(project_root):  # Not at filesystem root
+                if os.path.exists(os.path.join(project_root, 'pyproject.toml')):
+                    break
+                project_root = os.path.dirname(project_root)
+            
             default_env_file = os.path.join(project_root, ".env")
             env_file = os.getenv("ENV_FILE_PATH", default_env_file)
             
