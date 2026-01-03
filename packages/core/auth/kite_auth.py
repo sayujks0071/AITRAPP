@@ -2,6 +2,7 @@
 import datetime
 import os
 import structlog
+from pathlib import Path
 from typing import Optional, Dict
 from kiteconnect import KiteConnect, exceptions
 from dotenv import set_key
@@ -66,11 +67,9 @@ class KiteAuth:
         """Save access token to .env file securely"""
         try:
             # Resolve .env path relative to project root, with optional override
-            project_root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
-            )
-            default_env_file = os.path.join(project_root, ".env")
-            env_file = os.getenv("ENV_FILE_PATH", default_env_file)
+            project_root = Path(__file__).parent.parent.parent
+            default_env_file = project_root / ".env"
+            env_file = os.getenv("ENV_FILE_PATH", str(default_env_file))
             
             # Update the current instance
             self.access_token = access_token

@@ -71,7 +71,8 @@ def test_callback_server_missing_token():
     # We need to send a valid request to trigger shutdown
     try:
         requests.get(f"http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}?request_token=shutdown_token", timeout=1)
-    except:
+    except (requests.RequestException, ConnectionError) as e:
+        # Server may already be shutting down
         pass
 
     # Wait for server to shut down
