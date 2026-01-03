@@ -28,6 +28,17 @@ jobs:
           KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
           PYTHONPATH: .
         run: |
+          # Validate required environment variables
+          if [ -z "$KITE_API_KEY" ] || [ -z "$KITE_API_SECRET" ]; then
+            echo "Error: KITE_API_KEY or KITE_API_SECRET is not set"
+            exit 1
+          fi
+          
+          if [ -z "$KITE_ACCESS_TOKEN" ]; then
+            echo "Warning: KITE_ACCESS_TOKEN is not set"
+            exit 1
+          fi
+          
           # Check session using the core auth module
           python -c "from packages.core.auth.kite_auth import KiteAuth; import sys; sys.exit(0 if KiteAuth().is_session_valid() else 1)"
         continue-on-error: true

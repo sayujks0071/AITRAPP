@@ -47,16 +47,20 @@ class CallbackHandler(http.server.SimpleHTTPRequestHandler):
                 threading.Thread(target=self.server.shutdown).start()
             else:
                 self.send_response(400)
+                self.send_header('Content-type', 'text/plain; charset=utf-8')
+                self.end_headers()
                 self.wfile.write(b"Missing request_token")
         else:
             self.send_response(404)
+            self.send_header('Content-type', 'text/plain; charset=utf-8')
+            self.end_headers()
             self.wfile.write(b"Not Found")
 
     def log_message(self, format, *args):
         # Suppress default logging
         pass
 
-def wait_for_callback(port: int = 8080) -> Optional[str]:
+def wait_for_callback(port: int = CALLBACK_PORT) -> Optional[str]:
     """Starts a local server and waits for the callback with request_token"""
     CallbackHandler.request_token = None
 
@@ -97,8 +101,8 @@ def main():
     # Try to open browser automatically if possible
     try:
         webbrowser.open(login_url)
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to open browser automatically: {e}")
 
     # 5. Start Callback Receiver
     request_token = wait_for_callback(CALLBACK_PORT)
