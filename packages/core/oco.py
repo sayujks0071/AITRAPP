@@ -85,7 +85,7 @@ class OCOManager:
             client_order_id=sl_cid,
             symbol=entry_order.symbol,
             instrument_token=instrument_token,
-            side=entry_order.side,  # Opposite side for stop
+            side=OrderSideEnum.SELL if entry_order.side == OrderSideEnum.BUY else OrderSideEnum.BUY,
             qty=qty,
             order_type=OrderTypeEnum.SLM,  # Stop Loss Market
             trigger_price=stop_price,
@@ -102,7 +102,7 @@ class OCOManager:
                 client_order_id=tp1_cid,
                 symbol=entry_order.symbol,
                 instrument_token=instrument_token,
-                side=entry_order.side,  # Opposite side for TP
+                side=OrderSideEnum.SELL if entry_order.side == OrderSideEnum.BUY else OrderSideEnum.BUY,
                 qty=int(qty * 0.5) if tp2_price else qty,  # Partial if TP2 exists
                 order_type=OrderTypeEnum.LIMIT,
                 price=tp1_price,
@@ -119,7 +119,7 @@ class OCOManager:
                 client_order_id=tp2_cid,
                 symbol=entry_order.symbol,
                 instrument_token=instrument_token,
-                side=entry_order.side,  # Opposite side for TP
+                side=OrderSideEnum.SELL if entry_order.side == OrderSideEnum.BUY else OrderSideEnum.BUY,
                 qty=qty - (tp1_order.qty if tp1_order else 0),
                 order_type=OrderTypeEnum.LIMIT,
                 price=tp2_price,
@@ -172,7 +172,7 @@ class OCOManager:
                     broker_order_id = self.kite_client.place_order(
                         exchange=group.stop_order.symbol.split(":")[0] if ":" in group.stop_order.symbol else "NFO",
                         tradingsymbol=group.stop_order.symbol,
-                        transaction_type="SELL" if group.stop_order.side == OrderSideEnum.BUY else "BUY",
+                        transaction_type=group.stop_order.side.value,
                         quantity=group.stop_order.qty,
                         order_type="SL-M",
                         trigger_price=group.stop_order.trigger_price,
@@ -202,7 +202,7 @@ class OCOManager:
                     broker_order_id = self.kite_client.place_order(
                         exchange=group.tp1_order.symbol.split(":")[0] if ":" in group.tp1_order.symbol else "NFO",
                         tradingsymbol=group.tp1_order.symbol,
-                        transaction_type="SELL" if group.tp1_order.side == OrderSideEnum.BUY else "BUY",
+                        transaction_type=group.tp1_order.side.value,
                         quantity=group.tp1_order.qty,
                         order_type="LIMIT",
                         price=group.tp1_order.price,
@@ -223,7 +223,7 @@ class OCOManager:
                     broker_order_id = self.kite_client.place_order(
                         exchange=group.tp2_order.symbol.split(":")[0] if ":" in group.tp2_order.symbol else "NFO",
                         tradingsymbol=group.tp2_order.symbol,
-                        transaction_type="SELL" if group.tp2_order.side == OrderSideEnum.BUY else "BUY",
+                        transaction_type=group.tp2_order.side.value,
                         quantity=group.tp2_order.qty,
                         order_type="LIMIT",
                         price=group.tp2_order.price,
