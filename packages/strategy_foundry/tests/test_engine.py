@@ -1,68 +1,51 @@
-
-import pytest
+import unittest
 import pandas as pd
-import numpy as np
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.factory.generator import StrategyCandidate
 
-def test_engine_basic():
-    # Mock data
-    dates = pd.date_range("2023-01-01", periods=100)
-    data = pd.DataFrame({
-        "Open": np.linspace(100, 110, 100),
-        "High": np.linspace(101, 111, 100),
-        "Low": np.linspace(99, 109, 100),
-        "Close": np.linspace(100, 110, 100),
-        "Volume": 1000
-    }, index=dates)
+class TestEngine(unittest.TestCase):
+    def test_run_simple(self):
+        # Create dummy data
+        dates = pd.date_range(start='2023-01-01', periods=100, freq='15T')
+        df = pd.DataFrame({
+            'open': [100] * 100,
+            'high': [105] * 100,
+            'low': [95] * 100,
+            'close': [100] * 100,
+            'volume': [1000] * 100,
+            # Indicators
+            'ema_10': [100] * 100,
+            'ema_20': [99] * 100, # Fast > Slow always
+            'ema_50': [98] * 100,
+            'ema_200': [90] * 100,
+            'atr_14': [1] * 100,
+            'rsi_14': [50] * 100,
+            'adx_14': [25] * 100
+        }, index=dates)
 
-    # Mock candidate
-    candidate = StrategyCandidate(
-        id="test",
-        entry_rules=[],
-        exit_rules=[],
-        params={}
-    )
+        # Candidate
+        cand = StrategyCandidate(
+            id="test",
+            entry_rules=[{"type": "ema_cross", "fast": 10, "slow": 20}],
+            exit_rules=[{"type": "stop_loss_atr", "multiplier": 1.0}],
+            filters=[],
+            timeframe="15m",
+            instrument="NIFTY"
+        )
 
-    engine = BacktestEngine(data)
-    res = engine.run(candidate)
+        engine = BacktestEngine(df, cand)
+        res = engine.run()
 
-    assert "metrics" in res
-    assert "trades" in res
-    assert "equity_curve" in res
-    assert "current_position" in res
+        self.assertIn("trades", res)
+        # Since Fast > Slow always, and logic looks for crossover (Fast > Slow AND PrevFast <= PrevSlow),
+        # we need to simulate a crossover.
 
-def test_engine_with_trade():
-    dates = pd.date_range("2023-01-01", periods=50)
-    data = pd.DataFrame({
-        "Open": [100]*50,
-        "High": [105]*50,
-        "Low": [95]*50,
-        "Close": [100]*50,
-        "Volume": 1000
-    }, index=dates)
+        # Modify data to have crossover
+        df.iloc[0:10, df.columns.get_loc('ema_10')] = 90 # Fast < Slow
+        df.iloc[10:, df.columns.get_loc('ema_10')] = 110 # Fast > Slow
 
-    # Add indicators manually or rely on adapter defaults (which might fail if calc needs meaningful data)
-    # The adapter calculates EMA/RSI. RSI needs price changes.
-    # Let's make price move.
-    data["Close"] = np.linspace(100, 200, 50)
-    data["Open"] = data["Close"]
-    data["High"] = data["Close"] + 1
-    data["Low"] = data["Close"] - 1
+        engine = BacktestEngine(df, cand)
+        res = engine.run()
 
-    # Strategy: EMA Cross
-    # Fast (10) > Slow (20)
-    # Price is increasing, so Fast EMA > Slow EMA eventually.
-
-    candidate = StrategyCandidate(
-        id="test_cross",
-        entry_rules=[{"type": "ema_cross_above", "fast": "fast", "slow": "slow"}],
-        exit_rules=[{"type": "ema_cross_below", "fast": "fast", "slow": "slow"}],
-        params={"fast": 10, "slow": 20}
-    )
-
-    engine = BacktestEngine(data)
-    res = engine.run(candidate)
-
-    # Should have some trades or at least metrics calculated
-    assert res["metrics"]["trades"] >= 0
+        # Should have at least one trade
+        self.assertTrue(len(res['trades']) > 0)

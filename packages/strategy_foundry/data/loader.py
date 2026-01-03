@@ -1,174 +1,81 @@
-"""
-Data loader for StrategyFoundry.
-Fetches daily history for NIFTY (^NSEI) and SENSEX (^BSESN) from Yahoo Finance.
-Caches data in CSV format to avoid redundant downloads.
-"""
-import os
-import csv
-import io
-import time
-import requests
-import logging
-from datetime import datetime, timedelta
 import pandas as pd
+import structlog
 from pathlib import Path
+from datetime import datetime, timedelta
+import os
+from typing import Optional, Dict
+from packages.strategy_foundry.data.sources import download_yahoo_ohlcv
+from packages.strategy_foundry.configs.instrument_map import map_instrument
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
-CACHE_DIR = Path(__file__).parent / "cache"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR = Path("packages/strategy_foundry/data/cache")
 
-# Map instrument names to Yahoo tickers
-TICKERS = {
-    "NIFTY": "^NSEI",
-    "SENSEX": "^BSESN"
-}
+class DataLoader:
+    def __init__(self, cache_dir: Path = CACHE_DIR):
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-# Standard column names
-COLUMNS = ["Date", "Open", "High", "Low", "Close", "Adj Close", "Volume"]
+    def get_data(self, symbol: str, timeframe: str, refresh: bool = False) -> pd.DataFrame:
+        """
+        Get OHLCV data for a symbol and timeframe.
 
-def get_data_path(instrument: str) -> Path:
-    """Get path to cached CSV file."""
-    return CACHE_DIR / f"{instrument}.csv"
+        Args:
+            symbol: Symbol identifier (e.g. NIFTY)
+            timeframe: 5m, 15m, 1d
+            refresh: If True, force download
 
-def fetch_yahoo_history(ticker: str, start_date: str = None) -> str:
-    """
-    Fetch historical data from Yahoo Finance as CSV string.
-    Uses period1/period2 parameters.
-    """
-    if start_date:
-        start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
-    else:
-        # Default to 5 years ago
-        start_ts = int((datetime.now() - timedelta(days=5*365)).timestamp())
+        Returns:
+            DataFrame with Open, High, Low, Close, Volume
+        """
+        # Map symbol to Yahoo symbol
+        # For now, assume map_instrument logic or direct mapping
+        # Let's read the map
 
-    end_ts = int(datetime.now().timestamp())
+        yahoo_symbol = self._get_yahoo_symbol(symbol)
+        if not yahoo_symbol:
+            logger.error(f"No Yahoo symbol found for {symbol}")
+            return pd.DataFrame()
 
-    # URL construction
-    # Note: Yahoo changed their API, but query1.finance.yahoo.com/v7/finance/download/ usually works with cookies
-    # or simple requests often work for download endpoints if not heavily blocked.
-    # Fallback to query2 if query1 fails.
+        cache_file = self.cache_dir / f"{symbol}_{timeframe}.csv"
 
-    # A simple reliable way for public tickers often involves setting a User-Agent
+        if not refresh and cache_file.exists():
+            # Check age
+            mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
+            age = datetime.now() - mtime
+            # For intraday, if cache is older than 15 mins during market hours, refresh?
+            # Simplified: just use cache unless refresh=True
+            logger.info(f"Loading {symbol} {timeframe} from cache")
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            return df
 
-    url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}"
-    params = {
-        "period1": start_ts,
-        "period2": end_ts,
-        "interval": "1d",
-        "events": "history",
-        "includeAdjustedClose": "true"
-    }
+        # Download
+        logger.info(f"Downloading {symbol} {timeframe}")
+        period = "max"
+        if timeframe in ["5m", "15m"]:
+            period = "59d" # Yahoo limitation for intraday
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-    }
+        df = download_yahoo_ohlcv(yahoo_symbol, interval=timeframe, period=period)
 
-    response = requests.get(url, params=params, headers=headers)
-    response.raise_for_status()
+        if df is not None and not df.empty:
+            df.to_csv(cache_file)
+            return df
 
-    return response.text
+        if cache_file.exists():
+             logger.warning(f"Download failed, using stale cache for {symbol}")
+             return pd.read_csv(cache_file, index_col=0, parse_dates=True)
 
-def normalize_data(csv_text: str) -> pd.DataFrame:
-    """
-    Parse CSV text, normalize columns and timezone.
-    """
-    df = pd.read_csv(io.StringIO(csv_text))
+        return pd.DataFrame()
 
-    # Ensure columns exist
-    for col in COLUMNS:
-        if col not in df.columns:
-            # Maybe differnet case?
-            found = False
-            for c in df.columns:
-                if c.lower() == col.lower().replace(" ", ""):
-                    df.rename(columns={c: col}, inplace=True)
-                    found = True
-                    break
-            if not found:
-                # If Volume is missing (some indices), fill 0
-                if col == "Volume":
-                    df["Volume"] = 0
-                else:
-                    raise ValueError(f"Missing column {col} in data")
-
-    # Parse dates
-    df["Date"] = pd.to_datetime(df["Date"])
-
-    # Sort
-    df.sort_values("Date", inplace=True)
-
-    # Drop rows with NaN in OHLC
-    df.dropna(subset=["Open", "High", "Low", "Close"], inplace=True)
-
-    # Localize to IST
-    # Yahoo dates are usually naive, effectively market local time (IST for NSE/BSE)
-    # We will localize to Asia/Kolkata
-    df["Date"] = df["Date"].dt.tz_localize("Asia/Kolkata", ambiguous='NaT', nonexistent='shift_forward')
-
-    # Set index
-    df.set_index("Date", inplace=True)
-
-    return df
-
-def load_instrument_data(instrument: str, force_download: bool = False) -> pd.DataFrame:
-    """
-    Load data for instrument.
-    1. Check cache.
-    2. If missing or stale (older than 18 hours) or force_download, fetch.
-    3. Return DataFrame.
-    """
-    if instrument not in TICKERS:
-        raise ValueError(f"Unknown instrument: {instrument}")
-
-    ticker = TICKERS[instrument]
-    path = get_data_path(instrument)
-
-    needs_download = force_download
-
-    if not path.exists():
-        needs_download = True
-    else:
-        # Check if stale (file modified > 18 hours ago)
-        mtime = datetime.fromtimestamp(path.stat().st_mtime)
-        if datetime.now() - mtime > timedelta(hours=18):
-            needs_download = True
-
-    if needs_download:
+    def _get_yahoo_symbol(self, symbol: str) -> Optional[str]:
+        # Simple hardcoded map or load from yaml
+        # Loading from yaml every time might be slow, but it's fine for now
+        # Ideally we inject config
+        import yaml
         try:
-            logger.info(f"Downloading data for {instrument} ({ticker})...")
-            csv_text = fetch_yahoo_history(ticker)
-            # Validate before saving
-            df = normalize_data(csv_text)
+            with open("packages/strategy_foundry/configs/instrument_map.yaml") as f:
+                config = yaml.safe_load(f)
+                return config.get("research", {}).get(symbol)
+        except Exception:
+            return None
 
-            if df.empty:
-                 logger.warning(f"Downloaded data for {instrument} is empty.")
-            else:
-                # Save to cache
-                df.to_csv(path)
-                logger.info(f"Saved {len(df)} rows to {path}")
-                return df
-        except Exception as e:
-            logger.error(f"Failed to download {instrument}: {e}")
-            if not path.exists():
-                raise
-            logger.info("Falling back to cached data.")
-
-    # Load from cache
-    logger.info(f"Loading {instrument} from cache...")
-    df = pd.read_csv(path, index_col="Date", parse_dates=True)
-
-    # Ensure index is timezone aware if read from CSV (CSV loses tz usually)
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("Asia/Kolkata")
-
-    return df
-
-if __name__ == "__main__":
-    # Test
-    logging.basicConfig(level=logging.INFO)
-    try:
-        df = load_instrument_data("NIFTY")
-        print(df.tail())
-    except Exception as e:
-        print(f"Error: {e}")

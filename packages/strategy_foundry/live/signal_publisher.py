@@ -1,55 +1,46 @@
-"""
-Live Signal Publisher.
-"""
 import json
-import logging
-from datetime import datetime
 from pathlib import Path
-from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
+from datetime import datetime
+import structlog
+from packages.strategy_foundry.configs.instrument_map import map_instrument
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 class SignalPublisher:
     def __init__(self, results_dir: Path):
         self.results_dir = results_dir
-        self.market = MarketHoursAdapter()
 
-    def publish(self, champion, signal: int, instrument: str, metrics: dict):
+    def publish(self, champion, signal: int, reason: str = ""):
         """
-        Publish signal if market is open and safe.
+        Publish signal JSON.
         """
-        out_file = self.results_dir / "live_signal.json"
+        now = datetime.now()
 
-        status = "OK"
-        reason = ""
+        # Check eligibility (basic)
+        # Should be checked by caller, but we enforce formatting here.
 
-        # 1. Market Hours Check
-        if not self.market.is_market_open():
+        if signal == 0:
             status = "SKIPPED"
-            reason = "Market closed"
+            reason = reason or "Flat/No Signal"
+        else:
+            status = "OK"
 
-        # 2. Champion Validity Check (re-verify basic gates)
-        # Assuming champion passed gates before calling publish, but double check
-        if metrics.get("max_dd", 1.0) > 0.25:
-            status = "SKIPPED"
-            reason = "Champion MaxDD too high"
-
-        # Construct payload
-        payload = {
-            "timestamp_ist": datetime.now().isoformat(),
-            "champion_id": champion.id,
-            "instrument": instrument,
+        data = {
+            "timestamp_ist": str(now),
+            "champion_id": champion['candidate'].id,
+            "timeframe": champion['candidate'].timeframe,
+            "instrument": champion['candidate'].instrument,
+            "proxy_symbol_paper": map_instrument(champion['candidate'].instrument, "paper_proxy"),
+            "proxy_symbol_live": map_instrument(champion['candidate'].instrument, "live_proxy"),
             "signal": signal,
-            "rule_summary": str(champion.entry_rules) + " / " + str(champion.exit_rules),
-            "risk": {
-                "stop_loss_atr": champion.params.get("stop_loss_atr"),
-                "max_hold": champion.params.get("max_bars_hold")
-            },
+            "rule_summary": str(champion['candidate'].entry_rules),
+            "risk": {"stop": "ATR", "flat_by": "15:25"},
             "status": status,
             "reason": reason
         }
 
-        with open(out_file, "w") as f:
-            json.dump(payload, f, indent=2)
+        outfile = self.results_dir / "live_signal.json"
+        with open(outfile, 'w') as f:
+            json.dump(data, f, indent=2)
 
-        logger.info(f"Published signal: {status} {reason}")
+        logger.info(f"Published signal: {status} {signal}")
