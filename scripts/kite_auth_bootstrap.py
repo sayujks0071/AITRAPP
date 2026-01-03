@@ -5,7 +5,6 @@ Runs daily at 8:00 AM to ensure valid Kite Connect session.
 """
 import sys
 import os
-import time
 import webbrowser
 import structlog
 import http.server
