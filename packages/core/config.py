@@ -1,4 +1,5 @@
 """Configuration management using Pydantic"""
+import json
 import os
 from enum import Enum
 from pathlib import Path
@@ -76,6 +77,38 @@ class Settings(BaseSettings):
     api_workers: int = Field(default=4, alias="API_WORKERS")
     api_secret_key: str = Field(alias="API_SECRET_KEY")
     cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
+    
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Parse CORS origins from various input formats.
+        
+        Args:
+            v: Input value which can be:
+               - List[str]: Returned as-is
+               - str (JSON array): Parsed using json.loads() (e.g., '["http://a.com","http://b.com"]')
+               - str (single value): Wrapped in a list (e.g., 'http://a.com' -> ['http://a.com'])
+        
+        Returns:
+            List[str]: List of CORS origin URLs
+        
+        Raises:
+            ValueError: If parsed JSON is not a list or contains non-string values
+        """
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                # Validate that the parsed JSON is a list
+                if not isinstance(parsed, list):
+                    raise ValueError(f"CORS_ORIGINS must be a JSON array, got: {type(parsed).__name__}")
+                # Validate that all items are strings
+                if not all(isinstance(item, str) for item in parsed):
+                    raise ValueError("CORS_ORIGINS must contain only string values")
+                return parsed
+            except json.JSONDecodeError:
+                # If it's not valid JSON, treat it as a single origin
+                return [v]
+        return v
     
     # WebSocket
     ws_ping_interval: int = Field(default=30, alias="WS_PING_INTERVAL")
