@@ -87,6 +87,7 @@ class HistoricalDataLoader:
             df = pd.read_csv(
                 filepath,
                 skipinitialspace=True,
+                na_values=['-']
             )
             
             # Clean column names
