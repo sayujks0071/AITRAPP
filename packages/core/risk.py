@@ -317,25 +317,48 @@ class RiskManager:
             fees += self.config.fees_per_order * 2  # Entry + Exit
         elif instrument.is_future or instrument.is_option:
             fees += self.config.fees_per_order * 2
-            if instrument.is_option:
-                fees += self.config.fees_per_option_leg * quantity
+            # Note: Unlike the previous implementation, fees_per_option_leg is not added here
+            # as brokerage is usually flat per order for F&O. If multi-leg order costs are needed,
+            # they should be modeled as multiple orders.
+        # Tax Rates (2024-2025)
+        # TODO: Move to config or constants
+        STT_EQUITY_INTRADAY_SELL = 0.00025  # 0.025%
+        STT_FUTURES_SELL = 0.000125         # 0.0125%
+        STT_OPTIONS_SELL = 0.000625         # 0.0625% (on premium)
         
-        # STT: 0.025% on sell side for equity delivery, 0.05% for futures
-        if instrument.is_equity:
-            fees += (exit_price * quantity) * 0.00025
-        elif instrument.is_future:
-            fees += turnover * 0.0001
-        elif instrument.is_option:
-            fees += (exit_price * quantity) * 0.00005
-        
-        # Transaction charges: ~0.00325% for NSE equity, ~0.002% for F&O
-        if instrument.exchange in ["NSE", "BSE"]:
-            fees += turnover * 0.0000325
+        TXN_NSE_EQUITY = 0.0000325          # 0.00325%
+        TXN_NSE_FUTURES = 0.000019          # 0.0019%
+        TXN_NSE_OPTIONS = 0.0005            # 0.05% (on premium)
+
+        # Exchange Transaction Charges
+        txn_charges = 0.0
+        if instrument.exchange in ["NSE", "BSE", "NFO"]:
+            if instrument.is_equity:
+                txn_charges = turnover * TXN_NSE_EQUITY
+            elif instrument.is_future:
+                txn_charges = turnover * TXN_NSE_FUTURES
+            elif instrument.is_option:
+                txn_charges = turnover * TXN_NSE_OPTIONS
         else:
-            fees += turnover * 0.00002
+            txn_charges = turnover * 0.00002  # Default fallback
         
+        fees += txn_charges
+
         # GST on brokerage and transaction charges: 18%
+        # Note: GST is NOT applied on STT or Stamp Duty
         fees *= 1.18
+
+        # STT Calculation
+        stt = 0.0
+        if instrument.is_equity:
+            # Assuming Intraday for now as safe default. For delivery it's higher (0.1% on both sides).
+            stt = (exit_price * quantity) * STT_EQUITY_INTRADAY_SELL
+        elif instrument.is_future:
+            stt = (exit_price * quantity) * STT_FUTURES_SELL
+        elif instrument.is_option:
+            stt = (exit_price * quantity) * STT_OPTIONS_SELL
+
+        fees += stt
         
         # SEBI charges: Rs 10 per crore
         fees += (turnover / 10000000) * 10

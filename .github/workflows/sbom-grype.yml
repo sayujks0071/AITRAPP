@@ -36,7 +36,7 @@ jobs:
       
       # Generate CycloneDX JSON SBOM with Syft
       - name: Generate SBOM (CycloneDX JSON)
-        uses: anchore/sbom-action@fc46ea1d053ffe3cfb3b279e0cbc5d0e47f6c653  # v0.18.0
+        uses: anchore/sbom-action@v0.21.0
         with:
           path: .
           format: cyclonedx-json

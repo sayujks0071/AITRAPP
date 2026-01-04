@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+import numpy as np
 import pandas as pd
 import structlog
 
@@ -234,23 +235,44 @@ class HistoricalDataLoader:
         Returns:
             List of Bar objects
         """
-        bars = []
+        if df.empty:
+            return []
+
+        # Extract columns as numpy arrays
+        # Note: dates need to be converted to python datetime/timestamp for compatibility
+        dates = df['Date'].dt.to_pydatetime()
+        opens = df['Open'].to_numpy()
+        highs = df['High'].to_numpy()
+        lows = df['Low'].to_numpy()
+        closes = df['Close'].to_numpy()
         
-        for _, row in df.iterrows():
-            bar = Bar(
-                token=0,  # Will be set by instrument manager
-                timestamp=row['Date'],
-                open=row['Open'],
-                high=row['High'],
-                low=row['Low'],
-                close=row['Close'],
-                volume=int(row['No. of contracts']) if pd.notna(row['No. of contracts']) else 0,
-                oi=int(row['Open Int']) if pd.notna(row['Open Int']) else None
-            )
+        # Handle volume and OI with fallbacks
+        if 'No. of contracts' in df.columns:
+            volumes = df['No. of contracts'].fillna(0).astype(int).to_numpy()
+        else:
+            volumes = np.zeros(len(df), dtype=int)
             
-            bars.append(bar)
-        
-        return bars
+        if 'Open Int' in df.columns:
+            ois = df['Open Int'].where(pd.notna(df['Open Int']), None).to_numpy()
+        else:
+            ois = np.full(len(df), None)
+
+        # Use list comprehension for faster object creation
+        # token is 0 (set later)
+        # Explicitly cast numpy types to python types (int, float) for JSON serialization safety
+        return [
+            Bar(
+                token=0,
+                timestamp=ts,
+                open=float(o),
+                high=float(h),
+                low=float(l),
+                close=float(c),
+                volume=int(v),
+                oi=int(oi) if oi is not None else None
+            )
+            for ts, o, h, l, c, v, oi in zip(dates, opens, highs, lows, closes, volumes, ois)
+        ]
     
     def convert_to_ticks(
         self,
@@ -273,28 +295,59 @@ class HistoricalDataLoader:
         Returns:
             List of Tick objects
         """
-        ticks = []
+        if df.empty:
+            return []
+
+        # Extract columns
+        dates = df['Date'].dt.to_pydatetime()
+        opens = df['Open'].to_numpy()
+        highs = df['High'].to_numpy()
+        lows = df['Low'].to_numpy()
+        closes = df['Close'].to_numpy()
         
-        for _, row in df.iterrows():
-            # Use LTP as last price, fallback to Close
-            last_price = row['LTP'] if pd.notna(row['LTP']) else row['Close']
-            
-            tick = Tick(
-                token=0,  # Will be set by instrument manager
-                timestamp=row['Date'],
-                last_price=last_price,
+        # LTP with fallback to Close
+        if 'LTP' in df.columns:
+            # Use where to handle NaNs in LTP
+            ltps = df['LTP'].to_numpy()
+            last_prices = np.where(pd.notna(ltps), ltps, closes)
+        else:
+            last_prices = closes
+
+        # Volume
+        if 'No. of contracts' in df.columns:
+            volumes = df['No. of contracts'].fillna(0).astype(int).to_numpy()
+        else:
+            volumes = np.zeros(len(df), dtype=int)
+
+        # OI
+        if 'Open Int' in df.columns:
+            ois = df['Open Int'].fillna(0).astype(int).to_numpy()
+        else:
+            ois = np.zeros(len(df), dtype=int)
+
+        # Create ticks
+        # Explicitly cast numpy types to python types (int, float) for JSON serialization safety
+        return [
+            Tick(
+                token=0,
+                timestamp=ts,
+                last_price=float(lp),
                 last_quantity=0,
-                volume=int(row['No. of contracts']) if pd.notna(row['No. of contracts']) else 0,
-                open=row['Open'],
-                high=row['High'],
-                low=row['Low'],
-                close=row['Close'],
-                oi=int(row['Open Int']) if pd.notna(row['Open Int']) else 0
+                volume=int(v),
+                bid=0.0,  # Historical data doesn't have bid/ask
+                ask=0.0,
+                bid_quantity=0,
+                ask_quantity=0,
+                open=float(o),
+                high=float(h),
+                low=float(l),
+                close=float(c),
+                oi=int(oi),
+                oi_day_high=0,
+                oi_day_low=0
             )
-            
-            ticks.append(tick)
-        
-        return ticks
+            for ts, lp, v, o, h, l, c, oi in zip(dates, last_prices, volumes, opens, highs, lows, closes, ois)
+        ]
     
     def get_atm_strikes(
         self,
