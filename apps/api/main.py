@@ -19,6 +19,7 @@ from packages.storage.database import SessionLocal
 from pydantic import BaseModel
 
 from packages.core.config import app_config, settings
+from apps.api.auth import APIKeyMiddleware
 from packages.core.execution import ExecutionEngine
 from packages.core.exits import ExitManager, ExitSignal
 from packages.core.instruments import InstrumentManager
@@ -337,6 +338,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add API Key Authentication
+app.add_middleware(APIKeyMiddleware)
 
 # Mount Prometheus metrics
 if settings.enable_metrics:
