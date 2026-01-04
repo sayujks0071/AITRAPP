@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Optional
+import json
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -330,9 +331,15 @@ app = FastAPI(
 )
 
 # Add CORS
+try:
+    origins = json.loads(settings.cors_origins)
+except json.JSONDecodeError:
+    logger.warning("Invalid CORS_ORIGINS format, defaulting to ['*']")
+    origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure properly for production
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -345,8 +352,13 @@ if settings.enable_metrics:
 
 # Include debug routers
 from apps.api import debug, debug_supervisor
+from apps.api.auth import APIKeyMiddleware
+
 app.include_router(debug.router, tags=["debug"])
 app.include_router(debug_supervisor.router, tags=["debug"])
+
+# Add API Key Authentication
+app.add_middleware(APIKeyMiddleware)
 
 
 # ===== API Models =====

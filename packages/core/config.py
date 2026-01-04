@@ -75,7 +75,8 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="API_PORT")
     api_workers: int = Field(default=4, alias="API_WORKERS")
     api_secret_key: str = Field(alias="API_SECRET_KEY")
-    
+    cors_origins: str = Field(default='["*"]', alias="CORS_ORIGINS")
+
     # WebSocket
     ws_ping_interval: int = Field(default=30, alias="WS_PING_INTERVAL")
     ws_reconnect_delay: int = Field(default=5, alias="WS_RECONNECT_DELAY")
