@@ -8,7 +8,7 @@
 - Redis is being set up
 
 ⚠️ **Need to do:**
-1. Get Kite Access Token
+1. Get Kite Access Token (Automated!)
 2. Install Python 3.11+ (or use existing)
 3. Install dependencies
 4. Run database migrations
@@ -18,38 +18,21 @@
 
 ## Step 1: Get Kite Access Token
 
-You need to generate an access token from Kite Connect. Here are two ways:
+**Recommended Method: Automated Bootstrap**
 
-### Option A: Using Kite Connect Login (Recommended)
+We have a new automated script that opens the browser, captures the token, and updates your `.env` file automatically.
 
-1. Visit: https://kite.trade/connect/login?api_key=nhe2vo0afks02ojs&v=3
-2. Login with your Zerodha credentials
-3. You'll be redirected to: `http://localhost:8080/callback?request_token=XXXXX&action=login&status=success`
-4. Copy the `request_token` from the URL
-5. Run this command to generate access token:
+1. Run the bootstrap script:
+   ```bash
+   python3 scripts/kite_auth_bootstrap.py
+   ```
+   *Follow the browser prompt to login.*
 
-```bash
-cd /Users/mac/AITRAPP
-python3 -c "
-from kiteconnect import KiteConnect
-import sys
+2. That's it! Your `.env` file is now updated.
 
-api_key = 'nhe2vo0afks02ojs'
-api_secret = 'cs82nkkdvin37nrydnyou6cwn2b8zojl'
+**Legacy Method (Manual):**
 
-# Replace YOUR_REQUEST_TOKEN with the token from URL
-request_token = input('Paste request_token from URL: ')
-
-kite = KiteConnect(api_key=api_key)
-data = kite.generate_session(request_token, api_secret=api_secret)
-
-print(f'\n✅ Access Token: {data[\"access_token\"]}')
-print(f'✅ User ID: {data[\"user_id\"]}')
-print(f'\nAdd these to your .env file:')
-print(f'KITE_ACCESS_TOKEN={data[\"access_token\"]}')
-print(f'KITE_USER_ID={data[\"user_id\"]}')
-"
-```
+If the script fails, refer to `GET_KITE_TOKEN.md` for the manual copy-paste method.
 
 ### Option B: Using MCP Server (If Already Authenticated)
 
@@ -63,18 +46,9 @@ cat kite-mcp-server/.env | grep ACCESS_TOKEN
 
 ## Step 2: Update .env File
 
-Edit `.env` and add your access token and user ID:
+*Skipped if you used the bootstrap script above!*
 
-```bash
-nano .env
-# Or use your preferred editor
-```
-
-Update these lines:
-```
-KITE_ACCESS_TOKEN=your_actual_access_token_here
-KITE_USER_ID=your_actual_user_id_here
-```
+Otherwise, edit `.env` and add your access token and user ID manually.
 
 ---
 
@@ -196,4 +170,3 @@ Once the app is running:
 - `FAST_FAQ.md` - Quick diagnostics
 - `QUICKSTART.md` - Detailed setup guide
 - `README.md` - Full documentation
-
