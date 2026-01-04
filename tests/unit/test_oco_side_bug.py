@@ -128,8 +128,7 @@ class TestOCOSideBug:
         # Call on_entry_fill to place child orders
         oco_manager.on_entry_fill(group_id)
 
-        # Verify that place_order was called with correct transaction_type
-        # For BUY entry, stop and TP should be SELL
+        # Verify that place_order was called with correct transaction_type (SELL for BUY entry)
         assert kite_client.place_order.call_count == 2  # Stop and TP1
         
         # Check first call (stop order) - should use SELL
