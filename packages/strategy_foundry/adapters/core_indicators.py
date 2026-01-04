@@ -1,144 +1,129 @@
-"""
-Adapter for core indicators.
-"""
-from typing import Optional
 import pandas as pd
 import numpy as np
-import structlog
-from packages.core.indicators import IndicatorCalculator
 
-logger = structlog.get_logger(__name__)
+def calculate_ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False).mean()
 
-class IndicatorsAdapter:
-    """
-    Wraps packages.core.indicators.IndicatorCalculator to provide a consistent interface
-    for StrategyFoundry.
-    """
+def calculate_sma(series: pd.Series, period: int) -> pd.Series:
+    return series.rolling(window=period).mean()
 
-    @staticmethod
-    def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calculates all standard indicators used by the foundry.
-        Mutates the dataframe.
-        """
-        # StrategyFoundry uses column names like 'ema_10', 'rsi_14'.
-        # Core IndicatorCalculator computes a dictionary of LATEST values usually,
-        # but looking at its methods like _ema, _rsi, they return scalar (latest).
-        # WAIT. The core implementation of `compute_all` returns `float` (latest value).
-        # But the internal methods like `_ema` use `rolling` so they compute the whole series first.
-        # However, `IndicatorCalculator` seems designed to return ONLY the latest snapshot for live trading?
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
-        # Checking `_ema` implementation in core:
-        # ema = series.ewm(...).mean()
-        # return float(ema.iloc[-1])
+def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
 
-        # This is bad for backtesting. We need the Series.
-        # We cannot use IndicatorCalculator.compute_all directly for backtesting history.
-        # We must re-implement vectorised calculation here or modify core to return series.
-        # Since I cannot easily change core signature without risk,
-        # and "Adapter" implies adapting, I will re-implement using standard pandas
-        # OR see if I can use the private methods of IndicatorCalculator if they return series?
-        # No, they return float.
+    up_move = high - high.shift()
+    down_move = low.shift() - low
 
-        # So I have to implement the indicators myself here using pandas,
-        # essentially duplicating logic but ensuring it matches the "style".
-        # This is safer than modifying core.
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-        # Rename columns to match what we need.
-        if 'Close' in df.columns and 'close' not in df.columns:
-            df['close'] = df['Close']
-        if 'High' in df.columns and 'high' not in df.columns:
-            df['high'] = df['High']
-        if 'Low' in df.columns and 'low' not in df.columns:
-            df['low'] = df['Low']
-        if 'Volume' in df.columns and 'volume' not in df.columns:
-            df['volume'] = df['Volume']
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-        close = df['close']
-        high = df['high']
-        low = df['low']
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
 
-        # EMAs
-        for period in [10, 20, 50, 200]:
-            df[f'ema_{period}'] = close.ewm(span=period, adjust=False).mean()
+    plus_di = 100 * pd.Series(plus_dm).ewm(alpha=1/period, adjust=False).mean() / atr
+    minus_di = 100 * pd.Series(minus_dm).ewm(alpha=1/period, adjust=False).mean() / atr
 
-        # SMAs
-        for period in [50, 200]:
-            df[f'sma_{period}'] = close.rolling(window=period).mean()
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.ewm(alpha=1/period, adjust=False).mean()
+    return adx
 
-        # RSI
-        delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['rsi_14'] = 100 - (100 / (1 + rs))
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
 
-        # MACD
-        exp1 = close.ewm(span=12, adjust=False).mean()
-        exp2 = close.ewm(span=26, adjust=False).mean()
-        df['macd'] = exp1 - exp2
-        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-        df['macd_hist'] = df['macd'] - df['macd_signal']
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-        # Bollinger Bands (20, 2)
-        middle = close.rolling(window=20).mean()
-        std = close.rolling(window=20).std()
-        df['bb_upper'] = middle + (std * 2)
-        df['bb_middle'] = middle
-        df['bb_lower'] = middle - (std * 2)
+    return tr.ewm(alpha=1/period, adjust=False).mean()
 
-        # ATR 14
-        tr1 = high - low
-        tr2 = (high - close.shift()).abs()
-        tr3 = (low - close.shift()).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        df['atr_14'] = tr.rolling(window=14).mean()
+def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> tuple[pd.Series, pd.Series]:
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
 
-        # Supertrend (10, 3)
-        # We need the series.
-        # Basic implementation.
-        st_per = 10
-        st_mul = 3.0
-        atr_st = tr.rolling(window=st_per).mean()
-        hl2 = (high + low) / 2
-        basic_ub = hl2 + (st_mul * atr_st)
-        basic_lb = hl2 - (st_mul * atr_st)
+    # Calculate ATR
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
 
-        # Vectorized/Iterative calculation for Supertrend
-        # Python loop is fine for daily data length
-        n = len(df)
-        final_ub = np.zeros(n)
-        final_lb = np.zeros(n)
-        supertrend = np.zeros(n)
+    hl_avg = (high + low) / 2
+    basic_ub = hl_avg + (multiplier * atr)
+    basic_lb = hl_avg - (multiplier * atr)
 
-        # We need numpy arrays
-        close_arr = close.values
-        bub = basic_ub.fillna(0).values
-        blb = basic_lb.fillna(0).values
+    # We need to iterate for Supertrend as it is recursive
+    n = len(df)
+    final_ub = np.zeros(n)
+    final_lb = np.zeros(n)
+    supertrend = np.zeros(n)
+    direction = np.zeros(n) # 1: up, -1: down
 
-        # Initialize
-        final_ub[0] = bub[0]
-        final_lb[0] = blb[0]
+    close_vals = close.values
+    bub_vals = basic_ub.values
+    blb_vals = basic_lb.values
 
-        for i in range(1, n):
-            # Final UB
-            if bub[i] < final_ub[i-1] or close_arr[i-1] > final_ub[i-1]:
-                final_ub[i] = bub[i]
+    # Initialize
+    final_ub[0] = bub_vals[0]
+    final_lb[0] = blb_vals[0]
+    direction[0] = 1
+
+    for i in range(1, n):
+        # Final Upper Band
+        if (bub_vals[i] < final_ub[i-1]) or (close_vals[i-1] > final_ub[i-1]):
+            final_ub[i] = bub_vals[i]
+        else:
+            final_ub[i] = final_ub[i-1]
+
+        # Final Lower Band
+        if (blb_vals[i] > final_lb[i-1]) or (close_vals[i-1] < final_lb[i-1]):
+            final_lb[i] = blb_vals[i]
+        else:
+            final_lb[i] = final_lb[i-1]
+
+        # Trend
+        # If currently in downtrend (dir=-1)
+        if direction[i-1] == -1:
+            if close_vals[i] > final_ub[i]:
+                direction[i] = 1
             else:
-                final_ub[i] = final_ub[i-1]
-
-            # Final LB
-            if blb[i] > final_lb[i-1] or close_arr[i-1] < final_lb[i-1]:
-                final_lb[i] = blb[i]
+                direction[i] = -1
+        else: # uptrend
+            if close_vals[i] < final_lb[i]:
+                direction[i] = -1
             else:
-                final_lb[i] = final_lb[i-1]
+                direction[i] = 1
 
-            # Trend
-            if close_arr[i] <= final_ub[i]:
-                supertrend[i] = final_ub[i]
-            else:
-                supertrend[i] = final_lb[i]
+        if direction[i] == 1:
+            supertrend[i] = final_lb[i]
+        else:
+            supertrend[i] = final_ub[i]
 
-        df['supertrend'] = supertrend
+    return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
 
-        return df
+def calculate_bollinger_bands(series: pd.Series, period: int = 20, std: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
+    middle = series.rolling(window=period).mean()
+    std_dev = series.rolling(window=period).std()
+    upper = middle + (std_dev * std)
+    lower = middle - (std_dev * std)
+    return upper, middle, lower
+
+def calculate_donchian(df: pd.DataFrame, period: int = 20) -> tuple[pd.Series, pd.Series]:
+    upper = df["high"].rolling(window=period).max()
+    lower = df["low"].rolling(window=period).min()
+    return upper, lower

@@ -1,79 +1,68 @@
-"""
-Strategy Generator.
-"""
 import random
-from typing import List
-from .grammar import StrategyCandidate, ParameterSpace
+from typing import List, Dict, Any
+from .grammar import Strategy
+from .parameter_space import get_random_params
 
-class StrategyGenerator:
+BLOCK_TYPES = [
+    {"type": "ema_cross", "category": "entry"},
+    {"type": "rsi_reversion", "category": "entry"},
+    {"type": "supertrend_trend", "category": "entry"},
+    {"type": "donchian_breakout", "category": "entry"},
+    {"type": "adx_filter", "category": "entry"}, # Used as filter/entry condition
+    {"type": "stop_loss_pct", "category": "risk"},
+    {"type": "trailing_stop_pct", "category": "risk"},
+    {"type": "time_stop", "category": "risk"},
+    {"type": "take_profit_pct", "category": "risk"}
+]
+
+def generate_candidates(n: int) -> List[Strategy]:
     """
-    Generates random strategies based on the grammar.
+    Generate N random strategy candidates.
     """
+    candidates = []
+    seen_ids = set()
 
-    def __init__(self):
-        pass
+    attempts = 0
+    while len(candidates) < n and attempts < n * 5:
+        attempts += 1
 
-    def generate(self, n: int = 1) -> List[StrategyCandidate]:
-        candidates = []
-        for _ in range(n):
-            candidates.append(self._create_random_strategy())
-        return candidates
+        # Compose a strategy
+        # 1-2 Entry blocks
+        # 1-2 Risk blocks
 
-    def _create_random_strategy(self) -> StrategyCandidate:
-        """
-        Compose a strategy from blocks.
-        """
-        # Pick a strategy type/archetype
-        archetype = random.choice(["trend_following", "mean_reversion"])
+        blocks = []
 
-        entry_rules = []
-        exit_rules = []
-        params = {}
+        # Entry
+        num_entries = random.randint(1, 2)
+        entry_choices = [b for b in BLOCK_TYPES if b["category"] == "entry"]
+        selected_entries = random.sample(entry_choices, num_entries)
 
-        if archetype == "trend_following":
-            # EMA Crossover
-            params["ema_fast"] = ParameterSpace.sample("ema_fast")
-            params["ema_slow"] = ParameterSpace.sample("ema_slow")
-            entry_rules.append({"type": "ema_cross_above", "fast": "ema_fast", "slow": "ema_slow"})
-            exit_rules.append({"type": "ema_cross_below", "fast": "ema_fast", "slow": "ema_slow"})
+        for entry in selected_entries:
+            params = get_random_params(entry["type"])
+            blocks.append({
+                "type": entry["type"],
+                "category": "entry",
+                "params": params
+            })
 
-            # Optional Filter: ADX or Regime
-            if random.random() < 0.5:
-                 # Supertrend filter
-                 params["supertrend_period"] = ParameterSpace.sample("supertrend_period")
-                 params["supertrend_multiplier"] = ParameterSpace.sample("supertrend_multiplier")
-                 entry_rules.append({"type": "supertrend_bullish"})
+        # Risk
+        num_risk = random.randint(1, 2)
+        risk_choices = [b for b in BLOCK_TYPES if b["category"] == "risk"]
+        selected_risks = random.sample(risk_choices, num_risk)
 
-        elif archetype == "mean_reversion":
-            # RSI Reversion
-            params["rsi_period"] = ParameterSpace.sample("rsi_period")
-            params["rsi_buy"] = ParameterSpace.sample("rsi_buy_threshold")
-            params["rsi_sell"] = ParameterSpace.sample("rsi_sell_threshold")
+        for risk in selected_risks:
+            params = get_random_params(risk["type"])
+            blocks.append({
+                "type": risk["type"],
+                "category": "risk",
+                "params": params
+            })
 
-            entry_rules.append({"type": "rsi_oversold", "period": "rsi_period", "threshold": "rsi_buy"})
-            exit_rules.append({"type": "rsi_overbought", "period": "rsi_period", "threshold": "rsi_sell"})
+        config = {"blocks": blocks}
+        strategy = Strategy(config)
 
-            # Optional: Bollinger Bands
-            if random.random() < 0.3:
-                 params["bb_period"] = ParameterSpace.sample("bb_period")
-                 params["bb_std"] = ParameterSpace.sample("bb_std")
-                 entry_rules.append({"type": "price_below_bb_lower"})
+        if strategy.id not in seen_ids:
+            seen_ids.add(strategy.id)
+            candidates.append(strategy)
 
-        # Common Risk Management (Stop Loss)
-        params["atr_period"] = ParameterSpace.sample("atr_period")
-        params["stop_loss_atr"] = ParameterSpace.sample("stop_loss_atr")
-        exit_rules.append({"type": "trailing_stop_atr", "multiplier": "stop_loss_atr"})
-
-        # Time Stop
-        if random.random() < 0.5:
-             params["max_bars_hold"] = ParameterSpace.sample("max_bars_hold")
-             exit_rules.append({"type": "time_stop", "bars": "max_bars_hold"})
-
-        candidate = StrategyCandidate(
-            id="",
-            entry_rules=entry_rules,
-            exit_rules=exit_rules,
-            params=params
-        )
-        candidate.id = candidate.generate_id()
-        return candidate
+    return candidates

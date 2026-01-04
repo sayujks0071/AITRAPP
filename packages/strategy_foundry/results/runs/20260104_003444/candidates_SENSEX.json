@@ -1,0 +1,40 @@
+[
+  {
+    "id": "361c0e1a714a",
+    "config": {
+      "blocks": [
+        {
+          "type": "donchian_breakout",
+          "category": "entry",
+          "params": {
+            "period": 55
+          }
+        },
+        {
+          "type": "supertrend_trend",
+          "category": "entry",
+          "params": {
+            "period": 7,
+            "multiplier": 3.0
+          }
+        },
+        {
+          "type": "time_stop",
+          "category": "risk",
+          "params": {
+            "bars": 18
+          }
+        }
+      ]
+    },
+    "metrics": {
+      "avg_sharpe": 20.176495616020286,
+      "avg_cagr": 1.7478637357241955,
+      "worst_drawdown": -0.0016408138629793025,
+      "total_trades": 20,
+      "positive_folds": 2,
+      "sharpe_dispersion": 0.9453304660917219
+    },
+    "score": 75.82
+  }
+]

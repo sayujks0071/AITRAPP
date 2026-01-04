@@ -1,68 +1,42 @@
-
-import pytest
+import unittest
 import pandas as pd
 import numpy as np
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.factory.grammar import Strategy
 
-def test_engine_basic():
-    # Mock data
-    dates = pd.date_range("2023-01-01", periods=100)
-    data = pd.DataFrame({
-        "Open": np.linspace(100, 110, 100),
-        "High": np.linspace(101, 111, 100),
-        "Low": np.linspace(99, 109, 100),
-        "Close": np.linspace(100, 110, 100),
-        "Volume": 1000
-    }, index=dates)
+class TestEngine(unittest.TestCase):
+    def setUp(self):
+        # Create dummy data
+        dates = pd.date_range(start="2023-01-01", periods=100)
+        self.df = pd.DataFrame({
+            "open": np.linspace(100, 200, 100),
+            "high": np.linspace(105, 205, 100),
+            "low": np.linspace(95, 195, 100),
+            "close": np.linspace(102, 202, 100),
+            "volume": [1000]*100
+        }, index=dates)
 
-    # Mock candidate
-    candidate = StrategyCandidate(
-        id="test",
-        entry_rules=[],
-        exit_rules=[],
-        params={}
-    )
+    def test_basic_run(self):
+        # Simple strategy that always enters
+        config = {
+            "blocks": [
+                {"type": "ema_cross", "category": "entry", "params": {"fast": 5, "slow": 10}}, # Won't trigger easily on linear data without crossover
+                # Let's force a simpler condition or mock generate_positions
+            ]
+        }
 
-    engine = BacktestEngine(data)
-    res = engine.run(candidate)
+        # We can subclass Strategy to force positions for testing
+        class MockStrategy(Strategy):
+            def generate_positions(self, df):
+                return pd.Series([1]*len(df), index=df.index)
 
-    assert "metrics" in res
-    assert "trades" in res
-    assert "equity_curve" in res
-    assert "current_position" in res
+        strategy = MockStrategy(config)
+        engine = BacktestEngine()
+        metrics = engine.run(strategy, self.df)
 
-def test_engine_with_trade():
-    dates = pd.date_range("2023-01-01", periods=50)
-    data = pd.DataFrame({
-        "Open": [100]*50,
-        "High": [105]*50,
-        "Low": [95]*50,
-        "Close": [100]*50,
-        "Volume": 1000
-    }, index=dates)
+        self.assertIn("total_return", metrics)
+        self.assertIn("sharpe", metrics)
+        self.assertGreater(metrics["cagr"], 0)
 
-    # Add indicators manually or rely on adapter defaults (which might fail if calc needs meaningful data)
-    # The adapter calculates EMA/RSI. RSI needs price changes.
-    # Let's make price move.
-    data["Close"] = np.linspace(100, 200, 50)
-    data["Open"] = data["Close"]
-    data["High"] = data["Close"] + 1
-    data["Low"] = data["Close"] - 1
-
-    # Strategy: EMA Cross
-    # Fast (10) > Slow (20)
-    # Price is increasing, so Fast EMA > Slow EMA eventually.
-
-    candidate = StrategyCandidate(
-        id="test_cross",
-        entry_rules=[{"type": "ema_cross_above", "fast": "fast", "slow": "slow"}],
-        exit_rules=[{"type": "ema_cross_below", "fast": "fast", "slow": "slow"}],
-        params={"fast": 10, "slow": 20}
-    )
-
-    engine = BacktestEngine(data)
-    res = engine.run(candidate)
-
-    # Should have some trades or at least metrics calculated
-    assert res["metrics"]["trades"] >= 0
+if __name__ == '__main__':
+    unittest.main()
