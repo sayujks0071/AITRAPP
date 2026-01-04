@@ -36,7 +36,7 @@ class TestOCOSideBug:
         # Verify Entry Order Side
         assert group.entry_order.side == OrderSideEnum.BUY
 
-        # Verify Stop Order Side (Should be SELL, but bug makes it BUY)
+        # Verify Stop Order Side (should be SELL)
         stop_order = group.stop_order
         print(f"Entry Side: {entry_order.side}")
         print(f"Stop Order Side: {stop_order.side}")
