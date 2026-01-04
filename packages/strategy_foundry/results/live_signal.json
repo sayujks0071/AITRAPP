@@ -9,5 +9,34 @@
     "max_hold": null
   },
   "status": "SKIPPED",
-  "reason": "Market closed"
+  "reason": "Market closed",
+  "NIFTY": {
+    "timestamp_ist": "2026-01-04T06:04:44.687312+05:30",
+    "champion_id": "bbc9556fe498",
+    "instrument": "NIFTY",
+    "signal": 1,
+    "rule_summary": "donchian_breakout(period=10) + take_profit_pct(pct=0.121) + time_stop(bars=16)",
+    "risk": {
+      "take_profit_pct": {
+        "pct": 0.121
+      },
+      "time_stop": {
+        "bars": 16
+      }
+    },
+    "status": "OK"
+  },
+  "SENSEX": {
+    "timestamp_ist": "2026-01-04T06:04:45.150085+05:30",
+    "champion_id": "361c0e1a714a",
+    "instrument": "SENSEX",
+    "signal": 1,
+    "rule_summary": "donchian_breakout(period=55) + supertrend_trend(period=7,multiplier=3.0) + time_stop(bars=18)",
+    "risk": {
+      "time_stop": {
+        "bars": 18
+      }
+    },
+    "status": "OK"
+  }
 }

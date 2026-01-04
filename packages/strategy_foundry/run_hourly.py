@@ -1,173 +1,114 @@
-"""
-Hourly Runner for StrategyFoundry.
-"""
 import os
 import sys
-import json
-import logging
-import argparse
+import structlog
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+import pytz
+
+# Add repo root to path
+sys.path.append(os.getcwd())
 
 from packages.strategy_foundry.data.loader import load_instrument_data
-from packages.strategy_foundry.factory.generator import StrategyGenerator
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.selection.ranker import WalkForwardEvaluator, Ranker
-from packages.strategy_foundry.live.signal_publisher import SignalPublisher
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.factory.generator import generate_candidates
+from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
+from packages.strategy_foundry.backtest.sanity import sanity_check
+from packages.strategy_foundry.selection.ranker import score_strategy
+from packages.strategy_foundry.selection.promote import promote_if_better
+from packages.strategy_foundry.live.signal_publisher import publish_live_signal
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("StrategyFoundry")
+# Configure logging
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer()
+    ],
+    logger_factory=structlog.PrintLoggerFactory(),
+)
+logger = structlog.get_logger()
 
-BASE_DIR = Path(__file__).parent
-RESULTS_DIR = BASE_DIR / "results"
-RUNS_DIR = RESULTS_DIR / "runs"
-CHAMPIONS_DIR = RESULTS_DIR / "champions"
+# Config
+SYMBOLS = ["NIFTY", "SENSEX"]
+FAST_MODE = os.getenv("FAST_MODE", "0") == "1"
 
-INSTRUMENTS = ["NIFTY", "SENSEX"]
-
-def ensure_dirs():
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    CHAMPIONS_DIR.mkdir(parents=True, exist_ok=True)
-
-def save_champion(candidate, score, filepath):
-    data = candidate.to_json()
-    with open(filepath, "w") as f:
-        f.write(data)
-
-def load_champion(filepath):
-    if not filepath.exists():
-        return None
-    with open(filepath, "r") as f:
-        return StrategyCandidate.from_json(f.read())
-
-def main():
-    ensure_dirs()
-
-    # Determine Mode
-    fast_mode = os.environ.get("FAST_MODE", "0") == "1"
-
-    # Config
-    n_candidates = 10 if fast_mode else 50
-    n_folds = 2 if fast_mode else 3
-
+def run():
     run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    current_run_dir = RUNS_DIR / run_ts
-    current_run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = Path(f"packages/strategy_foundry/results/runs/{run_ts}")
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Starting run {run_ts} (FAST_MODE={fast_mode})")
+    logger.info("Starting Hourly Run", fast_mode=FAST_MODE, run_dir=str(run_dir))
 
-    # Initialize Generator
-    generator = StrategyGenerator()
-
-    leaderboard = []
-
-    # Process Instruments for Strategy Generation
-    for instrument in INSTRUMENTS:
-        logger.info(f"Processing {instrument}...")
-
-        # 1. Load Data
+    for symbol in SYMBOLS:
         try:
-            df = load_instrument_data(instrument)
-        except Exception as e:
-            logger.error(f"Failed to load data for {instrument}: {e}")
-            continue
+            logger.info("Processing Symbol", symbol=symbol)
 
-        # 2. Generate Candidates
-        candidates = generator.generate(n_candidates)
-        logger.info(f"Generated {len(candidates)} candidates")
-
-        # 3. Backtest & Evaluate
-        engine = BacktestEngine(df)
-        evaluator = WalkForwardEvaluator(df, n_folds=n_folds)
-
-        best_score = -999
-        best_candidate = None
-        best_metrics = None
-
-        for cand in candidates:
-            wf_res = evaluator.evaluate(cand, engine)
-
-            if wf_res.get("status") == "skipped":
+            # 1. Load Data
+            df = load_instrument_data(symbol)
+            if df.empty:
+                logger.error("No data", symbol=symbol)
                 continue
 
-            score = Ranker.score(wf_res)
+            # 2. Generate Candidates
+            n_candidates = 10 if FAST_MODE else 50
+            candidates = generate_candidates(n_candidates)
+            logger.info("Generated candidates", count=len(candidates))
 
-            # Sanity filters
-            if wf_res["max_dd"] > 0.35: continue
-            if wf_res["positive_folds"] < (1 if fast_mode else 2): continue
+            # 3. Evaluate
+            n_folds = 2 if FAST_MODE else 4
+            evaluator = WalkForwardEvaluator(n_folds=n_folds)
 
-            leaderboard.append({
-                "instrument": instrument,
-                "id": cand.id,
-                "score": score,
-                "sharpe": wf_res["avg_sharpe"],
-                "cagr": wf_res["avg_cagr"],
-                "max_dd": wf_res["max_dd"]
-            })
+            results = []
 
-            if score > best_score:
-                best_score = score
-                best_candidate = cand
-                best_metrics = wf_res
+            for strategy in candidates:
+                metrics = evaluator.evaluate(strategy, df)
 
-        # 4. Promotion Logic
-        if best_candidate:
-            logger.info(f"Best candidate for {instrument}: {best_candidate.id} Score: {best_score:.4f}")
+                if metrics["valid"]:
+                    # Sanity Check
+                    if sanity_check(metrics, FAST_MODE):
+                        # Score
+                        score = score_strategy(metrics)
 
-            current_champ_file = CHAMPIONS_DIR / f"current_{instrument}.json"
+                        result_entry = {
+                            "id": strategy.id,
+                            "config": strategy.config,
+                            "metrics": {
+                                "avg_sharpe": metrics["avg_sharpe"],
+                                "avg_cagr": metrics["avg_cagr"],
+                                "worst_drawdown": metrics["worst_drawdown"],
+                                "total_trades": metrics["total_trades"],
+                                "positive_folds": metrics["positive_folds"],
+                                "sharpe_dispersion": metrics["sharpe_dispersion"]
+                            },
+                            "score": score
+                        }
+                        results.append(result_entry)
 
-            promote = False
-            # Simple threshold promotion if no existing champion
-            if not current_champ_file.exists():
-                if best_score > 0.2:
-                    promote = True
-            else:
-                # In a real system, we'd compare against current champion's score on NEW data
-                # For now, we assume if score is very high we promote
-                if best_score > 0.5:
-                     promote = True
+            logger.info("Evaluation complete", passed_sanity=len(results))
 
-            if promote:
-                logger.info(f"Promoting new champion for {instrument}")
-                save_champion(best_candidate, best_score, current_champ_file)
-                # Archive
-                save_champion(best_candidate, best_score, CHAMPIONS_DIR / f"{run_ts}_{instrument}_{best_candidate.id}.json")
+            # 4. Rank and Promote
+            if results:
+                results.sort(key=lambda x: x["score"], reverse=True)
 
-    # Save Leaderboard
-    lb_df = pd.DataFrame(leaderboard)
-    if not lb_df.empty:
-        lb_df.sort_values("score", ascending=False, inplace=True)
-        lb_df.to_csv(RESULTS_DIR / "leaderboard.csv", index=False)
-        with open(RESULTS_DIR / "leaderboard.md", "w") as f:
-            f.write(lb_df.head(20).to_markdown())
+                # Save candidates to run artifact
+                with open(run_dir / f"candidates_{symbol}.json", "w") as f:
+                    import json
+                    json.dump(results, f, indent=2)
 
-    # 5. Live Signal Generation (using persisted champions)
-    publisher = SignalPublisher(RESULTS_DIR)
+                top_candidate = results[0]
+                promote_if_better(top_candidate, symbol)
 
-    for instrument in INSTRUMENTS:
-         champ_file = CHAMPIONS_DIR / f"current_{instrument}.json"
-         if champ_file.exists():
-             try:
-                 champ = load_champion(champ_file)
-                 df = load_instrument_data(instrument)
-                 engine = BacktestEngine(df)
+            # 5. Live Signal
+            # Check market hours?
+            # Logic: If market is open (Mon-Fri 9:15-15:30 IST).
+            # We can use a simple check here or delegate to publisher.
+            # Publisher will just write "SKIPPED" if we don't call it, or we call it and it checks.
+            # For simplicity, let's just call it. It generates signal based on latest data.
+            publish_live_signal(symbol, df)
 
-                 # Run on FULL data to get current position
-                 res = engine.run(champ)
-                 current_pos = res.get("current_position", 0)
-                 metrics = res.get("metrics", {})
-
-                 logger.info(f"Champion {champ.id} for {instrument}: Position={current_pos}")
-
-                 publisher.publish(champ, current_pos, instrument, metrics)
-
-             except Exception as e:
-                 logger.error(f"Failed to publish signal for {instrument}: {e}")
-
-    logger.info("Run complete.")
+        except Exception as e:
+            logger.error("Run failed for symbol", symbol=symbol, error=str(e))
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
-    main()
+    run()
