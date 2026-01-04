@@ -1,0 +1,63 @@
+name: Daily Auth Check
+
+on:
+  schedule:
+    # Run at 08:00 IST (02:30 UTC) daily
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  auth-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install kiteconnect pydantic pydantic-settings structlog pyyaml python-dotenv
+
+      - name: Check Authentication Status
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          # Force paper mode for safety
+          APP_MODE: PAPER
+        run: |
+          # Use a simple python script to check validity
+          # We can reuse the KiteAuth module if we set PYTHONPATH
+          export PYTHONPATH=$PYTHONPATH:.
+
+          python -c "
+          import sys
+          from src.auth.kite_auth import KiteAuth
+
+          try:
+              auth = KiteAuth()
+              if auth.is_session_valid():
+                  print('✅ Session is valid')
+                  sys.exit(0)
+              else:
+                  print('❌ Session invalid')
+                  sys.exit(1)
+          except Exception as e:
+              print(f'❌ Error checking session: {e}')
+              sys.exit(1)
+          "
+        continue-on-error: true
+        id: check_auth
+
+      - name: Notify if Auth Required
+        if: steps.check_auth.outcome == 'failure'
+        run: |
+          echo "::error::Kite Authentication Required! Please login manually on the server."
+          # If we had an issue tracker or notification webhook, we would trigger it here.
+          # For now, we log an error which will send a failure notification email from GitHub.
+          exit 1
