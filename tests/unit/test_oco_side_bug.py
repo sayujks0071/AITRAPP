@@ -41,10 +41,8 @@ class TestOCOSideBug:
         print(f"Entry Side: {entry_order.side}")
         print(f"Stop Order Side: {stop_order.side}")
 
-        # Assert the EXPECTED behavior (FAILING TEST if bug exists)
-        # If entry is BUY, exit (stop) should be SELL
+        # Assert the expected behavior: if entry is BUY, exit (stop) should be SELL
         assert stop_order.side == OrderSideEnum.SELL, f"Stop order side should be SELL, got {stop_order.side}"
-
         # Verify TP1 Side
         tp1_order = group.tp1_order
         assert tp1_order.side == OrderSideEnum.SELL, f"TP1 order side should be SELL, got {tp1_order.side}"
