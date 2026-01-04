@@ -1,0 +1,57 @@
+# Strategy Foundry Configuration
+
+system:
+  timezone: "Asia/Kolkata"
+  cache_dir: "packages/strategy_foundry/data/cache"
+  results_dir: "packages/strategy_foundry/results"
+
+data:
+  intraday:
+    timeframes: ["5m", "15m"]
+    min_days: 60
+    max_days: 120
+  daily:
+    timeframes: ["1D"]
+    min_days: 365
+    max_days: 1825 # 5 years
+
+generation:
+  fast_mode_candidates: 15
+  full_mode_candidates: 80
+  grammar:
+    min_blocks: 2
+    max_blocks: 5
+    max_tunables: 10
+
+backtest:
+  folds:
+    default: 4
+    fast_mode: 2
+  costs:
+    all_in_cost_bps_per_side: 3.0 # Roughly represents STT + Brokerage + Slippage
+    slippage_bps_per_side: 2.0
+    spread_guard_bps: 2.0 # Penalty for choppy high-turnover
+  risk:
+    max_dd_threshold: 0.30
+    min_profit_factor: 1.1
+
+ranking:
+  weights:
+    sharpe: 0.25
+    calmar: 0.25
+    cagr: 0.20
+    stability: 0.15
+    low_turnover: 0.10
+    sanity: 0.05
+  promotion:
+    min_sharpe: 1.2
+    max_dd: 0.20
+    min_positive_folds: 3 # out of 4
+
+live:
+  publish_signal: true
+  enable_execution: false # Always false by default
+  market_hours:
+    open: "09:15"
+    close: "15:30"
+    flatten: "15:25"

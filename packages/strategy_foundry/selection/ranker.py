@@ -1,33 +1,118 @@
-from typing import Dict, Any
+"""
+Strategy Ranker and Champion Store
+"""
+import pandas as pd
+import json
+import os
+import structlog
+from datetime import datetime
+import yaml
 
-def score_strategy(metrics: Dict[str, Any]) -> float:
-    """
-    Compute composite score for ranking.
-    + 30% OOS Sharpe
-    + 25% OOS Calmar
-    + 20% OOS CAGR
-    + 15% Stability (low dispersion)
-    − 10% Turnover penalty (proxy by too many trades? No, just raw count)
-    """
+logger = structlog.get_logger(__name__)
 
-    # Normalize or cap values to sane ranges for scoring
-    sharpe = min(max(metrics["avg_sharpe"], 0), 3.0) / 3.0
+class Ranker:
+    def __init__(self, config_path="packages/strategy_foundry/configs/foundry.yaml"):
+        with open(config_path) as f:
+            self.config = yaml.safe_load(f)
+        self.weights = self.config['ranking']['weights']
 
-    calmar_raw = metrics["avg_cagr"] / abs(metrics["worst_drawdown"]) if metrics["worst_drawdown"] != 0 else 0
-    calmar = min(calmar_raw, 3.0) / 3.0
+    def score(self, metrics: dict) -> float:
+        """
+        Calculate weighted score for a candidate.
+        Assumes metrics are from OOS testing.
+        """
+        if not metrics or metrics.get("trades", 0) < 5:
+            return -100.0
 
-    cagr = min(max(metrics["avg_cagr"], -0.5), 1.0) # Cap at 100%
-    if cagr < 0: cagr = 0 # Penalize negative hard
+        # Normalize/Clip metrics to reasonable ranges for scoring
+        sharpe = min(max(metrics.get("sharpe", 0), -3), 3)
+        calmar = min(max(metrics.get("calmar", 0), -2), 5)
+        cagr = min(max(metrics.get("cagr", 0), -0.5), 2)
 
-    # Stability: lower dispersion is better.
-    # 0 dispersion -> 1.0 score. 1.0 dispersion -> 0.0 score.
-    stability = max(1.0 - metrics["sharpe_dispersion"], 0)
+        # Stability (Placeholder: could be 1 / variance of fold scores)
+        # For now assume passed in or default 1
+        stability = metrics.get("stability", 0.5)
 
-    # Turnover penalty: logic vague, let's just penalty if trades > 200 (overfitting/churn)
-    # or just flat small penalty.
-    # "Turnover penalty" usually means cost. We already deducted cost.
-    # Let's ignore explicit turnover penalty for score and trust net returns.
+        # Turnover (Low turnover bonus)
+        # Trades per day
+        # Assume ideal is 2-5 trades per day. Too high (>20) is bad.
+        # metrics['trades'] / days
+        # For scoring, we'll just use raw component from logic if pre-computed, else ignore
 
-    score = (0.30 * sharpe) + (0.25 * calmar) + (0.20 * cagr) + (0.15 * stability)
+        score = (
+            self.weights['sharpe'] * sharpe +
+            self.weights['calmar'] * (calmar / 2) + # Scale down calmar
+            self.weights['cagr'] * cagr +
+            self.weights['stability'] * stability
+        )
 
-    return round(score * 100, 2)
+        return score
+
+    def rank(self, candidates_results: list) -> pd.DataFrame:
+        """
+        Rank a list of candidate result dictionaries.
+        """
+        if not candidates_results:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(candidates_results)
+
+        # Calculate Score if not present
+        if "score" not in df.columns:
+            df["score"] = df["metrics"].apply(self.score)
+
+        # Sort
+        df.sort_values("score", ascending=False, inplace=True)
+        return df
+
+class ChampionStore:
+    def __init__(self, results_dir="packages/strategy_foundry/results"):
+        self.champions_dir = os.path.join(results_dir, "champions")
+        self.current_file = os.path.join(self.champions_dir, "current.json")
+        os.makedirs(self.champions_dir, exist_ok=True)
+
+    def get_current_champion(self):
+        if os.path.exists(self.current_file):
+            try:
+                with open(self.current_file) as f:
+                    return json.load(f)
+            except Exception:
+                return None
+        return None
+
+    def promote_new_champion(self, candidate, run_ts):
+        # Save versioned
+        filename = f"{run_ts}_{candidate['id']}.json"
+        path = os.path.join(self.champions_dir, filename)
+        with open(path, "w") as f:
+            json.dump(candidate, f, indent=2)
+
+        # Update current
+        with open(self.current_file, "w") as f:
+            json.dump(candidate, f, indent=2)
+
+        logger.info(f"Promoted new champion: {candidate['id']}")
+
+    def evaluate_promotion(self, new_best, current_best, config):
+        """
+        Check if new_best should replace current_best based on rules.
+        """
+        if not current_best:
+            return True
+
+        # Rules
+        # Beat blended score by >= 10%
+        new_score = new_best.get("score", 0)
+        curr_score = current_best.get("score", 0)
+
+        if new_score > curr_score * 1.1:
+            return True
+
+        # Or reduce MaxDD by 5% abs (e.g. 0.25 -> 0.20) while similar Sharpe
+        new_dd = new_best["metrics"]["max_dd"]
+        curr_dd = current_best["metrics"]["max_dd"]
+
+        if (curr_dd - new_dd) >= 0.05 and new_score > curr_score * 0.9:
+            return True
+
+        return False

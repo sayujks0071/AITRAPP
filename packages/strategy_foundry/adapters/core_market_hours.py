@@ -1,38 +1,53 @@
+"""
+Market Hours Adapter
+"""
 from datetime import datetime, time
 import pytz
-from typing import Optional
 
-# Try to import core logic, fallback if not available
-try:
-    from packages.core.market_hours import is_market_open as core_is_market_open
-except ImportError:
-    core_is_market_open = None
+IST = pytz.timezone("Asia/Kolkata")
 
-def is_market_open(timestamp: Optional[datetime] = None) -> bool:
-    """
-    Check if market is open (NSE Equity/Derivatives hours).
-    Default: Mon-Fri 09:15 - 15:30 IST.
-    """
-    if core_is_market_open:
-        try:
-            return core_is_market_open(timestamp)
-        except:
-            pass
+class MarketHours:
+    @staticmethod
+    def is_market_open(dt: datetime = None) -> bool:
+        if dt is None:
+            dt = datetime.now(IST)
 
-    # Fallback Logic
-    tz = pytz.timezone("Asia/Kolkata")
-    if timestamp is None:
-        now = datetime.now(tz)
-    else:
-        now = timestamp.astimezone(tz)
+        # Simple check: Mon-Fri, 09:15 - 15:30
+        if dt.weekday() >= 5:
+            return False
 
-    # Check Weekend
-    if now.weekday() >= 5: # Sat=5, Sun=6
+        current_time = dt.time()
+        start = time(9, 15)
+        end = time(15, 30)
+
+        return start <= current_time <= end
+
+    @staticmethod
+    def get_flatten_time() -> time:
+        return time(15, 25)
+
+    @staticmethod
+    def filter_market_hours(df, timezone="Asia/Kolkata"):
+        """
+        Filter DataFrame to keep only market hours (09:15 to 15:30).
+        Assumes index is datetime aware or convertible.
+        """
+        if df.empty:
+            return df
+
+        # Ensure index is datetime
+        if not pd.api.types.is_datetime64_any_dtype(df.index):
+            df.index = pd.to_datetime(df.index)
+
+        # Convert to IST if needed
+        # (Assuming data is either UTC or IST, usually backtest data is normalized)
+        # For this implementation, we assume the index is already in the correct timezone or naive (and treated as IST)
+
+        indexer = df.index.indexer_between_time("09:15", "15:30")
+        return df.iloc[indexer]
+
+    @staticmethod
+    def is_trading_holiday(date):
+        # TODO: Hook into packages.core.nse_holidays if available
+        # For now, rely on weekend check in is_market_open
         return False
-
-    # Check Time
-    current_time = now.time()
-    market_start = time(9, 15)
-    market_end = time(15, 30)
-
-    return market_start <= current_time <= market_end

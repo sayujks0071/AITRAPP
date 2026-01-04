@@ -1,70 +1,92 @@
+"""
+Walk Forward Evaluation
+"""
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import Strategy
-import structlog
 
-logger = structlog.get_logger(__name__)
+class WalkForwardValidator:
+    def __init__(self, data: pd.DataFrame, strategy: Dict, cost_config: Dict, folds: int = 4):
+        self.data = data
+        self.strategy = strategy
+        self.cost_config = cost_config
+        self.folds = folds
 
-class WalkForwardEvaluator:
-    def __init__(self, n_folds: int = 3):
-        self.n_folds = n_folds
-        self.engine = BacktestEngine()
-
-    def evaluate(self, strategy: Strategy, df: pd.DataFrame) -> Dict[str, Any]:
+    def run(self) -> Dict:
         """
-        Perform walk-forward evaluation.
-        Splits data into N folds.
-        For simplicity in this MVP:
-        - We just split data into N equal chunks.
-        - We treat each chunk as OOS (Out of Sample) for evaluation purposes
-          (since we are not optimizing params on IS, we are generating random ones).
-        - So effectively, the entire history is OOS for random search.
+        Run Walk-Forward Analysis.
+        Splits data into K folds (expanding window or rolling).
+        Here we use expanding window train, rolling test.
+        But simple K-fold (Cross Val style) breaks time series.
+        Standard Walk Forward:
+        | Train | Test |
+                | Train | Test |
+                        | Train | Test |
 
-        However, to simulate stability, we check consistency across folds.
+        For simplicity and robustness:
+        Split data into Folds+1 chunks.
+        Fold 1: Train on Chunk 1, Test on Chunk 2
+        Fold 2: Train on Chunk 1+2, Test on Chunk 3
+        ...
         """
-        if len(df) < 252:
-            return {"valid": False, "reason": "Insufficient data"}
+        n_chunks = self.folds + 1
+        chunk_size = len(self.data) // n_chunks
 
-        fold_size = len(df) // self.n_folds
+        if chunk_size < 50: # Too small
+            return None
 
         fold_metrics = []
         equity_curves = []
 
-        for i in range(self.n_folds):
-            start = i * fold_size
-            end = (i + 1) * fold_size if i < self.n_folds - 1 else len(df)
+        for i in range(1, n_chunks):
+            # Train window: start to i*chunk_size
+            train_end = i * chunk_size
+            test_end = (i + 1) * chunk_size
 
-            fold_df = df.iloc[start:end]
-            metrics = self.engine.run(strategy, fold_df)
+            # We don't necessarily need to Run Backtest on Train for ranking,
+            # only if we were optimizing parameters.
+            # But we can log train performance.
+            # The spec requires OOS evaluation.
 
-            fold_metrics.append(metrics)
-            if "equity_curve" in metrics:
-                equity_curves.extend(metrics["equity_curve"].values()) # Just accumulating values for now
+            test_data = self.data.iloc[train_end:test_end]
 
-        # Aggregate Metrics (OOS average)
+            engine = BacktestEngine(test_data, self.strategy, self.cost_config)
+            res = engine.run()
+
+            if res and res["metrics"]:
+                fold_metrics.append(res["metrics"])
+                if res.get("equity_curve"):
+                     equity_curves.extend(res["equity_curve"])
+
+        if not fold_metrics:
+            return None
+
+        # Aggregate Metrics
+        # Average Sharpe, Min MaxDD, etc?
+        # Or re-compute global metrics from stitched equity?
+        # Let's average the metrics for stability score.
+
         avg_sharpe = np.mean([m["sharpe"] for m in fold_metrics])
-        avg_cagr = np.mean([m["cagr"] for m in fold_metrics])
-        worst_dd = np.min([m["max_drawdown"] for m in fold_metrics])
-        total_trades = sum([m["trades"] for m in fold_metrics])
+        avg_dd = np.mean([m["max_dd"] for m in fold_metrics])
+        avg_profit_factor = np.mean([m["profit_factor"] for m in fold_metrics])
 
-        positive_folds = sum([1 for m in fold_metrics if m["total_return"] > 0])
+        # Stability: variance of sharpe
+        sharpe_std = np.std([m["sharpe"] for m in fold_metrics])
+        stability = 1.0 / (1.0 + sharpe_std)
 
-        # Check stability (std dev of sharpe)
-        sharpe_dispersion = np.std([m["sharpe"] for m in fold_metrics])
-
-        # Full run for final equity curve
-        full_metrics = self.engine.run(strategy, df)
+        # Count positive folds
+        positive_folds = sum(1 for m in fold_metrics if m["sharpe"] > 0)
 
         return {
-            "valid": True,
-            "avg_sharpe": avg_sharpe,
-            "avg_cagr": avg_cagr,
-            "worst_drawdown": worst_dd,
-            "total_trades": total_trades,
+            "sharpe": avg_sharpe,
+            "max_dd": avg_dd,
+            "profit_factor": avg_profit_factor,
+            "stability": stability,
             "positive_folds": positive_folds,
-            "sharpe_dispersion": sharpe_dispersion,
-            "full_metrics": full_metrics,
-            "fold_metrics": fold_metrics
+            "total_folds": self.folds,
+            "trades": sum(m["trades"] for m in fold_metrics),
+            "cagr": np.mean([m["cagr"] for m in fold_metrics]), # Average CAGR of folds
+            "win_rate": np.mean([m["win_rate"] for m in fold_metrics]),
+            "calmar": np.mean([m["calmar"] for m in fold_metrics])
         }
