@@ -87,6 +87,7 @@ class HistoricalDataLoader:
             df = pd.read_csv(
                 filepath,
                 skipinitialspace=True,
+                na_values=['-']
             )
             
             # Clean column names
@@ -236,7 +237,7 @@ class HistoricalDataLoader:
         """
         bars = []
         
-        for _, row in df.iterrows():
+        for row in df.to_dict('records'):
             bar = Bar(
                 token=0,  # Will be set by instrument manager
                 timestamp=row['Date'],
@@ -275,7 +276,7 @@ class HistoricalDataLoader:
         """
         ticks = []
         
-        for _, row in df.iterrows():
+        for row in df.to_dict('records'):
             # Use LTP as last price, fallback to Close
             last_price = row['LTP'] if pd.notna(row['LTP']) else row['Close']
             
