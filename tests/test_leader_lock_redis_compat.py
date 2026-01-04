@@ -19,7 +19,7 @@ except ImportError:
 from packages.core.leader_lock import LeaderLock
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_leader_lock_redis_compatibility():
     """Test that leader lock works with both bytes and string Redis responses"""
     if not REDIS_AVAILABLE:
