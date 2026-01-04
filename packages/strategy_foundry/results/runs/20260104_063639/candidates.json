@@ -1,0 +1,314 @@
+[
+  {
+    "entry": {
+      "fast": 5,
+      "slow": 50
+    },
+    "exit": {
+      "atr_stop": {
+        "period": 14,
+        "multiple": 2.0
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 3.0
+      }
+    },
+    "filters": [],
+    "id": "3776f499270ae95d"
+  },
+  {
+    "entry": {
+      "period": 20,
+      "std": 2.0
+    },
+    "exit": {
+      "time_stop": {
+        "bars": 3
+      }
+    },
+    "filters": [
+      {
+        "type": "rsi_filter",
+        "params": {
+          "min": 40,
+          "max": 60
+        }
+      }
+    ],
+    "id": "280f28ee01c221e4"
+  },
+  {
+    "entry": {
+      "fast": 13,
+      "slow": 89
+    },
+    "exit": {
+      "time_stop": {
+        "bars": 12
+      }
+    },
+    "filters": [
+      {
+        "type": "rsi_filter",
+        "params": {
+          "min": 40,
+          "max": 60
+        }
+      }
+    ],
+    "id": "1b8b7b4e3ae4f59c"
+  },
+  {
+    "entry": {
+      "lookback": 10,
+      "threshold": 1.5
+    },
+    "exit": {
+      "time_stop": {
+        "bars": 12
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 3.0
+      }
+    },
+    "filters": [
+      {
+        "type": "ema_filter_long",
+        "params": {
+          "period": 200
+        }
+      }
+    ],
+    "id": "d657c4a2b8b2cb65"
+  },
+  {
+    "entry": {
+      "period": 40
+    },
+    "exit": {
+      "time_stop": {
+        "bars": 24
+      }
+    },
+    "filters": [],
+    "id": "7a13dd5ef7b9738d"
+  },
+  {
+    "entry": {
+      "period": 20,
+      "std": 2.0
+    },
+    "exit": {
+      "time_stop": {
+        "bars": 24
+      }
+    },
+    "filters": [
+      {
+        "type": "adx_filter",
+        "params": {
+          "period": 14,
+          "threshold": 25
+        }
+      }
+    ],
+    "id": "d9f98020525cd518"
+  },
+  {
+    "entry": {
+      "fast": 5,
+      "slow": 89
+    },
+    "exit": {
+      "trailing_stop": {
+        "activation": 1.0,
+        "delta": 0.5
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 3.0
+      }
+    },
+    "filters": [],
+    "id": "8b2abe1eac37600b"
+  },
+  {
+    "entry": {
+      "period": 20
+    },
+    "exit": {
+      "atr_stop": {
+        "period": 14,
+        "multiple": 2.0
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 2.0
+      }
+    },
+    "filters": [
+      {
+        "type": "ema_filter_long",
+        "params": {
+          "period": 100
+        }
+      }
+    ],
+    "id": "feaa8cad331d7f32"
+  },
+  {
+    "entry": {
+      "fast": 5,
+      "slow": 34
+    },
+    "exit": {
+      "trailing_stop": {
+        "activation": 1.0,
+        "delta": 0.5
+      }
+    },
+    "filters": [
+      {
+        "type": "rsi_filter",
+        "params": {
+          "min": 40,
+          "max": 60
+        }
+      }
+    ],
+    "id": "07d7dfc804fd6e81"
+  },
+  {
+    "entry": {
+      "fast": 9,
+      "slow": 89
+    },
+    "exit": {
+      "trailing_stop": {
+        "activation": 1.0,
+        "delta": 0.5
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 2.0
+      }
+    },
+    "filters": [
+      {
+        "type": "ema_filter_long",
+        "params": {
+          "period": 100
+        }
+      }
+    ],
+    "id": "f4e7a7b62349dbbc"
+  },
+  {
+    "entry": {
+      "fast": 9,
+      "slow": 50
+    },
+    "exit": {
+      "atr_stop": {
+        "period": 14,
+        "multiple": 2.0
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 1.5
+      }
+    },
+    "filters": [
+      {
+        "type": "adx_filter",
+        "params": {
+          "period": 14,
+          "threshold": 20
+        }
+      }
+    ],
+    "id": "f06a0fdca80132db"
+  },
+  {
+    "entry": {
+      "lookback": 10,
+      "threshold": 1.5
+    },
+    "exit": {
+      "trailing_stop": {
+        "activation": 1.0,
+        "delta": 0.5
+      }
+    },
+    "filters": [],
+    "id": "2514cda378d48d3d"
+  },
+  {
+    "entry": {
+      "period": 20,
+      "std": 2.0
+    },
+    "exit": {
+      "trailing_stop": {
+        "activation": 1.0,
+        "delta": 0.5
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 2.0
+      }
+    },
+    "filters": [
+      {
+        "type": "rsi_filter",
+        "params": {
+          "min": 40,
+          "max": 60
+        }
+      }
+    ],
+    "id": "af90edcbbac08d71"
+  },
+  {
+    "entry": {
+      "period": 14,
+      "lower": 20,
+      "upper": 75
+    },
+    "exit": {
+      "trailing_stop": {
+        "activation": 1.0,
+        "delta": 0.5
+      }
+    },
+    "filters": [
+      {
+        "type": "rsi_filter",
+        "params": {
+          "min": 40,
+          "max": 60
+        }
+      }
+    ],
+    "id": "c7a27ecf87a04444"
+  },
+  {
+    "entry": {
+      "period": 10
+    },
+    "exit": {
+      "trailing_stop": {
+        "activation": 1.0,
+        "delta": 0.5
+      },
+      "fixed_tp": {
+        "multiple_of_risk": 3.0
+      }
+    },
+    "filters": [
+      {
+        "type": "adx_filter",
+        "params": {
+          "period": 14,
+          "threshold": 20
+        }
+      }
+    ],
+    "id": "8c3388026718eb73"
+  }
+]

@@ -1,114 +1,170 @@
+"""
+Strategy Foundry Hourly Runner
+"""
 import os
 import sys
+import yaml
+import json
 import structlog
-from datetime import datetime
-from pathlib import Path
 import pandas as pd
+from datetime import datetime
 import pytz
 
-# Add repo root to path
+# Ensure packages path is in sys.path
 sys.path.append(os.getcwd())
 
-from packages.strategy_foundry.data.loader import load_instrument_data
-from packages.strategy_foundry.factory.generator import generate_candidates
-from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
-from packages.strategy_foundry.backtest.sanity import sanity_check
-from packages.strategy_foundry.selection.ranker import score_strategy
-from packages.strategy_foundry.selection.promote import promote_if_better
-from packages.strategy_foundry.live.signal_publisher import publish_live_signal
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.factory.grammar import StrategyGrammar
+from packages.strategy_foundry.backtest.walkforward import WalkForwardValidator
+from packages.strategy_foundry.backtest.sanity import SanityCheck
+from packages.strategy_foundry.selection.ranker import Ranker, ChampionStore
+from packages.strategy_foundry.live.signal_publisher import SignalPublisher
 
-# Configure logging
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
-    ],
-    logger_factory=structlog.PrintLoggerFactory(),
-)
-logger = structlog.get_logger()
+logger = structlog.get_logger(__name__)
+IST = pytz.timezone("Asia/Kolkata")
 
-# Config
-SYMBOLS = ["NIFTY", "SENSEX"]
-FAST_MODE = os.getenv("FAST_MODE", "0") == "1"
+class FoundryRunner:
+    def __init__(self):
+        self.config_path = "packages/strategy_foundry/configs/foundry.yaml"
+        with open(self.config_path) as f:
+            self.config = yaml.safe_load(f)
 
-def run():
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(f"packages/strategy_foundry/results/runs/{run_ts}")
-    run_dir.mkdir(parents=True, exist_ok=True)
+        self.fast_mode = os.environ.get("FAST_MODE", "0") == "1"
+        self.loader = DataLoader()
+        self.ranker = Ranker()
+        self.store = ChampionStore()
 
-    logger.info("Starting Hourly Run", fast_mode=FAST_MODE, run_dir=str(run_dir))
+        ts = datetime.now(IST).strftime("%Y%m%d_%H%M%S")
+        self.run_dir = os.path.join(self.config['system']['results_dir'], "runs", ts)
+        os.makedirs(self.run_dir, exist_ok=True)
 
-    for symbol in SYMBOLS:
-        try:
-            logger.info("Processing Symbol", symbol=symbol)
+    def run(self):
+        logger.info("Starting Foundry Run", fast_mode=self.fast_mode)
 
-            # 1. Load Data
-            df = load_instrument_data(symbol)
-            if df.empty:
-                logger.error("No data", symbol=symbol)
-                continue
+        instruments = ["NIFTY"] # For now focus on NIFTY as per spec examples
+        timeframes = self.config['data']['intraday']['timeframes']
 
-            # 2. Generate Candidates
-            n_candidates = 10 if FAST_MODE else 50
-            candidates = generate_candidates(n_candidates)
-            logger.info("Generated candidates", count=len(candidates))
+        all_results = []
 
-            # 3. Evaluate
-            n_folds = 2 if FAST_MODE else 4
-            evaluator = WalkForwardEvaluator(n_folds=n_folds)
+        # 1. Data Loading
+        data_cache = {}
+        for inst in instruments:
+            for tf in timeframes:
+                # In fast mode, fetch fewer days? handled in loader call
+                days = 30 if self.fast_mode else None
+                df = self.loader.get_data(inst, tf, days=days)
+                data_cache[(inst, tf)] = df
 
-            results = []
+            # Load Daily for Sanity
+            daily_df = self.loader.get_data(inst, "1D", days=365)
+            data_cache[(inst, "1D")] = daily_df
 
-            for strategy in candidates:
-                metrics = evaluator.evaluate(strategy, df)
+        # 2. Generation & Backtest
+        n_candidates = self.config['generation']['fast_mode_candidates'] if self.fast_mode else self.config['generation']['full_mode_candidates']
 
-                if metrics["valid"]:
-                    # Sanity Check
-                    if sanity_check(metrics, FAST_MODE):
-                        # Score
-                        score = score_strategy(metrics)
+        candidates = []
+        for _ in range(n_candidates):
+            candidates.append(StrategyGrammar.random_strategy())
 
-                        result_entry = {
-                            "id": strategy.id,
-                            "config": strategy.config,
-                            "metrics": {
-                                "avg_sharpe": metrics["avg_sharpe"],
-                                "avg_cagr": metrics["avg_cagr"],
-                                "worst_drawdown": metrics["worst_drawdown"],
-                                "total_trades": metrics["total_trades"],
-                                "positive_folds": metrics["positive_folds"],
-                                "sharpe_dispersion": metrics["sharpe_dispersion"]
-                            },
-                            "score": score
-                        }
-                        results.append(result_entry)
+        # Save candidates
+        with open(os.path.join(self.run_dir, "candidates.json"), "w") as f:
+            json.dump(candidates, f, indent=2)
 
-            logger.info("Evaluation complete", passed_sanity=len(results))
+        logger.info(f"Generated {len(candidates)} candidates")
 
-            # 4. Rank and Promote
-            if results:
-                results.sort(key=lambda x: x["score"], reverse=True)
+        folds = self.config['backtest']['folds']['fast_mode'] if self.fast_mode else self.config['backtest']['folds']['default']
 
-                # Save candidates to run artifact
-                with open(run_dir / f"candidates_{symbol}.json", "w") as f:
-                    import json
-                    json.dump(results, f, indent=2)
+        for cand in candidates:
+            for inst in instruments:
+                # We will rank per timeframe
+                # Intraday Check
+                for tf in timeframes:
+                    df = data_cache[(inst, tf)]
+                    if df.empty: continue
 
-                top_candidate = results[0]
-                promote_if_better(top_candidate, symbol)
+                    if len(df) < 100: continue # Skip if not enough data
 
-            # 5. Live Signal
-            # Check market hours?
-            # Logic: If market is open (Mon-Fri 9:15-15:30 IST).
-            # We can use a simple check here or delegate to publisher.
-            # Publisher will just write "SKIPPED" if we don't call it, or we call it and it checks.
-            # For simplicity, let's just call it. It generates signal based on latest data.
-            publish_live_signal(symbol, df)
+                    # Walk Forward Evaluation
+                    validator = WalkForwardValidator(df, cand, self.config['backtest']['costs'], folds=folds)
+                    metrics = validator.run()
 
-        except Exception as e:
-            logger.error("Run failed for symbol", symbol=symbol, error=str(e))
-            import traceback
-            traceback.print_exc()
+                    if not metrics: continue
+
+                    metrics["instrument"] = inst
+                    metrics["timeframe"] = tf
+                    metrics["candidate_id"] = cand["id"]
+
+                    all_results.append({
+                        "id": cand["id"],
+                        "strategy": cand,
+                        "instrument": inst,
+                        "timeframe": tf,
+                        "metrics": metrics,
+                        "score": 0 # to be calculated
+                    })
+
+        # 3. Ranking
+        ranked_df = self.ranker.rank(all_results)
+
+        # Save Metrics
+        if not ranked_df.empty:
+            ranked_df.drop(columns=["strategy"], errors='ignore').to_csv(os.path.join(self.run_dir, "metrics.csv"), index=False)
+
+            # Generate Leaderboards per TF
+            for tf in timeframes:
+                tf_df = ranked_df[ranked_df["timeframe"] == tf]
+                if not tf_df.empty:
+                    md_path = os.path.join(self.run_dir, f"leaderboard_{tf}.md")
+                    tf_df.head(10).to_markdown(md_path)
+
+        # 4. Selection & Promotion (Only in Full Mode)
+        champion = None
+        if not self.fast_mode and not ranked_df.empty:
+            # Pick best across all? Or best per instrument?
+            # Let's pick global best for NIFTY
+            nifty_df = ranked_df[ranked_df["instrument"] == "NIFTY"]
+            if not nifty_df.empty:
+                # Prefer 15m? Spec says blended.
+                # Simplified: Pick top score irrespective of TF for now, then apply sanity.
+                best_row = nifty_df.iloc[0]
+
+                # Sanity Check (1D)
+                daily_df = data_cache[("NIFTY", "1D")]
+                cand_obj = [c for c in candidates if c["id"] == best_row["id"]][0]
+
+                sanity_checker = SanityCheck(daily_df, self.config['backtest']['costs'])
+                passed_sanity = sanity_checker.check(cand_obj)
+
+                if passed_sanity:
+                    # Check Promotion
+                    current = self.store.get_current_champion()
+
+                    # Construct candidate dict
+                    candidate_record = {
+                        "id": best_row["id"],
+                        "strategy": cand_obj,
+                        "metrics": best_row["metrics"],
+                        "score": best_row["score"],
+                        "timeframe": best_row["timeframe"],
+                        "timestamp": datetime.now(IST).isoformat()
+                    }
+
+                    if self.ranker.evaluate_promotion(candidate_record.copy(), current, self.config): # copy to avoid modification issues
+                         self.store.promote_new_champion(candidate_record, ts)
+                         champion = candidate_record
+                    else:
+                        champion = current # Keep current
+                else:
+                    logger.warning(f"Candidate {cand_obj['id']} failed 1D sanity")
+
+        # 5. Live Signal (If eligible)
+        current_champ = self.store.get_current_champion()
+        if current_champ:
+            publisher = SignalPublisher(self.config_path)
+            publisher.publish(current_champ, "NIFTY")
+
+        logger.info("Foundry Run Completed")
 
 if __name__ == "__main__":
-    run()
+    runner = FoundryRunner()
+    runner.run()

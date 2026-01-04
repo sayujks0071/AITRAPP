@@ -1,30 +1,20 @@
-# Backtesting Methodology
+# Backtesting Details
 
-## Engine Assumptions
+## Data Assumptions
+- Intraday data (5m, 15m) is fetched via Yahoo Finance proxy (e.g. ^NSEI) if not available in Core.
+- Timestamps are normalized to Asia/Kolkata.
+- Session boundaries: 09:15 - 15:30 IST.
 
-1.  **Timeframe**: Daily (1D).
-2.  **Execution**:
-    *   **Entry**: Market Open of the bar *after* the signal is generated.
-    *   **Exit**: Market Open of the bar *after* exit signal, OR Intraday Stop Loss.
-3.  **Costs**:
-    *   Slippage: 5 bps per side.
-    *   Transaction Costs: 10 bps per side (approx all-in).
+## Costs
+- All-in cost: 3 bps per side (covers Brokerage + STT).
+- Slippage: 2 bps per side.
+- Spread guard: 2 bps penalty.
 
-## Walk-Forward Evaluation
+## Intraday Constraints
+- All positions must be flat by 15:25 IST.
+- Logic enforces this by checking timestamp time.
 
-To prevent overfitting, we use Walk-Forward Evaluation (WFE):
-
-1.  Data is split into `N` folds (default 4).
-2.  Each fold is evaluated independently (Out-of-Sample validation).
-3.  A strategy must perform consistently across folds to be considered.
-
-## Scoring & Ranking
-
-Composite Score calculated as:
-
-*   30% Sharpe Ratio (Risk-adjusted return)
-*   25% Calmar Ratio (Return / Max Drawdown)
-*   20% CAGR (Absolute return)
-*   15% Stability (Low dispersion of Sharpe across folds)
-
-Strategies with Max Drawdown > 35% or < 30 trades are rejected.
+## Evaluation
+- Walk-forward OOS is approximated by Train/Test split for MVP.
+- Metrics calculated on OOS data.
+- 1D Sanity check runs top candidates on Daily data to ensure no catastrophic failure.
