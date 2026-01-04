@@ -1,1 +1,1 @@
-perf
+## 2025-05-24 - [Historical Data Loading Optimization] **Learning:** `DataFrame.iterrows()` is extremely slow for converting rows to objects. Using `to_dict('records')` provided an ~8x speedup (from 9.9s to 1.2s for 100k rows) while maintaining readability. **Action:** Prefer `to_dict('records')` or vectorized operations over `iterrows()` in data conversion hot paths.
