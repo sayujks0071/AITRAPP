@@ -129,13 +129,23 @@ class TestOCOSideBug:
         calls = kite_client.place_order.call_args_list
         assert len(calls) == 2  # Stop and TP1
 
-        # Check stop order call
-        stop_call = calls[0]
-        assert stop_call[1]['transaction_type'] == 'SELL', \
-            f"Stop order transaction_type should be SELL, got {stop_call[1]['transaction_type']}"
+        # Find stop order call (order_type="SL-M")
+        stop_call = None
+        tp1_call = None
+        for call in calls:
+            kwargs = call.kwargs if hasattr(call, 'kwargs') else call[1]
+            if kwargs.get('order_type') == 'SL-M':
+                stop_call = kwargs
+            elif kwargs.get('order_type') == 'LIMIT':
+                tp1_call = kwargs
 
-        # Check TP1 order call
-        tp1_call = calls[1]
-        assert tp1_call[1]['transaction_type'] == 'SELL', \
-            f"TP1 order transaction_type should be SELL, got {tp1_call[1]['transaction_type']}"
+        # Verify stop order transaction_type
+        assert stop_call is not None, "Stop order call not found"
+        assert stop_call['transaction_type'] == 'SELL', \
+            f"Stop order transaction_type should be SELL, got {stop_call['transaction_type']}"
+
+        # Verify TP1 order transaction_type
+        assert tp1_call is not None, "TP1 order call not found"
+        assert tp1_call['transaction_type'] == 'SELL', \
+            f"TP1 order transaction_type should be SELL, got {tp1_call['transaction_type']}"
 
