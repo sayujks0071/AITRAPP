@@ -1,5 +1,3 @@
-
-import pytest
 from unittest.mock import Mock
 from packages.storage.models import Order, OrderSideEnum, OrderTypeEnum, OrderStatusEnum
 from packages.core.oco import OCOManager
