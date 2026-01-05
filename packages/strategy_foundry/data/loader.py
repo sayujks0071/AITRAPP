@@ -1,98 +1,85 @@
+"""
+Data Loader
+Manages loading, caching, and preprocessing of market data.
+"""
 import os
-import requests
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import structlog
-from typing import Optional
 from pathlib import Path
+from packages.strategy_foundry.data.sources import DataSources
+from packages.strategy_foundry.adapters.core_market_hours import IST
+from packages.strategy_foundry.adapters.core_data_provider import CoreDataProvider
 
 logger = structlog.get_logger(__name__)
 
 CACHE_DIR = Path("packages/strategy_foundry/data/cache")
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-SYMBOL_MAP = {
-    "NIFTY": "^NSEI",
-    "SENSEX": "^BSESN"
-}
+class DataLoader:
+    def __init__(self):
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_instrument_data(symbol: str, lookback_days: int = 3650, force_refresh: bool = False) -> pd.DataFrame:
-    """
-    Load OHLCV data for an instrument (NIFTY/SENSEX).
-    Prioritizes cache, downloads if stale or missing.
-    """
-    y_symbol = SYMBOL_MAP.get(symbol, symbol)
-    cache_file = CACHE_DIR / f"{symbol}.csv"
+    def get_data(self, symbol: str, timeframe: str, force_refresh: bool = False) -> pd.DataFrame:
+        """
+        Get OHLCV data for symbol and timeframe.
+        Tries CoreProvider -> Cache -> Yahoo -> Fallback
+        """
+        # 1. Try Core Provider (if implemented)
+        core_data = CoreDataProvider.get_ohlcv(symbol, timeframe)
+        if core_data is not None and not core_data.empty:
+            return self._process_data(core_data, timeframe)
 
-    # Check cache
-    if not force_refresh and cache_file.exists():
-        # Check freshness (e.g. if updated today)
-        mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
-        if mtime.date() >= datetime.now().date():
-             try:
-                 df = pd.read_csv(cache_file, parse_dates=["Date"], index_col="Date")
-                 logger.info("Loaded data from cache", symbol=symbol, rows=len(df))
-                 return df
-             except Exception as e:
-                 logger.warning("Cache corrupted, re-downloading", symbol=symbol, error=str(e))
+        # 2. Check Cache
+        cache_file = CACHE_DIR / f"{symbol}_{timeframe}.csv"
+        if not force_refresh and cache_file.exists():
+            # Check age - refresh if older than 1 hour for intraday, 12 hours for daily
+            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            age = datetime.now() - mtime
+            max_age = 3600 if timeframe in ["5m", "15m"] else 43200
 
-    # Download
-    logger.info("Downloading data", symbol=symbol, source="Yahoo")
-    df = _download_yahoo_data(y_symbol, lookback_days)
+            if age.total_seconds() < max_age:
+                try:
+                    df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                    return self._process_data(df, timeframe)
+                except Exception as e:
+                    logger.warning(f"Corrupt cache for {symbol}: {e}")
 
-    if not df.empty:
-        df.to_csv(cache_file)
-        logger.info("Cached data", symbol=symbol, path=str(cache_file))
+        # 3. Download from Yahoo
+        logger.info(f"Fetching fresh data for {symbol} {timeframe}")
+        df = DataSources.get_yahoo_data(symbol, timeframe)
 
-    return df
+        if not df.empty:
+            # Save to cache
+            df.to_csv(cache_file)
+            return self._process_data(df, timeframe)
 
-def _download_yahoo_data(symbol: str, days: int) -> pd.DataFrame:
-    """
-    Download data from Yahoo Finance Chart API.
-    """
-    end_dt = datetime.now()
-    start_dt = end_dt - timedelta(days=days)
-
-    period1 = int(start_dt.timestamp())
-    period2 = int(end_dt.timestamp())
-
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-    params = {
-        "period1": period1,
-        "period2": period2,
-        "interval": "1d",
-        "events": "history"
-    }
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-    }
-
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        result = data["chart"]["result"][0]
-        timestamps = result["timestamp"]
-        indicators = result["indicators"]["quote"][0]
-
-        df = pd.DataFrame({
-            "Date": pd.to_datetime(timestamps, unit="s").tz_localize("UTC").tz_convert("Asia/Kolkata").normalize(),
-            "open": indicators["open"],
-            "high": indicators["high"],
-            "low": indicators["low"],
-            "close": indicators["close"],
-            "volume": indicators["volume"]
-        })
-
-        df = df.set_index("Date").sort_index()
-        # Drop rows with missing data
-        df = df.dropna()
-
-        return df
-
-    except Exception as e:
-        logger.error("Failed to download data", symbol=symbol, error=str(e))
+        logger.error(f"Failed to load data for {symbol} {timeframe}")
         return pd.DataFrame()
+
+    def _process_data(self, df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+        """Standardize data format and timezone"""
+        if df.empty:
+            return df
+
+        # Ensure UTC then convert to IST
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('UTC')
+
+        df.index = df.index.tz_convert(IST)
+
+        # Filter for market hours (09:15 - 15:30)
+        # Assuming index is DatetimeIndex
+
+        if timeframe in ["5m", "15m"]:
+            # Simple filter: keeping only 09:15 to 15:30 range
+            # 09:15 is the start. 15:25 is close.
+            # We'll be permissive and keep 09:15 to 15:30
+            # Time components
+            mask = (
+                (df.index.time >= datetime.strptime("09:15", "%H:%M").time()) &
+                (df.index.time <= datetime.strptime("15:30", "%H:%M").time())
+            )
+            df = df[mask]
+
+        return df.sort_index()
+

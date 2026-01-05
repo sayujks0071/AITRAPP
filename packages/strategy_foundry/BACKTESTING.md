@@ -1,30 +1,24 @@
 # Backtesting Methodology
 
-## Engine Assumptions
+## Data Strategy
+-   **Primary**: 5m and 15m intraday bars.
+-   **Sanity**: 1D bars for checking major trend alignment and structural breaks.
+-   **Source**: Yahoo Finance (cached locally).
+-   **Timezone**: Normalized to Asia/Kolkata (IST).
 
-1.  **Timeframe**: Daily (1D).
-2.  **Execution**:
-    *   **Entry**: Market Open of the bar *after* the signal is generated.
-    *   **Exit**: Market Open of the bar *after* exit signal, OR Intraday Stop Loss.
-3.  **Costs**:
-    *   Slippage: 5 bps per side.
-    *   Transaction Costs: 10 bps per side (approx all-in).
+## Engine
+-   **Type**: Hybrid.
+    -   **Signal Generation**: Vectorized (Pandas/NumPy) for speed.
+    -   **Execution**: Event-driven loop to strictly enforce intraday constraints (time stops, EOD exits).
+-   **Execution Price**: Next Open (after signal).
+-   **Costs**:
+    -   Slippage: 5 bps per side.
+    -   Commission: 3 bps per side.
 
-## Walk-Forward Evaluation
-
-To prevent overfitting, we use Walk-Forward Evaluation (WFE):
-
-1.  Data is split into `N` folds (default 4).
-2.  Each fold is evaluated independently (Out-of-Sample validation).
-3.  A strategy must perform consistently across folds to be considered.
-
-## Scoring & Ranking
-
-Composite Score calculated as:
-
-*   30% Sharpe Ratio (Risk-adjusted return)
-*   25% Calmar Ratio (Return / Max Drawdown)
-*   20% CAGR (Absolute return)
-*   15% Stability (Low dispersion of Sharpe across folds)
-
-Strategies with Max Drawdown > 35% or < 30 trades are rejected.
+## Validation
+-   **Walk-Forward**: Data is split into 4 folds (default).
+-   **Ranking**: Strategies are ranked on Out-of-Sample (OOS) performance only.
+-   **Overfitting Guards**:
+    -   Must have positive expectancy in 3/4 folds.
+    -   Max Drawdown < 30%.
+    -   Profit Factor > 1.1.

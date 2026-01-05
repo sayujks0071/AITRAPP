@@ -1,32 +1,44 @@
-# Strategy Foundry
+# Aggressive Intraday Strategy Foundry
 
-An autonomous "self-generating strategy lab" that runs hourly to discover, backtest, and promote trading strategies for NIFTY/SENSEX.
+Automated research lab that generates, backtests, and selects intraday trading strategies for Indian markets.
+
+## Overview
+
+The foundry runs hourly (during market hours) to:
+1.  **Generate** random strategies based on a grammar of valid trading components.
+2.  **Backtest** these strategies on 5m and 15m timeframes using Walk-Forward Optimization.
+3.  **Rank** them based on risk-adjusted returns, stability, and robustness.
+4.  **Promote** a "Champion" strategy if it beats the incumbent.
+5.  **Publish** a live signal artifact (`live_signal.json`) if the champion signals an entry.
 
 ## Architecture
 
-- **Factory**: Generates random strategies using a grammar of indicators (Trend, Mean Reversion, Risk).
-- **Backtest**: Vectorized engine with Walk-Forward Evaluation (3-4 folds).
-- **Selection**: Ranks strategies by Sharpe, Calmar, and Stability. Promotes "Champions".
-- **Live**: Publishes `live_signal.json` artifacts. NO direct execution.
+-   `adapters/`: Bridges to Core system (Indicators, Market Hours).
+-   `data/`: Manages data loading and caching (Yahoo Finance).
+-   `factory/`: Strategy grammar and random generation.
+-   `backtest/`: Vectorized + Event-driven hybrid engine.
+-   `selection/`: Ranking and promotion logic.
+-   `live/`: Signal publication.
 
 ## Usage
 
-### Run Locally
+### Run Manually
 
 ```bash
-# Full Run
-python -m packages.strategy_foundry.run_hourly
+# Full mode
+python packages/strategy_foundry/run_hourly.py
 
-# Fast Mode (fewer candidates, fewer folds)
-FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
+# Fast mode (fewer candidates, fewer folds)
+FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
 ```
 
 ### Outputs
 
-- `packages/strategy_foundry/results/runs/<timestamp>/`: detailed artifacts.
-- `packages/strategy_foundry/results/champions/`: current best strategies.
-- `packages/strategy_foundry/results/live_signal.json`: latest trading signal.
+-   **Run Artifacts**: `results/runs/<timestamp>/` (candidates, metrics, leaderboard).
+-   **Live Signal**: `results/live_signal.json`.
+-   **Champion**: `results/champions/current.json`.
 
-## Data
+## Configuration
 
-Data is fetched from Yahoo Finance (`^NSEI`, `^BSESN`) and cached in `data/cache/`.
+-   `configs/foundry.yaml`: Foundry settings (thresholds, weights).
+-   `configs/instrument_map.yaml`: Symbol mapping (Research -> Paper -> Live).

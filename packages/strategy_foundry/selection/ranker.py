@@ -1,33 +1,46 @@
-from typing import Dict, Any
+"""
+Ranker
+Ranks strategies based on metrics.
+"""
+from typing import List, Dict, Any
+import pandas as pd
 
-def score_strategy(metrics: Dict[str, Any]) -> float:
-    """
-    Compute composite score for ranking.
-    + 30% OOS Sharpe
-    + 25% OOS Calmar
-    + 20% OOS CAGR
-    + 15% Stability (low dispersion)
-    − 10% Turnover penalty (proxy by too many trades? No, just raw count)
-    """
+class Ranker:
+    @staticmethod
+    def calculate_score(metrics: Dict[str, Any], weights: Dict[str, float]) -> float:
+        """
+        Calculate weighted score.
+        Normalizing inputs is hard without population context,
+        so we use thresholds and raw values with reasonable scaling.
+        """
+        score = 0.0
 
-    # Normalize or cap values to sane ranges for scoring
-    sharpe = min(max(metrics["avg_sharpe"], 0), 3.0) / 3.0
+        # Sharpe (Target ~2.0) -> 2.0 * 25 = 50 pts
+        score += min(metrics['sharpe'], 3.0) * weights['sharpe'] * 20
 
-    calmar_raw = metrics["avg_cagr"] / abs(metrics["worst_drawdown"]) if metrics["worst_drawdown"] != 0 else 0
-    calmar = min(calmar_raw, 3.0) / 3.0
+        # Calmar (Target ~3.0) -> 3.0 * 25 = 75 pts
+        score += min(metrics['calmar'], 5.0) * weights['calmar'] * 15
 
-    cagr = min(max(metrics["avg_cagr"], -0.5), 1.0) # Cap at 100%
-    if cagr < 0: cagr = 0 # Penalize negative hard
+        # Return (CAGR) -> 0.5 (50%) * 20 = 10 pts
+        score += min(metrics['cagr'], 2.0) * weights['return'] * 100
 
-    # Stability: lower dispersion is better.
-    # 0 dispersion -> 1.0 score. 1.0 dispersion -> 0.0 score.
-    stability = max(1.0 - metrics["sharpe_dispersion"], 0)
+        # Drawdown Penalty
+        # If DD > 20%, penalize heavily
+        if metrics['max_drawdown'] > 0.2:
+            score -= (metrics['max_drawdown'] - 0.2) * 200
 
-    # Turnover penalty: logic vague, let's just penalty if trades > 200 (overfitting/churn)
-    # or just flat small penalty.
-    # "Turnover penalty" usually means cost. We already deducted cost.
-    # Let's ignore explicit turnover penalty for score and trust net returns.
+        return score
 
-    score = (0.30 * sharpe) + (0.25 * calmar) + (0.20 * cagr) + (0.15 * stability)
+    @staticmethod
+    def rank(results: List[Dict[str, Any]]) -> pd.DataFrame:
+        """
+        Rank results.
+        results: List of dicts with 'metrics', 'config', 'id'
+        """
+        df = pd.DataFrame(results)
+        if df.empty:
+            return df
 
-    return round(score * 100, 2)
+        # Sort by score descending
+        df = df.sort_values('score', ascending=False)
+        return df
