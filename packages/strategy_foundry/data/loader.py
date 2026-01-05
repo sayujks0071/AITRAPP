@@ -1,98 +1,120 @@
+"""
+Data loader for Strategy Foundry.
+Fetches daily data from Yahoo Finance via requests.
+Caches to CSV.
+"""
 import os
 import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import structlog
-from typing import Optional
 from pathlib import Path
+import io
 
 logger = structlog.get_logger(__name__)
 
 CACHE_DIR = Path("packages/strategy_foundry/data/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-SYMBOL_MAP = {
+# Symbol Mapping
+SYMBOLS = {
     "NIFTY": "^NSEI",
     "SENSEX": "^BSESN"
 }
 
-def load_instrument_data(symbol: str, lookback_days: int = 3650, force_refresh: bool = False) -> pd.DataFrame:
+def fetch_data(symbol_key: str, days: int = 365*5) -> pd.DataFrame:
     """
-    Load OHLCV data for an instrument (NIFTY/SENSEX).
-    Prioritizes cache, downloads if stale or missing.
-    """
-    y_symbol = SYMBOL_MAP.get(symbol, symbol)
-    cache_file = CACHE_DIR / f"{symbol}.csv"
+    Fetch daily OHLCV data for symbol.
 
-    # Check cache
-    if not force_refresh and cache_file.exists():
-        # Check freshness (e.g. if updated today)
+    Args:
+        symbol_key: 'NIFTY' or 'SENSEX'
+        days: Number of days of history to fetch
+
+    Returns:
+        DataFrame with index Date (tz-aware Asia/Kolkata) and columns: open, high, low, close, volume
+    """
+    ticker = SYMBOLS.get(symbol_key)
+    if not ticker:
+        raise ValueError(f"Unknown symbol: {symbol_key}")
+
+    # Check cache first
+    cache_file = CACHE_DIR / f"{symbol_key}.csv"
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # Simple cache invalidation: if file modified today, use it.
+    # Actually, we want fresh data if market is open or closed recently.
+    # For now, let's fetch fresh if cache is older than 12 hours.
+
+    force_refresh = False
+    if cache_file.exists():
         mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
-        if mtime.date() >= datetime.now().date():
-             try:
-                 df = pd.read_csv(cache_file, parse_dates=["Date"], index_col="Date")
-                 logger.info("Loaded data from cache", symbol=symbol, rows=len(df))
-                 return df
-             except Exception as e:
-                 logger.warning("Cache corrupted, re-downloading", symbol=symbol, error=str(e))
+        if datetime.now() - mtime > timedelta(hours=12):
+            force_refresh = True
+    else:
+        force_refresh = True
 
-    # Download
-    logger.info("Downloading data", symbol=symbol, source="Yahoo")
-    df = _download_yahoo_data(y_symbol, lookback_days)
+    if not force_refresh:
+        try:
+            logger.info("Loading from cache", symbol=symbol_key)
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            if not df.index.tz:
+                 df.index = df.index.tz_localize("Asia/Kolkata")
+            return df
+        except Exception as e:
+            logger.warning("Cache load failed, fetching fresh", error=str(e))
 
-    if not df.empty:
-        df.to_csv(cache_file)
-        logger.info("Cached data", symbol=symbol, path=str(cache_file))
-
-    return df
-
-def _download_yahoo_data(symbol: str, days: int) -> pd.DataFrame:
-    """
-    Download data from Yahoo Finance Chart API.
-    """
+    # Download from Yahoo
+    # Calculate period1 and period2
     end_dt = datetime.now()
     start_dt = end_dt - timedelta(days=days)
 
     period1 = int(start_dt.timestamp())
     period2 = int(end_dt.timestamp())
 
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-    params = {
-        "period1": period1,
-        "period2": period2,
-        "interval": "1d",
-        "events": "history"
-    }
+    url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={period1}&period2={period2}&interval=1d&events=history&includeAdjustedClose=true"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
     }
 
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        logger.info("Downloading data", symbol=symbol_key, url=url)
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        data = response.json()
 
-        result = data["chart"]["result"][0]
-        timestamps = result["timestamp"]
-        indicators = result["indicators"]["quote"][0]
+        df = pd.read_csv(io.StringIO(response.text), index_col="Date", parse_dates=True)
 
-        df = pd.DataFrame({
-            "Date": pd.to_datetime(timestamps, unit="s").tz_localize("UTC").tz_convert("Asia/Kolkata").normalize(),
-            "open": indicators["open"],
-            "high": indicators["high"],
-            "low": indicators["low"],
-            "close": indicators["close"],
-            "volume": indicators["volume"]
-        })
+        # Clean up
+        df = df[["Open", "High", "Low", "Close", "Volume"]]
+        df.columns = ["open", "high", "low", "close", "volume"]
 
-        df = df.set_index("Date").sort_index()
-        # Drop rows with missing data
-        df = df.dropna()
+        # Drop missing
+        df.dropna(inplace=True)
+
+        # Normalize Index to Asia/Kolkata
+        # Yahoo dates are typically YYYY-MM-DD representing local market time.
+        # We need to make them tz-aware.
+        if df.index.tz is None:
+             df.index = df.index.tz_localize("Asia/Kolkata")
+        else:
+             df.index = df.index.tz_convert("Asia/Kolkata")
+
+        # Sort
+        df.sort_index(inplace=True)
+
+        # Save to cache
+        df.to_csv(cache_file)
 
         return df
 
     except Exception as e:
-        logger.error("Failed to download data", symbol=symbol, error=str(e))
-        return pd.DataFrame()
+        logger.error("Download failed", error=str(e))
+        # Try fallback to cache if available even if stale
+        if cache_file.exists():
+            return pd.read_csv(cache_file, index_col=0, parse_dates=True)
+        raise
+
+def get_latest_price(symbol_key: str) -> float:
+    df = fetch_data(symbol_key, days=5)
+    return df['close'].iloc[-1]

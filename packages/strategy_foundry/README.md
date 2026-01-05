@@ -1,32 +1,30 @@
 # Strategy Foundry
-
-An autonomous "self-generating strategy lab" that runs hourly to discover, backtest, and promote trading strategies for NIFTY/SENSEX.
+Self-generating strategy lab that evolves, ranks, and publishes trading signals.
 
 ## Architecture
+- **Data**: Fetches daily data from Yahoo Finance via `requests`. Caches to CSV.
+- **Factory**: Generates random strategy candidates from a "grammar" of Trend, Mean Reversion, and Risk blocks.
+- **Backtest**: Vectorized engine with Walk-Forward Analysis (WFA) to test robustness.
+- **Selection**: Ranks candidates by OOS Sharpe, Calmar, and Stability. Promotes "Champions".
+- **Live**: Publishes JSON signals (`live_signal.json`) for the champion strategy. NO direct order execution.
 
-- **Factory**: Generates random strategies using a grammar of indicators (Trend, Mean Reversion, Risk).
-- **Backtest**: Vectorized engine with Walk-Forward Evaluation (3-4 folds).
-- **Selection**: Ranks strategies by Sharpe, Calmar, and Stability. Promotes "Champions".
-- **Live**: Publishes `live_signal.json` artifacts. NO direct execution.
-
-## Usage
-
-### Run Locally
-
+## Running Locally
 ```bash
-# Full Run
-python -m packages.strategy_foundry.run_hourly
+# Install dependencies
+pip install -r requirements.txt
+pip install requests
 
-# Fast Mode (fewer candidates, fewer folds)
-FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
+# Run once
+export PYTHONPATH=.
+python -m packages.strategy_foundry.run_hourly
 ```
 
-### Outputs
+## Environment Variables
+- `FAST_MODE=1`: Runs a smaller batch (10 candidates, 2 folds) for quick testing/CI.
 
-- `packages/strategy_foundry/results/runs/<timestamp>/`: detailed artifacts.
-- `packages/strategy_foundry/results/champions/`: current best strategies.
-- `packages/strategy_foundry/results/live_signal.json`: latest trading signal.
-
-## Data
-
-Data is fetched from Yahoo Finance (`^NSEI`, `^BSESN`) and cached in `data/cache/`.
+## Outputs
+Artifacts are saved in `packages/strategy_foundry/results/`:
+- `runs/<timestamp>/`: detailed metrics and candidates.
+- `champions/`: versioned champion strategies.
+- `leaderboard.md`: current top strategies.
+- `live_signal.json`: current trading signal (if market open).

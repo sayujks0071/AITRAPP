@@ -1,114 +1,133 @@
+"""
+Strategy Foundry - Hourly Runner.
+"""
 import os
 import sys
-import structlog
+import json
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
-import pandas as pd
-import pytz
+import structlog
+from typing import List, Dict, Any
 
-# Add repo root to path
-sys.path.append(os.getcwd())
+from packages.strategy_foundry.data.loader import fetch_data
+from packages.strategy_foundry.factory.grammar import generate_candidate
+from packages.strategy_foundry.backtest.walkforward import WalkForwardAnalyst
+from packages.strategy_foundry.backtest.sanity import check_sanity
+from packages.strategy_foundry.selection.ranker import rank_candidates
+from packages.strategy_foundry.selection.promote import compare_and_promote, load_champion
+from packages.strategy_foundry.live.signal_publisher import publish_signal
+from packages.strategy_foundry.backtest.engine import BacktestEngine
 
-from packages.strategy_foundry.data.loader import load_instrument_data
-from packages.strategy_foundry.factory.generator import generate_candidates
-from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
-from packages.strategy_foundry.backtest.sanity import sanity_check
-from packages.strategy_foundry.selection.ranker import score_strategy
-from packages.strategy_foundry.selection.promote import promote_if_better
-from packages.strategy_foundry.live.signal_publisher import publish_live_signal
-
-# Configure logging
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
-    ],
-    logger_factory=structlog.PrintLoggerFactory(),
-)
-logger = structlog.get_logger()
-
-# Config
-SYMBOLS = ["NIFTY", "SENSEX"]
-FAST_MODE = os.getenv("FAST_MODE", "0") == "1"
+logger = structlog.get_logger(__name__)
 
 def run():
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(f"packages/strategy_foundry/results/runs/{run_ts}")
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # 1. Setup
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_dir = Path(f"packages/strategy_foundry/results/runs/{timestamp}")
+    results_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Starting Hourly Run", fast_mode=FAST_MODE, run_dir=str(run_dir))
+    fast_mode = os.environ.get("FAST_MODE", "0") == "1"
 
-    for symbol in SYMBOLS:
-        try:
-            logger.info("Processing Symbol", symbol=symbol)
+    n_candidates = 10 if fast_mode else 50
+    n_folds = 2 if fast_mode else 4
 
-            # 1. Load Data
-            df = load_instrument_data(symbol)
-            if df.empty:
-                logger.error("No data", symbol=symbol)
-                continue
+    logger.info("Starting Strategy Foundry Run", fast_mode=fast_mode, timestamp=timestamp)
 
-            # 2. Generate Candidates
-            n_candidates = 10 if FAST_MODE else 50
-            candidates = generate_candidates(n_candidates)
-            logger.info("Generated candidates", count=len(candidates))
+    # 2. Data
+    # NIFTY only for now as primary
+    symbol = "NIFTY"
+    try:
+        df = fetch_data(symbol)
+    except Exception as e:
+        logger.error("Failed to fetch data", error=str(e))
+        sys.exit(1)
 
-            # 3. Evaluate
-            n_folds = 2 if FAST_MODE else 4
-            evaluator = WalkForwardEvaluator(n_folds=n_folds)
+    # 3. Generate & Evaluate Candidates
+    candidates = []
 
-            results = []
+    for _ in range(n_candidates):
+        config = generate_candidate()
 
-            for strategy in candidates:
-                metrics = evaluator.evaluate(strategy, df)
+        # Walk Forward
+        wf = WalkForwardAnalyst(df, n_folds=n_folds)
+        res = wf.run(config)
 
-                if metrics["valid"]:
-                    # Sanity Check
-                    if sanity_check(metrics, FAST_MODE):
-                        # Score
-                        score = score_strategy(metrics)
+        if res["valid"]:
+             # Sanity Check
+            if check_sanity(res):
+                candidates.append({
+                    "id": config["id"],
+                    "config": config,
+                    "metrics": res,
+                    "rule_summary": "" # TODO
+                })
 
-                        result_entry = {
-                            "id": strategy.id,
-                            "config": strategy.config,
-                            "metrics": {
-                                "avg_sharpe": metrics["avg_sharpe"],
-                                "avg_cagr": metrics["avg_cagr"],
-                                "worst_drawdown": metrics["worst_drawdown"],
-                                "total_trades": metrics["total_trades"],
-                                "positive_folds": metrics["positive_folds"],
-                                "sharpe_dispersion": metrics["sharpe_dispersion"]
-                            },
-                            "score": score
-                        }
-                        results.append(result_entry)
+    logger.info("Candidates generated", count=len(candidates), valid=len(candidates))
 
-            logger.info("Evaluation complete", passed_sanity=len(results))
+    # 4. Rank
+    ranked = rank_candidates(candidates)
 
-            # 4. Rank and Promote
-            if results:
-                results.sort(key=lambda x: x["score"], reverse=True)
+    # Save Results
+    # Simplify for JSON
+    serializable_ranked = []
+    for c in ranked:
+        # Metrics has 'folds' with DataFrames, need to strip or summarize
+        # We need to serialize carefully.
+        # Actually, res['trades'] is a DataFrame.
+        # Let's drop trades and just keep summary metrics for the list.
+        summary = c.copy()
+        summary["metrics"] = c["metrics"].copy()
 
-                # Save candidates to run artifact
-                with open(run_dir / f"candidates_{symbol}.json", "w") as f:
-                    import json
-                    json.dump(results, f, indent=2)
+        # Safe pop for top level trades DF in metrics dict (from WalkForward)
+        if "trades" in summary["metrics"]:
+             summary["metrics"].pop("trades")
 
-                top_candidate = results[0]
-                promote_if_better(top_candidate, symbol)
+        # Remove trades from folds
+        folds = []
+        for f in summary["metrics"]["metrics"].get("folds", []):
+            f_clean = f.copy()
+            # compute_metrics returns dict of floats, no DF usually, but check
+            if "trades" in f_clean and isinstance(f_clean["trades"], pd.DataFrame):
+                 f_clean.pop("trades")
+            folds.append(f_clean)
+        summary["metrics"]["metrics"]["folds"] = folds
+        serializable_ranked.append(summary)
 
-            # 5. Live Signal
-            # Check market hours?
-            # Logic: If market is open (Mon-Fri 9:15-15:30 IST).
-            # We can use a simple check here or delegate to publisher.
-            # Publisher will just write "SKIPPED" if we don't call it, or we call it and it checks.
-            # For simplicity, let's just call it. It generates signal based on latest data.
-            publish_live_signal(symbol, df)
+    with open(results_dir / "candidates.json", 'w') as f:
+        json.dump(serializable_ranked, f, indent=2)
 
-        except Exception as e:
-            logger.error("Run failed for symbol", symbol=symbol, error=str(e))
-            import traceback
-            traceback.print_exc()
+    # Leaderboard
+    leaderboard_file = Path("packages/strategy_foundry/results/leaderboard.md")
+    with open(leaderboard_file, "w") as f:
+        f.write("# Strategy Leaderboard\n\n")
+        f.write("| Rank | ID | Score | Sharpe | CAGR | MaxDD |\n")
+        f.write("|---|---|---|---|---|---|\n")
+        for i, c in enumerate(serializable_ranked[:20]):
+            m = c["metrics"]["metrics"]
+            f.write(f"| {i+1} | {c['id'][:8]} | {c.get('score',0):.2f} | {m.get('sharpe',0):.2f} | {m.get('cagr',0):.2f} | {m.get('max_drawdown',0):.2f} |\n")
+
+    # 5. Champion Promotion
+    if serializable_ranked:
+        best = serializable_ranked[0]
+        # Use serializable version for storage
+        compare_and_promote(best)
+
+    # 6. Live Signal Generation
+    champion = load_champion()
+    if champion:
+        engine = BacktestEngine(df)
+        res = engine.run(champion["config"])
+        is_open = res.get("is_open", False)
+
+        signal = 1 if is_open else 0
+
+        publish_signal(
+            champion=champion,
+            signal=signal,
+            instrument=symbol,
+            reason="Champion Signal"
+        )
 
 if __name__ == "__main__":
     run()

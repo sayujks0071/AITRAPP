@@ -1,0 +1,137 @@
+[
+  {
+    "id": "42cffbdc27843ad2a269e544bb0f8942",
+    "config": {
+      "blocks": [
+        {
+          "type": "ENTRY",
+          "subtype": "DONCHIAN_BREAKOUT",
+          "params": {
+            "period": 10
+          }
+        },
+        {
+          "type": "EXIT",
+          "subtype": "ATR_STOP",
+          "params": {
+            "multiplier": 3.0
+          }
+        },
+        {
+          "type": "EXIT",
+          "subtype": "TIME_STOP",
+          "params": {
+            "days": 3
+          }
+        }
+      ],
+      "strategy_type": "TREND",
+      "id": "42cffbdc27843ad2a269e544bb0f8942"
+    },
+    "metrics": {
+      "valid": true,
+      "metrics": {
+        "sharpe": 14.091162668509494,
+        "cagr": 2.2039502381568274,
+        "folds": [
+          {
+            "cagr": 2.5406037771513676,
+            "volatility": 0.17124937398009174,
+            "sharpe": 14.835696727549617,
+            "max_drawdown": -0.013302971084451252,
+            "calmar": 190.9801773620985,
+            "trades": 51,
+            "win_rate": 0.803921568627451,
+            "profit_factor": 17.726223680801596,
+            "avg_trade_return": 0.022672586925288656
+          },
+          {
+            "cagr": 1.8672966991622868,
+            "volatility": 0.13990774403038744,
+            "sharpe": 13.346628609469372,
+            "max_drawdown": -0.011092738253184343,
+            "calmar": 168.33505456835695,
+            "trades": 51,
+            "win_rate": 0.8431372549019608,
+            "profit_factor": 21.04647015577411,
+            "avg_trade_return": 0.019106172925535552
+          }
+        ],
+        "total_trades": 102
+      }
+    },
+    "rule_summary": "",
+    "score": 137.60206567043008
+  },
+  {
+    "id": "a6c572a8172f8435bf98377bef2625df",
+    "config": {
+      "blocks": [
+        {
+          "type": "ENTRY",
+          "subtype": "DONCHIAN_BREAKOUT",
+          "params": {
+            "period": 50
+          }
+        },
+        {
+          "type": "FILTER",
+          "subtype": "ADX_FILTER",
+          "params": {
+            "threshold": 15
+          }
+        },
+        {
+          "type": "EXIT",
+          "subtype": "ATR_STOP",
+          "params": {
+            "multiplier": 2.5
+          }
+        },
+        {
+          "type": "EXIT",
+          "subtype": "TIME_STOP",
+          "params": {
+            "days": 10
+          }
+        }
+      ],
+      "strategy_type": "TREND",
+      "id": "a6c572a8172f8435bf98377bef2625df"
+    },
+    "metrics": {
+      "valid": true,
+      "metrics": {
+        "sharpe": 2.979082771528842,
+        "cagr": 0.1393205101496282,
+        "folds": [
+          {
+            "cagr": 0.1547845505560872,
+            "volatility": 0.051573150680092474,
+            "sharpe": 3.0012622559403743,
+            "max_drawdown": 0.0,
+            "calmar": 0.0,
+            "trades": 5,
+            "win_rate": 1.0,
+            "profit_factor": 0.13215542894013424,
+            "avg_trade_return": 0.02643108578802685
+          },
+          {
+            "cagr": 0.12385646974316922,
+            "volatility": 0.04188722380024715,
+            "sharpe": 2.95690328711731,
+            "max_drawdown": 0.0,
+            "calmar": 0.0,
+            "trades": 5,
+            "win_rate": 1.0,
+            "profit_factor": 0.10761228891559893,
+            "avg_trade_return": 0.021522457783119786
+          }
+        ],
+        "total_trades": 10
+      }
+    },
+    "rule_summary": "",
+    "score": 107.15889334885783
+  }
+]

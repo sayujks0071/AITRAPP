@@ -1,58 +1,59 @@
+"""
+Strategy Foundry - Champion Store.
+"""
 import json
-import os
+import shutil
 from pathlib import Path
+from datetime import datetime
 from typing import Dict, Any, Optional
 import structlog
-from datetime import datetime
 
 logger = structlog.get_logger(__name__)
 
 CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
-CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+CURRENT_CHAMPION_FILE = CHAMPION_DIR / "current.json"
 
-def load_current_champion(symbol: str) -> Optional[Dict[str, Any]]:
-    path = CHAMPION_DIR / f"current_{symbol}.json"
-    if path.exists():
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error("Failed to load champion", error=str(e))
-    return None
+def load_champion() -> Optional[Dict[str, Any]]:
+    if not CURRENT_CHAMPION_FILE.exists():
+        return None
+    try:
+        with open(CURRENT_CHAMPION_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error("Failed to load champion", error=str(e))
+        return None
 
-def save_champion(champion: Dict[str, Any], symbol: str):
-    # Save current
-    path = CHAMPION_DIR / f"current_{symbol}.json"
-    with open(path, "w") as f:
-        json.dump(champion, f, indent=2)
+def promote_champion(candidate: Dict[str, Any], reason: str = "New Champion"):
+    """
+    Promote a candidate to champion.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    cid = candidate.get("id", "unknown")
 
-    # Versioned
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    v_path = CHAMPION_DIR / f"{ts}_{symbol}_{champion['id']}.json"
-    with open(v_path, "w") as f:
-        json.dump(champion, f, indent=2)
+    # Save versioned
+    filename = f"{timestamp}_{cid}.json"
+    with open(CHAMPION_DIR / filename, 'w') as f:
+        json.dump(candidate, f, indent=2)
 
-def promote_if_better(candidate: Dict[str, Any], symbol: str) -> bool:
-    current = load_current_champion(symbol)
+    # Update current
+    with open(CURRENT_CHAMPION_FILE, 'w') as f:
+        json.dump(candidate, f, indent=2)
+
+    logger.info("Promoted new champion", id=cid, reason=reason)
+
+def compare_and_promote(best_new_candidate: Dict[str, Any]):
+    current = load_champion()
 
     if not current:
-        save_champion(candidate, symbol)
-        logger.info("New champion promoted (first)", symbol=symbol, id=candidate["id"], score=candidate["score"])
-        return True
+        promote_champion(best_new_candidate, "First Champion")
+        return
 
-    # Promotion Logic
-    # New score >= Current score * 1.10 OR MaxDD significantly better
+    # Comparison
+    curr_score = current.get("score", 0)
+    new_score = best_new_candidate.get("score", 0)
 
-    score_improvement = candidate["score"] >= current["score"] * 1.10
-
-    curr_dd = current["metrics"]["worst_drawdown"]
-    cand_dd = candidate["metrics"]["worst_drawdown"]
-    # dd is negative, so closer to 0 is better. -0.10 > -0.20
-    dd_improvement = cand_dd > (curr_dd * 0.75) and candidate["score"] >= current["score"] # Less drawdown and at least same score
-
-    if score_improvement or dd_improvement:
-        save_champion(candidate, symbol)
-        logger.info("New champion promoted", symbol=symbol, id=candidate["id"], score=candidate["score"], prev_score=current["score"])
-        return True
-
-    return False
+    # Rule: New must exceed current by >= 10%
+    if new_score > curr_score * 1.1:
+        promote_champion(best_new_candidate, f"Score improvement {curr_score:.2f} -> {new_score:.2f}")
+    else:
+        logger.info("Champion retained", current_score=curr_score, challenger_score=new_score)
