@@ -96,3 +96,84 @@ def test_futures_fee_calculation(risk_manager):
 
     expected_fees = 249.782
     assert abs(fees - expected_fees) < 5.0, f"Fees {fees} deviates from expected {expected_fees}"
+
+def test_equity_fee_calculation_small_capital(risk_manager):
+    """
+    Test fee calculation for small Equity trades (Intraday).
+    Parameters:
+        Buy Price: 100
+        Sell Price: 110
+        Quantity: 1
+        Turnover: 1 * (210) = 210
+
+    Expected Breakdown:
+        Brokerage: min(20, 0.03% of 100) + min(20, 0.03% of 110)
+                 = min(20, 0.03) + min(20, 0.033)
+                 = 0.03 + 0.033 = 0.063
+        Exchange Txn (0.00325%): 210 * 0.0000325 = 0.006825
+        GST (18% on Brokerage+Txn): 0.18 * (0.063 + 0.006825) = 0.0125685
+        STT (0.025% on Sell): (1 * 110) * 0.00025 = 0.0275
+        Stamp Duty (0.003% on Buy): (1 * 100) * 0.00003 = 0.003
+        SEBI (10 per crore): 210 * 10/1Cr = 0.00021
+
+    Total Expected: 0.063 + 0.006825 + 0.0125685 + 0.0275 + 0.003 + 0.00021 = 0.1131035
+    """
+    instrument = Instrument(
+        token=123,
+        symbol="TATASTEEL",
+        tradingsymbol="TATASTEEL",
+        exchange="NSE",
+        instrument_type=InstrumentType.EQ,
+        lot_size=1,
+        tick_size=0.05
+    )
+
+    fees = risk_manager.estimate_fees(
+        instrument=instrument,
+        quantity=1,
+        entry_price=100.0,
+        exit_price=110.0
+    )
+
+    expected_fees = 0.1131
+    assert abs(fees - expected_fees) < 0.01, f"Fees {fees} deviates from expected {expected_fees}"
+
+def test_equity_fee_calculation_large_capital(risk_manager):
+    """
+    Test fee calculation for large Equity trades (Intraday) where Cap applies.
+    Parameters:
+        Buy Price: 1000
+        Sell Price: 1010
+        Quantity: 1000
+        Turnover: 1000 * (2010) = 2,010,000
+
+    Expected Breakdown:
+        Brokerage: min(20, 0.03% of 1M) + min(20, 0.03% of 1.01M)
+                 = 20 + 20 = 40 (Capped)
+        Exchange Txn (0.00325%): 2010000 * 0.0000325 = 65.325
+        GST (18%): 0.18 * (40 + 65.325) = 18.9585
+        STT (0.025% on Sell): (1000 * 1010) * 0.00025 = 252.5
+        Stamp Duty (0.003% on Buy): (1000 * 1000) * 0.00003 = 30.0
+        SEBI: 2010000 * 10/1Cr = 2.01
+
+    Total Expected: 40 + 65.325 + 18.9585 + 252.5 + 30.0 + 2.01 = 408.7935
+    """
+    instrument = Instrument(
+        token=123,
+        symbol="RELIANCE",
+        tradingsymbol="RELIANCE",
+        exchange="NSE",
+        instrument_type=InstrumentType.EQ,
+        lot_size=1,
+        tick_size=0.05
+    )
+
+    fees = risk_manager.estimate_fees(
+        instrument=instrument,
+        quantity=1000,
+        entry_price=1000.0,
+        exit_price=1010.0
+    )
+
+    expected_fees = 408.7935
+    assert abs(fees - expected_fees) < 1.0, f"Fees {fees} deviates from expected {expected_fees}"
