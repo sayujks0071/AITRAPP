@@ -1,38 +1,28 @@
-import unittest
-from unittest.mock import patch, MagicMock
+
+import pytest
 import pandas as pd
-import numpy as np
-from packages.strategy_foundry.data.loader import load_instrument_data, SYMBOL_MAP
+from packages.strategy_foundry.data.loader import fetch_data
 
-class TestLoader(unittest.TestCase):
-    @patch('packages.strategy_foundry.data.loader.requests.get')
-    def test_download_yahoo(self, mock_get):
-        # Mock response
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "chart": {
-                "result": [{
-                    "timestamp": [1609459200, 1609545600],
-                    "indicators": {
-                        "quote": [{
-                            "open": [100, 101],
-                            "high": [105, 106],
-                            "low": [95, 96],
-                            "close": [102, 104],
-                            "volume": [1000, 1200]
-                        }]
-                    }
-                }]
-            }
-        }
-        mock_get.return_value = mock_response
+def test_fetch_data_structure(mocker):
+    # Mock requests
+    mock_resp = mocker.Mock()
+    mock_resp.text = "Date,Open,High,Low,Close,Volume\n2023-01-01,100,110,90,105,1000\n2023-01-02,105,115,95,110,1200"
+    mock_resp.status_code = 200
+    mocker.patch("requests.get", return_value=mock_resp)
 
-        df = load_instrument_data("TEST_SYM", force_refresh=True)
+    df = fetch_data("NIFTY")
+    assert not df.empty
+    assert "close" in df.columns
+    assert isinstance(df.index, pd.DatetimeIndex)
+    assert str(df.index.tz) == "Asia/Kolkata"
 
-        self.assertFalse(df.empty)
-        self.assertEqual(len(df), 2)
-        self.assertTrue("close" in df.columns)
-        self.assertEqual(df.index[0].year, 2021)
+def test_loader_caches_data(mocker, tmp_path):
+    mocker.patch("packages.strategy_foundry.data.loader.CACHE_DIR", tmp_path)
 
-if __name__ == '__main__':
-    unittest.main()
+    mock_resp = mocker.Mock()
+    mock_resp.text = "Date,Open,High,Low,Close,Volume\n2023-01-01,100,110,90,105,1000"
+    mocker.patch("requests.get", return_value=mock_resp)
+
+    fetch_data("NIFTY")
+
+    assert (tmp_path / "NIFTY.csv").exists()

@@ -1,70 +1,133 @@
+"""
+Strategy Foundry - Walk Forward Analysis.
+"""
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Any
+from typing import Dict, Any, List
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import Strategy
+from packages.strategy_foundry.backtest.metrics import compute_metrics
 import structlog
 
 logger = structlog.get_logger(__name__)
 
-class WalkForwardEvaluator:
-    def __init__(self, n_folds: int = 3):
+class WalkForwardAnalyst:
+    def __init__(self, data: pd.DataFrame, n_folds: int = 4):
+        self.data = data
         self.n_folds = n_folds
-        self.engine = BacktestEngine()
 
-    def evaluate(self, strategy: Strategy, df: pd.DataFrame) -> Dict[str, Any]:
+    def run(self, strategy_config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Perform walk-forward evaluation.
+        Run Walk-Forward Analysis.
         Splits data into N folds.
-        For simplicity in this MVP:
-        - We just split data into N equal chunks.
-        - We treat each chunk as OOS (Out of Sample) for evaluation purposes
-          (since we are not optimizing params on IS, we are generating random ones).
-        - So effectively, the entire history is OOS for random search.
+        For each fold:
+          - (Optional) Optimize on In-Sample (IS) -> We skip opt for now as we generate random fixed params.
+          - Evaluate on Out-Of-Sample (OOS)
 
-        However, to simulate stability, we check consistency across folds.
+        Since we are selecting from random candidates, we treat the 'Training' phase
+        as just verification that it worked in the past, but the Score comes from OOS.
+
+        Actually, pure WF usually implies re-optimization.
+        Here we have fixed strategies (candidates).
+        So we are essentially Cross-Validating them or testing robustness over time.
+
+        We will split time into N blocks.
+        OOS Performance is the concatenation of the test folds?
+        Or just average metrics across folds?
+
+        Let's do Expanding Window WF.
+        Train:Start..T, Test: T..T+k
+
+        Since params are fixed (no optimization step inside the fold),
+        this effectively measures stability of the fixed parameters over time.
         """
-        if len(df) < 252:
+
+        # Split data
+        n = len(self.data)
+        if n < 500: # Need enough data
             return {"valid": False, "reason": "Insufficient data"}
 
-        fold_size = len(df) // self.n_folds
+        fold_size = n // (self.n_folds + 1)
+
+        oos_trades = []
+        oos_equity = [] # Hard to stitch equity exactly without bias, but let's try.
 
         fold_metrics = []
-        equity_curves = []
 
-        for i in range(self.n_folds):
-            start = i * fold_size
-            end = (i + 1) * fold_size if i < self.n_folds - 1 else len(df)
+        engine = BacktestEngine(self.data)
 
-            fold_df = df.iloc[start:end]
-            metrics = self.engine.run(strategy, fold_df)
+        # We simulate "Production" usage:
+        # At time T, we pick this strategy. Does it work in T+1?
 
-            fold_metrics.append(metrics)
-            if "equity_curve" in metrics:
-                equity_curves.extend(metrics["equity_curve"].values()) # Just accumulating values for now
+        for i in range(1, self.n_folds + 1):
+            train_end = i * fold_size
+            test_end = (i + 1) * fold_size if i < self.n_folds else n
 
-        # Aggregate Metrics (OOS average)
-        avg_sharpe = np.mean([m["sharpe"] for m in fold_metrics])
-        avg_cagr = np.mean([m["cagr"] for m in fold_metrics])
-        worst_dd = np.min([m["max_drawdown"] for m in fold_metrics])
-        total_trades = sum([m["trades"] for m in fold_metrics])
+            # test_data = self.data.iloc[train_end:test_end]
+            # We need to run engine on full data but slice results to handle lookback correctly?
+            # Or run engine on slice? Engine needs warmup.
+            # Best: Run engine on slice with some warmup from train.
 
-        positive_folds = sum([1 for m in fold_metrics if m["total_return"] > 0])
+            warmup = 100
+            start_idx = max(0, train_end - warmup)
 
-        # Check stability (std dev of sharpe)
-        sharpe_dispersion = np.std([m["sharpe"] for m in fold_metrics])
+            chunk_data = self.data.iloc[start_idx:test_end].copy()
 
-        # Full run for final equity curve
-        full_metrics = self.engine.run(strategy, df)
+            chunk_engine = BacktestEngine(chunk_data)
+            res = chunk_engine.run(strategy_config)
+
+            # Extract OOS portion
+            # The result indices are dates.
+            # We want trades that exited in OOS period (train_end date to test_end date)
+
+            split_date = self.data.index[train_end]
+
+            chunk_trades = res["trades"]
+            if not chunk_trades.empty:
+                # Filter trades that exited after split_date
+                oos_tr = chunk_trades[chunk_trades["exit_date"] > split_date]
+                oos_trades.append(oos_tr)
+
+            # Compute metrics for this fold
+            # Need equity curve slice
+            eq = res["equity_curve"]
+            oos_eq = eq[eq.index > split_date]
+
+            if not oos_eq.empty:
+                m = compute_metrics(oos_eq, oos_tr if not chunk_trades.empty else pd.DataFrame())
+                fold_metrics.append(m)
+
+        # Aggregate OOS results
+        if not oos_trades:
+            return {"valid": False, "reason": "No OOS trades"}
+
+        all_oos_trades = pd.concat(oos_trades)
+
+        if all_oos_trades.empty:
+             return {"valid": False, "reason": "No OOS trades in combined"}
+
+        # Stitch equity curve approx (cumulative return)
+        # Or just re-run on full dataset and call it "Full Backtest"
+        # but pure OOS metrics are better derived from the folds.
+
+        # Let's compute aggregate metrics from all OOS trades
+        # Reconstructing a synthetic equity curve from trades
+        # Assuming fixed capital per trade or compounding?
+        # Let's simple sum returns for metric proxy or use average fold metrics.
+
+        avg_sharpe = np.mean([m.get("sharpe", 0) for m in fold_metrics])
+        avg_cagr = np.mean([m.get("cagr", 0) for m in fold_metrics])
+
+        # Full OOS Trade Analysis
+        # We can treat the sequence of OOS trades as one track record
+        all_oos_trades.sort_values("entry_date", inplace=True)
 
         return {
             "valid": True,
-            "avg_sharpe": avg_sharpe,
-            "avg_cagr": avg_cagr,
-            "worst_drawdown": worst_dd,
-            "total_trades": total_trades,
-            "positive_folds": positive_folds,
-            "sharpe_dispersion": sharpe_dispersion,
-            "full_metrics": full_metrics,
-            "fold_metrics": fold_metrics
+            "metrics": {
+                "sharpe": avg_sharpe,
+                "cagr": avg_cagr,
+                "folds": fold_metrics,
+                "total_trades": len(all_oos_trades)
+            },
+            "trades": all_oos_trades
         }

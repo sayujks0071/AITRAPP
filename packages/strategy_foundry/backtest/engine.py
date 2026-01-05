@@ -1,182 +1,252 @@
+"""
+Strategy Foundry - Backtest Engine.
+Vectorized execution for speed.
+Long-only default.
+"""
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any
-from packages.strategy_foundry.factory.grammar import Strategy
-import structlog
-
-logger = structlog.get_logger(__name__)
+from typing import Dict, Any, List
+from packages.strategy_foundry.adapters.core_indicators import calculate_all
+from packages.strategy_foundry.adapters.core_costs import get_default_cost_model
+from packages.strategy_foundry.factory.grammar import summarize_rules
 
 class BacktestEngine:
-    def __init__(self, slippage_bps: float = 5.0, cost_bps: float = 10.0):
-        self.slippage = slippage_bps / 10000.0
-        self.cost = cost_bps / 10000.0
+    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0):
+        self.raw_data = data
+        self.data = calculate_all(data)
+        self.capital = initial_capital
+        self.cost_model = get_default_cost_model()
 
-    def run(self, strategy: Strategy, df: pd.DataFrame) -> Dict[str, Any]:
+    def run(self, strategy_config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Run backtest for a strategy on provided data.
-        Returns metrics and curves.
+        Run backtest for a single strategy.
         """
-        if df.empty:
-            return {}
+        df = self.data.copy()
+        blocks = strategy_config.get("blocks", [])
 
-        # 1. Generate Positions (0, 1)
-        # Note: Strategy already implements logic to produce stateful positions
-        positions = strategy.generate_positions(df)
+        # 1. Generate Signals
+        # 0 = Neutral, 1 = Long Entry, -1 = Exit (for Long Only)
+        # We process entry rules first
 
-        # 2. Calculate Returns
-        # Strategy enters at Open of bar i if signal at i-1 was True.
-        # So positions[i]=1 means we hold from Open[i] to Close[i] (conceptually)
-        # OR we hold overnight.
+        entry_signal = pd.Series(False, index=df.index)
 
-        # Let's align with typical vectorized backtest:
-        # Return = (Close - Open) / Open  (Intraday?)
-        # OR (Close - PrevClose) / PrevClose (Daily?)
+        # Apply Filters
+        filter_mask = pd.Series(True, index=df.index)
 
-        # Strategy logic in grammar.py:
-        # "entry_signals[i-1]: Enter on Open of current bar... positions[i] = 1"
-        # So at index i, we bought at Open[i] and held until Close[i] (if exiting) or kept holding.
+        for block in blocks:
+            if block["type"] == "FILTER":
+                if block["subtype"] == "ADX_FILTER":
+                    thresh = block["params"]["threshold"]
+                    filter_mask &= (df["adx_14"] > thresh)
 
-        # We calculate daily returns based on Close-to-Close for holding days,
-        # and Open-to-Close for entry day.
+        # Apply Entries
+        for block in blocks:
+            if block["type"] == "ENTRY":
+                if block["subtype"] == "EMA_CROSS":
+                    fast = block["params"]["fast"]
+                    slow = block["params"]["slow"]
+                    # Entry when fast crosses above slow
+                    # Use provided EMA columns if standard, or compute
+                    # We precomputed some, but grammar might generate others.
+                    # For performance, we should ideally restrict grammar to precomputed.
+                    # Or compute on fly.
+                    # Let's map approximate standard precomputed ones or fail gracefully/compute.
+                    # Grammar uses 5, 10, ...
+                    # Adapters computed specific ones.
+                    # To be robust, let's just recompute specific EMAs needed if not in df.
+                    f_col = f"ema_{fast}"
+                    s_col = f"ema_{slow}"
+                    if f_col not in df.columns:
+                        df[f_col] = df["close"].ewm(span=fast, adjust=False).mean()
+                    if s_col not in df.columns:
+                        df[s_col] = df["close"].ewm(span=slow, adjust=False).mean()
 
-        # Simplification for robustness:
-        # Calculate daily percentage change of the underlying.
-        # Strategy return = underlying_ret * position.shift(1)
-        # But our position logic is "Am I holding today?".
-        # grammar.py sets positions[i]=1 if we are holding at bar i.
-        # This implies we entered at Open[i] or held from before.
+                    cross_up = (df[f_col] > df[s_col]) & (df[f_col].shift(1) <= df[s_col].shift(1))
+                    entry_signal |= cross_up
 
-        # Let's use Close-to-Close returns for simplicity, assuming execution at Close (or Open approx same).
-        # Actually, if we enter at Open[i], the return for day i is (Close[i] - Open[i]) / Open[i].
-        # If we held from i-1, the return is (Close[i] - Close[i-1]) / Close[i-1].
+                elif block["subtype"] == "DONCHIAN_BREAKOUT":
+                    # Breakout above upper channel
+                    # Note: Donchian in adapter is generic 20. Grammar is flexible.
+                    p = block["params"]["period"]
+                    u_col = f"dc_upper_{p}"
+                    if u_col not in df.columns:
+                        df[u_col] = df["high"].rolling(window=p).max().shift(1) # Shift 1 so we compare today's high to prev N days high?
+                        # Standard Donchian Breakout: Close > Prev N days High (or High > Prev N days High)
+                        # Let's use Close > Prev High
 
-        # Let's refine:
-        # PnL stream.
+                    breakout = df["close"] > df[u_col]
+                    entry_signal |= breakout
 
-        close = df["close"]
-        open_price = df["open"]
+                elif block["subtype"] == "RSI_REVERSION":
+                    # Buy when RSI < lower
+                    p = block["params"]["period"]
+                    lower = block["params"]["lower"]
+                    r_col = f"rsi_{p}"
+                    if r_col not in df.columns: # Should be rsi_14
+                         # Simplified: if period is 14, use precomputed
+                         if p == 14:
+                             r_col = "rsi_14"
+                         else:
+                             # compute
+                             pass # TODO implement generic calculation if needed
 
-        # Position change diff
-        pos_change = positions.diff().fillna(0)
+                    if r_col in df.columns:
+                        entry_signal |= (df[r_col] < lower)
 
-        # trades = positions.diff().abs().sum() / 2  (approx)
+        # Combine Entry and Filter
+        entry_signal = entry_signal & filter_mask
 
-        equity = [1.0]
-        current_equity = 1.0
+        # 2. Simulate Execution (Event Loop for correct path dependence of Exits)
+        # Vectorized is hard with stateful exits (ATR trailing, Time stop).
+        # We will use a fast loop.
 
-        trades_list = []
+        position = 0 # 0 or 1 (Long only)
         entry_price = 0.0
         entry_idx = 0
 
-        # Iterative PnL calculation for accuracy with costs
-        # (Vectorized is harder with mixed entry prices (Open vs Close))
+        trades = []
+        equity_curve = [self.capital]
 
-        pos_arr = positions.values
-        open_arr = open_price.values
-        close_arr = close.values
+        # Pre-calculate ATR/stops parameters if needed
+        # We need generic way to handle multiple exits.
+
+        # Parse Exit Rules
+        atr_stop_mult = None
+        time_stop_days = None
+
+        for block in blocks:
+            if block["type"] == "EXIT":
+                if block["subtype"] == "ATR_STOP":
+                    atr_stop_mult = block["params"]["multiplier"]
+                elif block["subtype"] == "TIME_STOP":
+                    time_stop_days = block["params"]["days"]
+
+        opens = df["open"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        closes = df["close"].values
         dates = df.index
+        atrs = df["atr_14"].values # Assuming standard ATR 14 for stops
+
+        current_equity = self.capital
+
+        # Iteration
+        # We assume execution at NEXT OPEN after signal.
+        # So if signal at i, we enter at i+1 open.
+
+        pending_entry = False
 
         for i in range(1, len(df)):
-            prev_pos = pos_arr[i-1]
-            curr_pos = pos_arr[i]
+            price = opens[i]
+            dt = dates[i]
 
-            day_return = 0.0
+            # Check Exit if in position
+            if position == 1:
+                exit_triggered = False
+                exit_reason = ""
 
-            # Case 1: Holding (1 -> 1)
-            if prev_pos == 1 and curr_pos == 1:
-                raw_ret = (close_arr[i] - close_arr[i-1]) / close_arr[i-1]
-                day_return = raw_ret
+                # Check Stops (against today's Open? Or High/Low? conservative: Open or Low)
+                # If we gap down below stop, we exit at Open.
+                # If we hit stop intraday, we exit at Stop Price (slippage applies).
+                # Simplified: Check Low.
 
-            # Case 2: Entry (0 -> 1)
-            elif prev_pos == 0 and curr_pos == 1:
-                # Enter at Open
-                entry_price = open_arr[i] * (1 + self.slippage)
-                # Cost applied to capital?
-                # Let's deduct cost from return
-                # Return from Open to Close
-                raw_ret = (close_arr[i] - entry_price) / entry_price
-                day_return = raw_ret - self.cost
+                # 1. ATR Stop
+                if atr_stop_mult:
+                    # Trailing stop or fixed? "ATR stop" usually implies trailing or fixed from entry.
+                    # Let's implement Fixed from Entry for simplicity or Trailing.
+                    # Grammar just said "ATR Stop". Let's do Trailing from High water mark?
+                    # Or simple Fixed Stop Loss: Entry - ATR * Mult.
+                    # Let's do Fixed Stop from Entry Price for robustness.
+                    stop_price = entry_price - (atrs[entry_idx] * atr_stop_mult)
 
-                entry_idx = i
+                    if lows[i] < stop_price:
+                        # Stopped out
+                        exit_price = min(opens[i], stop_price) # If open is below stop, we execute at open (gap).
+                        exit_triggered = True
+                        exit_reason = "ATR_STOP"
 
-            # Case 3: Exit (1 -> 0)
-            elif prev_pos == 1 and curr_pos == 0:
-                # Exit at Open (if strategy signals exit at previous close, usually we exit at next Open)
-                # WAIT: grammar.py logic:
-                # if exit_signal: positions[i] = 0.
-                # Meaning at bar i, we are NOT holding. We exited at Open[i] or before?
-                # Grammar logic:
-                # if in_trade: check stops using current High/Low. if hit, positions[i]=0.
-                # This implies intraday exit.
+                # 2. Time Stop
+                if not exit_triggered and time_stop_days:
+                    days_held = (dt - dates[entry_idx]).days
+                    # Or bars held? usually bars.
+                    bars_held = i - entry_idx
+                    if bars_held >= time_stop_days:
+                        exit_price = opens[i]
+                        exit_triggered = True
+                        exit_reason = "TIME_STOP"
 
-                # If we were holding (prev=1) and now not (curr=0), we exited today.
-                # Assumption: Exited at Close (simplest) OR Hit stop.
-                # Grammar logic sets pos[i]=0 if stop hit.
-                # We need to know price.
-                # For simplicity in this engine, let's assume exit at Close[i] if logic says so,
-                # OR assume exit at Open[i] if signal was pre-computed.
+                # 3. Standard Strategy Exit (Opposite Signal)?
+                # The grammar defines Exits explicitly.
+                # RSI Reversion might have "Sell when RSI > upper" logic?
+                # Grammar didn't specify explicit "Profit Target" or "Sell Signal" other than stops.
+                # Wait, Mean Reversion usually needs an exit condition (like RSI > Upper).
+                # Let's check if there is an RSI_REVERSION block, maybe it implies exit at Upper?
+                # The grammar `mean_rev_rsi` has "upper".
+                # Let's handle implicit exits.
+                for block in blocks:
+                     if block.get("subtype") == "RSI_REVERSION":
+                         lower = block["params"]["lower"]
+                         upper = block["params"]["upper"]
+                         p = block["params"]["period"]
+                         # If RSI > upper, exit
+                         # using close of PREVIOUS bar to decide to exit at OPEN of CURRENT bar
+                         if i > 0:
+                             prev_rsi = df[f"rsi_{p}" if f"rsi_{p}" in df else "rsi_14"].iloc[i-1]
+                             if prev_rsi > upper:
+                                 exit_price = opens[i]
+                                 exit_triggered = True
+                                 exit_reason = "RSI_TARGET"
 
-                # Given grammar uses High/Low for stops, it's an intraday exit.
-                # Let's approximate exit price as Close[i] (conservative if stop loss? No, stop loss is worse).
-                # If stop loss logic in grammar used `low < entry * (1-SL)`, we likely exited at `entry * (1-SL)`.
+                if exit_triggered:
+                    # Execute Exit
+                    # Calc Cost
+                    # quantity = int(current_equity / entry_price) # simplified partial compounding
+                    # PnL = (exit_price - entry_price) * quantity
 
-                # We don't have exact exit price from generate_positions.
-                # To be precise, generate_positions should probably return the exit price or we estimate.
+                    # Using percentage return for equity curve to be scale invariant
+                    raw_ret = (exit_price - entry_price) / entry_price
 
-                # ESTIMATION:
-                # If 1->0, assume we exited at Close[i].
-                # Return is (Close[i] - Close[i-1]) / Close[i-1] MINUS Cost.
+                    # Apply Costs (approx bps)
+                    # 5 bps slippage per side = 10 bps total
+                    # Brokerage etc.
+                    # Let's use 0.1% round trip approx for simplicity or use cost model.
+                    cost_bps = 10 + 10 # 20 bps total slippage + txn
+                    cost_pct = cost_bps / 10000.0
 
-                # Note: This is imperfect for Stop Loss (which exits lower).
-                # But without changing interface, we proceed.
-                # Ideally, we'd simulate properly.
+                    net_ret = raw_ret - cost_pct
 
-                exit_price = close_arr[i] * (1 - self.slippage)
-                raw_ret = (exit_price - close_arr[i-1]) / close_arr[i-1]
-                day_return = raw_ret - self.cost
+                    current_equity *= (1 + net_ret)
 
-                # Log trade
-                pnl = (exit_price / open_arr[entry_idx]) - 1 # Approx
-                trades_list.append({
-                    "entry_date": dates[entry_idx],
-                    "exit_date": dates[i],
-                    "pnl": pnl
-                })
+                    trades.append({
+                        "entry_date": dates[entry_idx],
+                        "exit_date": dt,
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "return": net_ret,
+                        "reason": exit_reason
+                    })
 
-            current_equity *= (1 + day_return)
-            equity.append(current_equity)
+                    position = 0
+                    entry_price = 0.0
 
-        equity_series = pd.Series(equity, index=df.index)
+            # Check Entry (if not in position)
+            # We check signal from PREVIOUS day to enter TODAY at OPEN
+            if position == 0:
+                if entry_signal.iloc[i-1]:
+                    position = 1
+                    entry_price = opens[i]
+                    entry_idx = i
+                    # Cost of entry is accounted for at exit or we can deduct now.
+                    # We deducted round trip at exit above.
 
-        # Calculate Metrics
-        total_return = current_equity - 1
-        cagr = (current_equity ** (252 / len(df))) - 1 if len(df) > 0 else 0
+            equity_curve.append(current_equity)
 
-        # Drawdown
-        running_max = equity_series.cummax()
-        drawdown = (equity_series - running_max) / running_max
-        max_dd = drawdown.min()
-
-        # Sharpe
-        returns = equity_series.pct_change().dropna()
-        if len(returns) > 1 and returns.std() > 0:
-            sharpe = (returns.mean() / returns.std()) * np.sqrt(252)
-            sortino = (returns.mean() / returns[returns<0].std()) * np.sqrt(252) if len(returns[returns<0]) > 0 else 0
-        else:
-            sharpe = 0
-            sortino = 0
-
-        calmar = cagr / abs(max_dd) if max_dd < 0 else 0
+        equity_series = pd.Series(equity_curve, index=df.index[:len(equity_curve)])
 
         return {
-            "total_return": total_return,
-            "cagr": cagr,
-            "sharpe": sharpe,
-            "sortino": sortino,
-            "max_drawdown": max_dd,
-            "calmar": calmar,
-            "trades": len(trades_list),
-            "win_rate": len([t for t in trades_list if t["pnl"] > 0]) / len(trades_list) if trades_list else 0,
-            "equity_curve": equity_series.to_dict(), # Serialize for storage if needed, or keep object
-            "trades_list": trades_list
+            "trades": pd.DataFrame(trades),
+            "equity_curve": equity_series,
+            "final_equity": current_equity,
+            "rule_summary": summarize_rules(strategy_config),
+            "is_open": position == 1
         }

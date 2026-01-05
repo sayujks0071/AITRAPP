@@ -1,30 +1,26 @@
 # Backtesting Methodology
 
-## Engine Assumptions
+## Engine
+- **Timeframe**: Daily (1D)
+- **Execution**: Next-Day Open. Signals generated on Close of day T are executed at Open of day T+1.
+- **Costs**:
+  - Slippage: 5 bps per side (10 bps round trip)
+  - Brokerage: ~20 Rs per order flat (approximated)
+  - Taxes: STT, GST, Stamp Duty included in "All-in" 20 bps estimate or detailed model.
 
-1.  **Timeframe**: Daily (1D).
-2.  **Execution**:
-    *   **Entry**: Market Open of the bar *after* the signal is generated.
-    *   **Exit**: Market Open of the bar *after* exit signal, OR Intraday Stop Loss.
-3.  **Costs**:
-    *   Slippage: 5 bps per side.
-    *   Transaction Costs: 10 bps per side (approx all-in).
+## Walk-Forward Analysis (WFA)
+To prevent overfitting, we use Walk-Forward Analysis:
+- Data is split into N folds (default 4).
+- Expanding Window: Train on Start..T, Test on T..T+k.
+- Since strategies are randomly generated (no optimization loop), WFA acts as Cross-Validation over time.
+- Metrics (Sharpe, CAGR, Drawdown) are computed on the Out-Of-Sample (OOS) period only.
 
-## Walk-Forward Evaluation
+## Sanity Checks
+Strategies are rejected if:
+- Total trades < 30 (statistically insignificant)
+- Max Drawdown > 35%
+- Fewer than 50% of OOS folds are positive.
 
-To prevent overfitting, we use Walk-Forward Evaluation (WFE):
-
-1.  Data is split into `N` folds (default 4).
-2.  Each fold is evaluated independently (Out-of-Sample validation).
-3.  A strategy must perform consistently across folds to be considered.
-
-## Scoring & Ranking
-
-Composite Score calculated as:
-
-*   30% Sharpe Ratio (Risk-adjusted return)
-*   25% Calmar Ratio (Return / Max Drawdown)
-*   20% CAGR (Absolute return)
-*   15% Stability (Low dispersion of Sharpe across folds)
-
-Strategies with Max Drawdown > 35% or < 30 trades are rejected.
+## Ranking
+Score = 30% Sharpe + 25% Calmar + 20% CAGR + 15% Stability.
+Stability is the inverse variance of Sharpe across folds.

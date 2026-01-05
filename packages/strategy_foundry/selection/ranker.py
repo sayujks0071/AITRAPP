@@ -1,33 +1,48 @@
-from typing import Dict, Any
+"""
+Strategy Foundry - Ranking and Selection.
+"""
+import pandas as pd
+from typing import List, Dict, Any
 
-def score_strategy(metrics: Dict[str, Any]) -> float:
+def score_candidate(metrics: Dict[str, Any]) -> float:
     """
-    Compute composite score for ranking.
-    + 30% OOS Sharpe
-    + 25% OOS Calmar
-    + 20% OOS CAGR
-    + 15% Stability (low dispersion)
-    − 10% Turnover penalty (proxy by too many trades? No, just raw count)
+    Compute composite score.
     """
+    m = metrics["metrics"]
 
-    # Normalize or cap values to sane ranges for scoring
-    sharpe = min(max(metrics["avg_sharpe"], 0), 3.0) / 3.0
+    sharpe = m.get("sharpe", 0)
+    cagr = m.get("cagr", 0)
 
-    calmar_raw = metrics["avg_cagr"] / abs(metrics["worst_drawdown"]) if metrics["worst_drawdown"] != 0 else 0
-    calmar = min(calmar_raw, 3.0) / 3.0
+    # Stability: Standard deviation of Sharpe across folds
+    folds = m.get("folds", [])
+    fold_sharpes = [f.get("sharpe", 0) for f in folds]
+    stability = 1.0 / (pd.Series(fold_sharpes).std() + 0.1)
 
-    cagr = min(max(metrics["avg_cagr"], -0.5), 1.0) # Cap at 100%
-    if cagr < 0: cagr = 0 # Penalize negative hard
+    # Calmar proxy: avg cagr / avg max dd
+    avg_dd = sum([abs(f.get("max_drawdown", 0)) for f in folds]) / len(folds)
+    calmar = cagr / avg_dd if avg_dd > 0 else 0
 
-    # Stability: lower dispersion is better.
-    # 0 dispersion -> 1.0 score. 1.0 dispersion -> 0.0 score.
-    stability = max(1.0 - metrics["sharpe_dispersion"], 0)
+    # Score
+    # 30% Sharpe + 25% Calmar + 20% CAGR + 15% Stability - Turnover?
 
-    # Turnover penalty: logic vague, let's just penalty if trades > 200 (overfitting/churn)
-    # or just flat small penalty.
-    # "Turnover penalty" usually means cost. We already deducted cost.
-    # Let's ignore explicit turnover penalty for score and trust net returns.
+    # Normalize inputs roughly
+    # Sharpe target 1.0
+    # Calmar target 2.0
+    # CAGR target 0.2
 
-    score = (0.30 * sharpe) + (0.25 * calmar) + (0.20 * cagr) + (0.15 * stability)
+    s_score = min(sharpe, 3.0) * 30
+    c_score = min(calmar, 5.0) * 5 # scaled down
+    r_score = min(cagr, 1.0) * 100 * 0.2
+    stab_score = min(stability, 5.0) * 3
 
-    return round(score * 100, 2)
+    total = s_score + c_score + r_score + stab_score
+    return total
+
+def rank_candidates(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Rank candidates by score.
+    """
+    for res in results:
+        res["score"] = score_candidate(res["metrics"])
+
+    return sorted(results, key=lambda x: x["score"], reverse=True)

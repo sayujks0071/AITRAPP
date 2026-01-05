@@ -1,188 +1,149 @@
-from typing import List, Dict, Any, Optional
-import pandas as pd
-import numpy as np
+"""
+Strategy Grammar and Generator.
+Defines the building blocks for strategies.
+"""
+import random
 import hashlib
 import json
-from packages.strategy_foundry.adapters.core_indicators import (
-    calculate_ema, calculate_rsi, calculate_adx, calculate_atr,
-    calculate_supertrend, calculate_donchian, calculate_bollinger_bands
-)
+from typing import Dict, Any, List
 
-class Strategy:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.id = self._generate_id()
-        self.blocks = config.get("blocks", [])
+# Parameter Ranges
+PARAM_RANGES = {
+    "ema_fast": range(5, 50, 5),
+    "ema_slow": range(20, 200, 10),
+    "rsi_period": [14],
+    "rsi_lower": range(20, 40, 5),
+    "rsi_upper": range(60, 80, 5),
+    "adx_threshold": range(15, 30, 5),
+    "atr_stop_mult": [1.0, 1.5, 2.0, 2.5, 3.0],
+    "max_hold_days": [3, 5, 10, 20],
+    "donchian_period": range(10, 60, 10),
+    "bb_std": [1.5, 2.0, 2.5]
+}
 
-    def _generate_id(self) -> str:
-        """Stable hash of the configuration"""
-        s = json.dumps(self.config, sort_keys=True)
-        return hashlib.sha256(s.encode()).hexdigest()[:12]
+class StrategyGrammar:
+    @staticmethod
+    def get_random_param(name: str):
+        if name in PARAM_RANGES:
+            return random.choice(list(PARAM_RANGES[name]))
+        return None
 
-    def generate_positions(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Generate raw entry signals.
-        1 = Enter Long
-        0 = No Action / Hold
-        """
-        # Default to neutral
-        entries = pd.Series(False, index=df.index)
+    @staticmethod
+    def trend_ema_cross():
+        fast = StrategyGrammar.get_random_param("ema_fast")
+        slow = StrategyGrammar.get_random_param("ema_slow")
+        if fast >= slow:
+            fast, slow = slow, fast
+            if fast == slow: slow += 5
+        return {
+            "type": "ENTRY",
+            "subtype": "EMA_CROSS",
+            "params": {"fast": fast, "slow": slow}
+        }
 
-        # Combine all entry conditions (AND logic)
-        first_entry = True
+    @staticmethod
+    def trend_donchian_breakout():
+        return {
+            "type": "ENTRY",
+            "subtype": "DONCHIAN_BREAKOUT",
+            "params": {"period": StrategyGrammar.get_random_param("donchian_period")}
+        }
 
-        for block in self.blocks:
-            category = block.get("category")
-            if category == "entry":
-                condition = self._evaluate_entry_block(df, block)
-                if first_entry:
-                    entries = condition
-                    first_entry = False
-                else:
-                    # Fix: Ensure logic combination is type-safe
-                    # Sometimes `condition` or `entries` might be an integer/boolean array
-                    # while the other is a pandas object.
-                    entries = entries & condition
+    @staticmethod
+    def mean_rev_rsi():
+        return {
+            "type": "ENTRY",
+            "subtype": "RSI_REVERSION",
+            "params": {
+                "period": StrategyGrammar.get_random_param("rsi_period"),
+                "lower": StrategyGrammar.get_random_param("rsi_lower"),
+                "upper": StrategyGrammar.get_random_param("rsi_upper")
+            }
+        }
 
-        # Fill NA with False
-        entries = entries.fillna(False).astype(bool)
+    @staticmethod
+    def filter_adx():
+        return {
+            "type": "FILTER",
+            "subtype": "ADX_FILTER",
+            "params": {"threshold": StrategyGrammar.get_random_param("adx_threshold")}
+        }
 
-        # Convert boolean to positions (this is just raw signal, management handles state)
-        # But wait, standard interface returns positions in {-1, 0, 1}?
-        # The prompt says "generate_positions(df) -> positions in {-1,0,1}"
-        # Usually requires state management for exits.
+    @staticmethod
+    def exit_atr_stop():
+        return {
+            "type": "EXIT",
+            "subtype": "ATR_STOP",
+            "params": {"multiplier": StrategyGrammar.get_random_param("atr_stop_mult")}
+        }
 
-        # Let's change approach:
-        # Calculate Entry signal (boolean)
-        # Calculate Exit signal (boolean)
-        # Iterate to produce positions (vectorized if possible, but stateful with stops is hard to fully vectorize)
+    @staticmethod
+    def exit_time_stop():
+        return {
+            "type": "EXIT",
+            "subtype": "TIME_STOP",
+            "params": {"days": StrategyGrammar.get_random_param("max_hold_days")}
+        }
 
-        # Hybrid approach:
-        # 1. Calculate Entry Signal Series
-        # 2. Calculate Static Exit Signal Series (e.g. reverse cross)
-        # 3. Apply Risk Overlay (stops) in a loop or vectorised approximation
+def generate_candidate() -> Dict[str, Any]:
+    """Generates a random strategy configuration."""
 
-        return self._apply_execution_logic(df, entries)
+    # Decide Strategy Type
+    strat_type = random.choice(["TREND", "MEAN_REVERSION"])
 
-    def _evaluate_entry_block(self, df: pd.DataFrame, block: Dict) -> pd.Series:
-        btype = block["type"]
-        params = block["params"]
+    blocks = []
 
-        if btype == "ema_cross":
-            fast = calculate_ema(df["close"], params["fast"])
-            slow = calculate_ema(df["close"], params["slow"])
-            # Crossover: fast > slow AND fast.shift < slow.shift
-            return (fast > slow) & (fast.shift(1) <= slow.shift(1))
+    if strat_type == "TREND":
+        # Core Entry
+        if random.random() < 0.7:
+            blocks.append(StrategyGrammar.trend_ema_cross())
+        else:
+            blocks.append(StrategyGrammar.trend_donchian_breakout())
 
-        elif btype == "rsi_reversion":
-            rsi = calculate_rsi(df["close"], params["period"])
-            return rsi < params["lower_threshold"]
+        # Optional Filter
+        if random.random() < 0.5:
+            blocks.append(StrategyGrammar.filter_adx())
 
-        elif btype == "supertrend_trend":
-             st, direction = calculate_supertrend(df, params["period"], params["multiplier"])
-             # Enter if direction is 1 (up)
-             return direction == 1
+    elif strat_type == "MEAN_REVERSION":
+        blocks.append(StrategyGrammar.mean_rev_rsi())
 
-        elif btype == "donchian_breakout":
-            upper, lower = calculate_donchian(df, params["period"])
-            # Close > Upper.shift(1) (breakout of previous high)
-            return df["close"] > upper.shift(1)
+    # Risk Management (Exits)
+    # Always add an ATR stop
+    blocks.append(StrategyGrammar.exit_atr_stop())
 
-        elif btype == "adx_filter":
-             adx = calculate_adx(df, params["period"])
-             return adx > params["threshold"]
+    # Optional Time Stop
+    if random.random() < 0.5:
+        blocks.append(StrategyGrammar.exit_time_stop())
 
-        return pd.Series(True, index=df.index)
+    # Construct Config
+    config = {
+        "blocks": blocks,
+        "strategy_type": strat_type
+    }
 
-    def _apply_execution_logic(self, df: pd.DataFrame, entries: pd.Series) -> pd.Series:
-        """
-        Convert entry signals to positions state {-1, 0, 1}.
-        Applies exits and risk management.
-        """
-        # This implementation uses a loop for correctness with complex stops.
-        # For pure vectorization, we'd need simpler logic.
-        # Given "Daily" timeframe, a loop is acceptable for speed in backtest.
+    # Generate ID
+    config_str = json.dumps(config, sort_keys=True)
+    config_hash = hashlib.md5(config_str.encode()).hexdigest()
+    config["id"] = config_hash
 
-        positions = np.zeros(len(df))
-        close = df["close"].values
-        high = df["high"].values
-        low = df["low"].values
-        ts = df.index
+    return config
 
-        # Find risk blocks
-        stop_loss_pct = None
-        trailing_stop_pct = None
-        time_stop = None
-        take_profit_pct = None
+def summarize_rules(config: Dict[str, Any]) -> str:
+    summary = []
+    for block in config.get("blocks", []):
+        st = block['subtype']
+        p = block['params']
+        if st == "EMA_CROSS":
+            summary.append(f"EMA Cross ({p['fast']}/{p['slow']})")
+        elif st == "DONCHIAN_BREAKOUT":
+            summary.append(f"Donchian ({p['period']}) Breakout")
+        elif st == "RSI_REVERSION":
+            summary.append(f"RSI({p['period']}) < {p['lower']} Buy")
+        elif st == "ADX_FILTER":
+            summary.append(f"ADX > {p['threshold']}")
+        elif st == "ATR_STOP":
+            summary.append(f"ATR Stop {p['multiplier']}x")
+        elif st == "TIME_STOP":
+            summary.append(f"Time Stop {p['days']}d")
 
-        for block in self.blocks:
-            if block["category"] == "risk":
-                if block["type"] == "stop_loss_pct":
-                    stop_loss_pct = block["params"]["pct"]
-                elif block["type"] == "trailing_stop_pct":
-                    trailing_stop_pct = block["params"]["pct"]
-                elif block["type"] == "time_stop":
-                    time_stop = block["params"]["bars"]
-                elif block["type"] == "take_profit_pct":
-                    take_profit_pct = block["params"]["pct"]
-
-        # Fallback defaults if no risk block (sanity)
-        if stop_loss_pct is None and trailing_stop_pct is None:
-             stop_loss_pct = 0.05 # Default 5% stop if nothing specified
-
-        in_trade = False
-        entry_price = 0.0
-        bars_in_trade = 0
-        highest_high = 0.0
-
-        entry_signals = entries.values
-
-        for i in range(1, len(df)):
-            # If in trade, check exits
-            if in_trade:
-                bars_in_trade += 1
-
-                # Check Stops
-                exit_signal = False
-
-                # 1. Fixed Stop Loss
-                if stop_loss_pct and low[i] < entry_price * (1 - stop_loss_pct):
-                    exit_signal = True
-
-                # 2. Trailing Stop
-                if trailing_stop_pct:
-                    highest_high = max(highest_high, high[i])
-                    if low[i] < highest_high * (1 - trailing_stop_pct):
-                        exit_signal = True
-
-                # 3. Time Stop
-                if time_stop and bars_in_trade >= time_stop:
-                    exit_signal = True
-
-                # 4. Take Profit
-                if take_profit_pct and high[i] > entry_price * (1 + take_profit_pct):
-                    exit_signal = True
-
-                if exit_signal:
-                    positions[i] = 0
-                    in_trade = False
-                else:
-                    positions[i] = 1 # Hold
-
-            # If not in trade, check entry
-            else: # elif not in_trade: to ensure we don't re-enter same bar
-                if entry_signals[i-1]: # Enter on Open of current bar based on signal from previous Close
-                    positions[i] = 1
-                    in_trade = True
-                    entry_price = df["open"].iloc[i] # Approximate entry at Open
-                    highest_high = entry_price
-                    bars_in_trade = 0
-
-        return pd.Series(positions, index=df.index)
-
-    def rule_summary(self) -> str:
-        parts = []
-        for block in self.blocks:
-            p_str = ",".join([f"{k}={v}" for k,v in block["params"].items()])
-            parts.append(f"{block['type']}({p_str})")
-        return " + ".join(parts)
+    return " + ".join(summary)
