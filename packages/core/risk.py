@@ -314,7 +314,17 @@ class RiskManager:
         
         # Brokerage: Rs 20 per order or 0.03% (equity delivery)
         if instrument.is_equity:
-            fees += self.config.fees_per_order * 2  # Entry + Exit
+            # Zerodha Equity Intraday: Min(20, 0.03% of turnover) per side
+            # We calculate separately for Entry and Exit side roughly
+            # Entry Side
+            entry_val = quantity * entry_price
+            entry_bkg = min(self.config.fees_per_order, entry_val * 0.0003)
+
+            # Exit Side
+            exit_val = quantity * exit_price
+            exit_bkg = min(self.config.fees_per_order, exit_val * 0.0003)
+
+            fees += entry_bkg + exit_bkg
         elif instrument.is_future or instrument.is_option:
             fees += self.config.fees_per_order * 2
             # Note: Unlike the previous implementation, fees_per_option_leg is not added here
