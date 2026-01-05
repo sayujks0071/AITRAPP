@@ -1,68 +1,66 @@
+"""
+Strategy Generator
+Generates random strategies based on the grammar.
+"""
 import random
-from typing import List, Dict, Any
-from .grammar import Strategy
-from .parameter_space import get_random_params
+from typing import List
+from packages.strategy_foundry.factory.grammar import BLOCKS, StrategyConfig, Parameter
 
-BLOCK_TYPES = [
-    {"type": "ema_cross", "category": "entry"},
-    {"type": "rsi_reversion", "category": "entry"},
-    {"type": "supertrend_trend", "category": "entry"},
-    {"type": "donchian_breakout", "category": "entry"},
-    {"type": "adx_filter", "category": "entry"}, # Used as filter/entry condition
-    {"type": "stop_loss_pct", "category": "risk"},
-    {"type": "trailing_stop_pct", "category": "risk"},
-    {"type": "time_stop", "category": "risk"},
-    {"type": "take_profit_pct", "category": "risk"}
-]
+class StrategyGenerator:
+    @staticmethod
+    def generate_random_param(param: Parameter):
+        if param.type == "int":
+            return random.randrange(param.min, param.max + param.step, param.step)
+        elif param.type == "float":
+            # Avoid floating point weirdness
+            steps = int((param.max - param.min) / param.step)
+            return round(param.min + (random.randint(0, steps) * param.step), 2)
+        elif param.type == "bool":
+            return random.choice([True, False])
+        elif param.type == "choice":
+            return random.choice(param.options)
+        return param.default
 
-def generate_candidates(n: int) -> List[Strategy]:
-    """
-    Generate N random strategy candidates.
-    """
-    candidates = []
-    seen_ids = set()
+    @staticmethod
+    def generate_candidate() -> StrategyConfig:
+        # Pick one entry
+        entry_names = [k for k, v in BLOCKS.items() if v.type == "entry"]
+        entry_name = random.choice(entry_names)
+        entry_block = BLOCKS[entry_name]
+        entry_params = {
+            name: StrategyGenerator.generate_random_param(p)
+            for name, p in entry_block.params.items()
+        }
 
-    attempts = 0
-    while len(candidates) < n and attempts < n * 5:
-        attempts += 1
+        # Pick one risk
+        risk_names = [k for k, v in BLOCKS.items() if v.type == "risk"]
+        risk_name = random.choice(risk_names)
+        risk_block = BLOCKS[risk_name]
+        risk_params = {
+            name: StrategyGenerator.generate_random_param(p)
+            for name, p in risk_block.params.items()
+        }
 
-        # Compose a strategy
-        # 1-2 Entry blocks
-        # 1-2 Risk blocks
+        # Pick one exit
+        exit_names = [k for k, v in BLOCKS.items() if v.type == "exit"]
+        exit_name = random.choice(exit_names)
+        exit_block = BLOCKS[exit_name]
+        exit_params = {
+            name: StrategyGenerator.generate_random_param(p)
+            for name, p in exit_block.params.items()
+        }
 
-        blocks = []
+        config = StrategyConfig(
+            entry_block=entry_name,
+            entry_params=entry_params,
+            risk_block=risk_name,
+            risk_params=risk_params,
+            exit_block=exit_name,
+            exit_params=exit_params
+        )
+        config.id = config.get_hash()
+        return config
 
-        # Entry
-        num_entries = random.randint(1, 2)
-        entry_choices = [b for b in BLOCK_TYPES if b["category"] == "entry"]
-        selected_entries = random.sample(entry_choices, num_entries)
-
-        for entry in selected_entries:
-            params = get_random_params(entry["type"])
-            blocks.append({
-                "type": entry["type"],
-                "category": "entry",
-                "params": params
-            })
-
-        # Risk
-        num_risk = random.randint(1, 2)
-        risk_choices = [b for b in BLOCK_TYPES if b["category"] == "risk"]
-        selected_risks = random.sample(risk_choices, num_risk)
-
-        for risk in selected_risks:
-            params = get_random_params(risk["type"])
-            blocks.append({
-                "type": risk["type"],
-                "category": "risk",
-                "params": params
-            })
-
-        config = {"blocks": blocks}
-        strategy = Strategy(config)
-
-        if strategy.id not in seen_ids:
-            seen_ids.add(strategy.id)
-            candidates.append(strategy)
-
-    return candidates
+    @staticmethod
+    def generate_population(n: int) -> List[StrategyConfig]:
+        return [StrategyGenerator.generate_candidate() for _ in range(n)]
