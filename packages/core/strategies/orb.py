@@ -278,9 +278,9 @@ class ORBStrategy(Strategy):
         market_open = time(9, 15)
         market_close = time(15, 25)  # Stop before EOD
         
-        or_end = time(9, 15 + self.window_min)
-        
-        if not (or_end < current_time < market_close):
+        # Allow execution during the opening range window to collect data
+        # Execution is also allowed after the window for signal generation
+        if not (market_open <= current_time < market_close):
             return False
         
         return True
