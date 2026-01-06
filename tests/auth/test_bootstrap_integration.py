@@ -89,10 +89,9 @@ class TestBootstrapIntegration(unittest.TestCase):
         mock_instance.profile.side_effect = Exception("Token invalid")
         mock_instance.login_url.return_value = "https://kite.trade/connect/login"
         
-        # Create a mock server that immediately has a token
-        # This will exit the while loop in main() on first check
+        # Create a mock server that simulates receiving a callback token
         mock_server_instance = Mock()
-        # Set request_token to None initially, but the mock will provide it immediately
+        # Initially no token, matching the behavior in main()
         mock_server_instance.request_token = None
         
         # When handle_request is called, set the token to simulate receiving callback
@@ -116,9 +115,7 @@ class TestBootstrapIntegration(unittest.TestCase):
                 pass
         
         # Verify HTTPServer was called with the custom port
-        mock_http_server.assert_called_once()
-        call_args = mock_http_server.call_args
-        self.assertEqual(call_args[0][0], ('localhost', 9090))
+        mock_http_server.assert_called_once_with(('localhost', 9090), CallbackHandler)
 
 if __name__ == '__main__':
     unittest.main()
