@@ -1,44 +1,32 @@
-# Aggressive Intraday Strategy Foundry
-
-Automated research lab that generates, backtests, and selects intraday trading strategies for Indian markets.
+# Strategy Foundry
 
 ## Overview
-
-The foundry runs hourly (during market hours) to:
-1.  **Generate** random strategies based on a grammar of valid trading components.
-2.  **Backtest** these strategies on 5m and 15m timeframes using Walk-Forward Optimization.
-3.  **Rank** them based on risk-adjusted returns, stability, and robustness.
-4.  **Promote** a "Champion" strategy if it beats the incumbent.
-5.  **Publish** a live signal artifact (`live_signal.json`) if the champion signals an entry.
+Self-generating strategy lab that runs hourly to discover, backtest, and select trading strategies for NIFTY/SENSEX.
 
 ## Architecture
-
--   `adapters/`: Bridges to Core system (Indicators, Market Hours).
--   `data/`: Manages data loading and caching (Yahoo Finance).
--   `factory/`: Strategy grammar and random generation.
--   `backtest/`: Vectorized + Event-driven hybrid engine.
--   `selection/`: Ranking and promotion logic.
--   `live/`: Signal publication.
+- **Data**: Downloads daily OHLCV from Yahoo Finance (cached).
+- **Generator**: Creates random strategies using a grammar of indicators (EMA, RSI, Supertrend, etc.) and risk rules.
+- **Backtest**: Vectorized engine with walk-forward validation (Out-of-Sample testing).
+- **Selection**: Ranks strategies by Sharpe, Calmar, and Stability. Promotes "Champions".
+- **Live**: Publishes `live_signal.json` if market is open and champion is robust.
 
 ## Usage
 
-### Run Manually
-
+### Local Run
 ```bash
-# Full mode
-python packages/strategy_foundry/run_hourly.py
+# Fast mode (fewer candidates, faster run)
+FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
 
-# Fast mode (fewer candidates, fewer folds)
-FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+# Full mode
+python -m packages.strategy_foundry.run_hourly
 ```
 
 ### Outputs
+Artifacts are stored in `packages/strategy_foundry/results/`:
+- `runs/<timestamp>/`: Candidates and metrics.
+- `champions/`: Current champion JSON.
+- `live_signal.json`: Current live signal (if eligible).
 
--   **Run Artifacts**: `results/runs/<timestamp>/` (candidates, metrics, leaderboard).
--   **Live Signal**: `results/live_signal.json`.
--   **Champion**: `results/champions/current.json`.
-
-## Configuration
-
--   `configs/foundry.yaml`: Foundry settings (thresholds, weights).
--   `configs/instrument_map.yaml`: Symbol mapping (Research -> Paper -> Live).
+## Dependencies
+- `pandas`, `numpy`, `httpx`
+- No heavy ML libraries.

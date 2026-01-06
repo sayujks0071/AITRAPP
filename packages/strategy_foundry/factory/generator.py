@@ -1,66 +1,78 @@
-"""
-Strategy Generator
-Generates random strategies based on the grammar.
-"""
 import random
+import hashlib
+import json
 from typing import List
-from packages.strategy_foundry.factory.grammar import BLOCKS, StrategyConfig, Parameter
+from .grammar import StrategyCandidate
 
 class StrategyGenerator:
-    @staticmethod
-    def generate_random_param(param: Parameter):
-        if param.type == "int":
-            return random.randrange(param.min, param.max + param.step, param.step)
-        elif param.type == "float":
-            # Avoid floating point weirdness
-            steps = int((param.max - param.min) / param.step)
-            return round(param.min + (random.randint(0, steps) * param.step), 2)
-        elif param.type == "bool":
-            return random.choice([True, False])
-        elif param.type == "choice":
-            return random.choice(param.options)
-        return param.default
+    def __init__(self):
+        pass
 
-    @staticmethod
-    def generate_candidate() -> StrategyConfig:
-        # Pick one entry
-        entry_names = [k for k, v in BLOCKS.items() if v.type == "entry"]
-        entry_name = random.choice(entry_names)
-        entry_block = BLOCKS[entry_name]
-        entry_params = {
-            name: StrategyGenerator.generate_random_param(p)
-            for name, p in entry_block.params.items()
+    def generate(self, n: int = 50) -> List[StrategyCandidate]:
+        candidates = []
+        seen_hashes = set()
+
+        while len(candidates) < n:
+            cand = self._create_random()
+            if cand.id not in seen_hashes:
+                candidates.append(cand)
+                seen_hashes.add(cand.id)
+
+        return candidates
+
+    def _create_random(self) -> StrategyCandidate:
+        blocks = []
+
+        # 1. Entry (Pick 1-2)
+        entry_types = ['entry_ema_cross', 'entry_rsi_oversold', 'entry_supertrend', 'entry_breakout']
+        num_entries = random.choice([1, 2])
+        chosen_entries = random.sample(entry_types, num_entries)
+
+        for et in chosen_entries:
+            if et == 'entry_ema_cross':
+                blocks.append({
+                    'type': et,
+                    'params': {'fast': random.choice([10, 20]), 'slow': random.choice([50, 200])}
+                })
+            elif et == 'entry_rsi_oversold':
+                blocks.append({
+                    'type': et,
+                    'params': {'threshold': random.choice([30, 40])}
+                })
+            elif et == 'entry_supertrend':
+                blocks.append({'type': et, 'params': {}})
+            elif et == 'entry_breakout':
+                blocks.append({'type': et, 'params': {}})
+
+        # 2. Exit (Pick 1)
+        exit_types = ['exit_rsi_overbought', 'exit_supertrend']
+        et = random.choice(exit_types)
+        if et == 'exit_rsi_overbought':
+            blocks.append({
+                'type': et,
+                'params': {'threshold': random.choice([60, 70, 80])}
+            })
+        elif et == 'exit_supertrend':
+            blocks.append({'type': et, 'params': {}})
+
+        # 3. Filter (Optional)
+        if random.random() < 0.5:
+             filter_types = ['filter_adx', 'filter_regime']
+             ft = random.choice(filter_types)
+             if ft == 'filter_adx':
+                 blocks.append({'type': ft, 'params': {'threshold': random.choice([20, 25])}})
+             elif ft == 'filter_regime':
+                 blocks.append({'type': ft, 'params': {}})
+
+        # 4. Risk Params
+        params = {
+            'stop_atr_mult': random.choice([2.0, 3.0, 4.0]),
+            'trailing_stop_atr_mult': random.choice([0.0, 2.0, 3.0]),
+            'max_bars': random.choice([0, 5, 10, 20])
         }
 
-        # Pick one risk
-        risk_names = [k for k, v in BLOCKS.items() if v.type == "risk"]
-        risk_name = random.choice(risk_names)
-        risk_block = BLOCKS[risk_name]
-        risk_params = {
-            name: StrategyGenerator.generate_random_param(p)
-            for name, p in risk_block.params.items()
-        }
+        # ID
+        s = json.dumps({'blocks': blocks, 'params': params}, sort_keys=True)
+        sid = hashlib.sha256(s.encode()).hexdigest()
 
-        # Pick one exit
-        exit_names = [k for k, v in BLOCKS.items() if v.type == "exit"]
-        exit_name = random.choice(exit_names)
-        exit_block = BLOCKS[exit_name]
-        exit_params = {
-            name: StrategyGenerator.generate_random_param(p)
-            for name, p in exit_block.params.items()
-        }
-
-        config = StrategyConfig(
-            entry_block=entry_name,
-            entry_params=entry_params,
-            risk_block=risk_name,
-            risk_params=risk_params,
-            exit_block=exit_name,
-            exit_params=exit_params
-        )
-        config.id = config.get_hash()
-        return config
-
-    @staticmethod
-    def generate_population(n: int) -> List[StrategyConfig]:
-        return [StrategyGenerator.generate_candidate() for _ in range(n)]
+        return StrategyCandidate(id=sid, blocks=blocks, params=params)

@@ -1,105 +1,156 @@
-"""
-Strategy Grammar
-Defines the components and composition rules for strategies.
-"""
+import pandas as pd
+import numpy as np
+import random
+import hashlib
+import json
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
 
 @dataclass
-class Parameter:
-    name: str
-    type: str  # int, float, bool, choice
-    min: Optional[float] = None
-    max: Optional[float] = None
-    step: Optional[float] = None
-    options: Optional[List[Any]] = None
-    default: Any = None
+class StrategyCandidate:
+    id: str
+    blocks: List[Dict[str, Any]]
+    params: Dict[str, Any]
 
-@dataclass
-class Block:
-    name: str
-    type: str  # entry, exit, filter
-    params: Dict[str, Parameter]
-    logic: str  # Description of logic
+    def to_json(self) -> str:
+        return json.dumps({
+            "id": self.id,
+            "blocks": self.blocks,
+            "params": self.params
+        }, sort_keys=True)
 
-# Registry of available blocks
-BLOCKS = {
-    # ENTRIES
-    "entry_trend_ema_cross": Block(
-        name="EMA Crossover",
-        type="entry",
-        params={
-            "fast_period": Parameter("fast_period", "int", 5, 50, 5, default=20),
-            "slow_period": Parameter("slow_period", "int", 20, 200, 10, default=50),
-            "adx_filter": Parameter("adx_filter", "bool", default=False),
-            "adx_threshold": Parameter("adx_threshold", "int", 15, 30, 5, default=20)
-        },
-        logic="Fast EMA crosses above Slow EMA. Optional ADX > threshold."
-    ),
-    "entry_breakout_donchian": Block(
-        name="Donchian Breakout",
-        type="entry",
-        params={
-            "period": Parameter("period", "int", 10, 60, 5, default=20),
-            "filter_ma": Parameter("filter_ma", "bool", default=True),
-            "ma_period": Parameter("ma_period", "int", 50, 200, 50, default=200)
-        },
-        logic="Close > Donchian High(period). Optional Close > SMA(ma_period)."
-    ),
-    "entry_mean_rev_rsi": Block(
-        name="RSI Reversion",
-        type="entry",
-        params={
-            "rsi_period": Parameter("rsi_period", "int", 2, 14, 2, default=7),
-            "oversold": Parameter("oversold", "int", 10, 40, 5, default=30),
-            "exit_rsi": Parameter("exit_rsi", "int", 50, 80, 5, default=60)
-        },
-        logic="RSI < oversold. Exit when RSI > exit_rsi (handled as internal exit condition)."
-    ),
+    @staticmethod
+    def from_json(json_str: str) -> 'StrategyCandidate':
+        data = json.loads(json_str)
+        return StrategyCandidate(id=data["id"], blocks=data["blocks"], params=data["params"])
 
-    # RISKS (Stop Loss / Take Profit)
-    "risk_atr": Block(
-        name="ATR Stop",
-        type="risk",
-        params={
-            "atr_period": Parameter("atr_period", "int", 14, 14, 0, default=14),
-            "multiplier": Parameter("multiplier", "float", 1.0, 4.0, 0.5, default=2.0),
-            "trailing": Parameter("trailing", "bool", default=False)
-        },
-        logic="Stop Loss at Entry - (ATR * multiplier). Optional trailing."
-    ),
+    def generate_positions(self, df: pd.DataFrame) -> pd.Series:
+        """
+        Generates target positions (1 for Long, 0 for Flat).
+        Shorts (-1) not supported in this version.
+        """
+        # 1. Calculate indicators if not present (assumed passed df has them or we compute)
+        # For safety, we assume df has all base indicators from core_indicators adapter
 
-    # EXITS (Target)
-    "exit_rr": Block(
-        name="Risk Reward Target",
-        type="exit",
-        params={
-            "risk_reward": Parameter("risk_reward", "float", 1.5, 4.0, 0.5, default=2.0)
-        },
-        logic="Take Profit at Entry + (Risk * RiskReward)."
-    ),
-    "exit_time": Block(
-        name="Time Stop",
-        type="exit",
-        params={
-            "max_bars": Parameter("max_bars", "int", 12, 100, 12, default=36) # ~3-4 hours on 5m
-        },
-        logic="Exit after N bars."
-    )
-}
+        # 2. Evaluate Blocks
+        entries = pd.Series(False, index=df.index)
+        exits = pd.Series(False, index=df.index)
+        filters = pd.Series(True, index=df.index)
 
-@dataclass
-class StrategyConfig:
-    entry_block: str
-    entry_params: Dict[str, Any]
-    risk_block: str
-    risk_params: Dict[str, Any]
-    exit_block: str
-    exit_params: Dict[str, Any]
-    id: str = ""
+        # Parse blocks
+        for block in self.blocks:
+            btype = block['type']
+            params = block['params']
 
-    def get_hash(self):
-        import hashlib
-        import json
-        s = json.dumps(self.__dict__, sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()
+            if btype == 'entry_ema_cross':
+                # Fast crosses above Slow
+                fast = df[f"ema_{params['fast']}"]
+                slow = df[f"ema_{params['slow']}"]
+                # Vectorized cross
+                cross = (fast > slow) & (fast.shift(1) <= slow.shift(1))
+                entries = entries | cross
+
+            elif btype == 'entry_rsi_oversold':
+                entries = entries | (df['rsi_14'] < params['threshold'])
+
+            elif btype == 'entry_supertrend':
+                # Enter if Supertrend is bullish (1)
+                entries = entries | (df['supertrend_dir'] == 1) & (df['supertrend_dir'].shift(1) == -1)
+
+            elif btype == 'entry_breakout':
+                # Close > Donchian Upper previous
+                entries = entries | (df['close'] > df['donchian_upper_20'].shift(1))
+
+            elif btype == 'exit_rsi_overbought':
+                exits = exits | (df['rsi_14'] > params['threshold'])
+
+            elif btype == 'exit_supertrend':
+                exits = exits | (df['supertrend_dir'] == -1)
+
+            elif btype == 'filter_adx':
+                filters = filters & (df['adx_14'] > params['threshold'])
+
+            elif btype == 'filter_regime':
+                # e.g. close > ema_200
+                filters = filters & (df['close'] > df['ema_200'])
+
+        # 3. Apply Risk (Stops) & State Machine
+        # Risk params
+        stop_atr_mult = self.params.get('stop_atr_mult', 3.0)
+        trailing_stop_atr_mult = self.params.get('trailing_stop_atr_mult', 0.0) # 0 means disabled
+        max_bars = self.params.get('max_bars', 0)
+
+        positions = np.zeros(len(df), dtype=int)
+
+        # Arrays for speed
+        c = df['close'].values
+        h = df['high'].values
+        l = df['low'].values
+        atr = df['atr_14'].values
+        ts = df.index
+
+        # Boolean arrays
+        entry_arr = (entries & filters).values
+        exit_arr = exits.values
+
+        # State
+        in_position = False
+        entry_price = 0.0
+        entry_idx = 0
+        highest_price = 0.0
+
+        for i in range(1, len(df)):
+            if in_position:
+                # Check Exits
+                # 1. Signal Exit
+                if exit_arr[i]:
+                    in_position = False
+                    positions[i] = 0
+                    continue
+
+                # 2. Stop Loss (Fixed ATR from entry)
+                sl_price = entry_price - (atr[entry_idx] * stop_atr_mult)
+                if l[i] < sl_price:
+                    in_position = False
+                    positions[i] = 0
+                    continue
+
+                # 3. Trailing Stop
+                if trailing_stop_atr_mult > 0:
+                    highest_price = max(highest_price, h[i])
+                    ts_price = highest_price - (atr[i] * trailing_stop_atr_mult)
+                    if c[i] < ts_price: # Check against close or low? Standard is usually breaching low, but for daily maybe close? sticking to low for safety
+                        if l[i] < ts_price:
+                           in_position = False
+                           positions[i] = 0
+                           continue
+
+                # 4. Time Stop
+                if max_bars > 0 and (i - entry_idx) >= max_bars:
+                    in_position = False
+                    positions[i] = 0
+                    continue
+
+                # Still in position
+                positions[i] = 1
+
+            else:
+                # Check Entry
+                if entry_arr[i]:
+                    in_position = True
+                    positions[i] = 1 # Enter on close (theoretical) or next open.
+                    # Note: Backtest engine handles "next open" execution.
+                    # Here we just mark "we want to be in position".
+                    entry_price = c[i]
+                    entry_idx = i
+                    highest_price = c[i]
+
+        return pd.Series(positions, index=df.index)
+
+    def rule_summary(self) -> str:
+        s = [f"ID: {self.id[:8]}"]
+        for b in self.blocks:
+            s.append(f"{b['type']}: {b['params']}")
+        s.append(f"Risk: {self.params}")
+        return "\n".join(s)
+
