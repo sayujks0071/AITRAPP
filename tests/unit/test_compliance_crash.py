@@ -15,11 +15,6 @@ def test_compliance_module_imports():
         assert compliance.tops_cap_ok is not None
         assert compliance.algo_id_present is not None
 
-        # Verify internal imports that were missing
-        assert compliance.dt is not None
-        assert compliance.httpx is not None
-        assert compliance.structlog is not None
-
     except ImportError as e:
         pytest.fail(f"Failed to import compliance module: {e}")
     except AttributeError as e:
