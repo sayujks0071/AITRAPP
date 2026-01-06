@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     reload: bool = Field(default=False, alias="RELOAD")
     
+    # TOPS Compliance (from env)
+    tops_cap_per_sec: int = Field(default=8, alias="TOPS_CAP_PER_SEC")
+
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -218,6 +221,8 @@ class ExecutionConfig:
         self.ioc_for_exits = config.get("ioc_for_exits", True)
         self.max_order_retries = config.get("max_order_retries", 3)
         self.retry_backoff_ms = config.get("retry_backoff_ms", 500)
+        self.exchange_algo_id = config.get("exchange_algo_id", None)
+        self.tops_cap_per_sec = config.get("tops_cap_per_sec", 8)
 
 
 class AppConfig:
