@@ -12,7 +12,6 @@ from kiteconnect import KiteConnect
 from prometheus_client import make_asgi_app
 from fastapi.responses import PlainTextResponse, Response
 from packages.core.metrics import (
-    get_metrics,
     metrics_app,
     prelive_day2_pass,
     prelive_day2_age,
