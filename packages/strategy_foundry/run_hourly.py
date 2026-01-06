@@ -9,7 +9,7 @@ import warnings
 # Add repo root to path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
-from packages.strategy_foundry.data.loader import update_cache, load_data
+from packages.strategy_foundry.data.loader import load_data
 from packages.strategy_foundry.adapters.core_indicators import compute_all_indicators
 from packages.strategy_foundry.factory.generator import StrategyGenerator
 from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
