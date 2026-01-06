@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Optional
+import os
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -10,7 +11,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from kiteconnect import KiteConnect
 from prometheus_client import make_asgi_app
 from fastapi.responses import PlainTextResponse, Response
-from packages.core.metrics import get_metrics, metrics_app
+from packages.core.metrics import (
+    get_metrics,
+    metrics_app,
+    prelive_day2_pass,
+    prelive_day2_age,
+    is_leader,
+    marketdata_heartbeat_seconds,
+    order_stream_heartbeat_seconds,
+    scan_heartbeat_seconds,
+)
 from packages.core.redis_bus import RedisBus
 from packages.core.oco import OCOManager
 from packages.core.order_watcher import OrderWatcher
@@ -29,6 +39,7 @@ from packages.core.orchestrator import TradingOrchestrator
 from packages.core.risk import PortfolioRisk, RiskManager
 from packages.core.ranker import SignalRanker
 from packages.core.strategies import ORBStrategy, TrendPullbackStrategy, OptionsRankerStrategy, Strategy
+from packages.core import compliance
 
 # Configure structured logging
 structlog.configure(
@@ -399,13 +410,6 @@ async def health_check():
 @app.get("/ready")
 async def ready():
     """Readiness endpoint - returns 200 only when leader lock is held and all heartbeats are fresh"""
-    import os
-    from packages.core.metrics import (
-        is_leader,
-        marketdata_heartbeat_seconds,
-        order_stream_heartbeat_seconds,
-        scan_heartbeat_seconds,
-    )
     
     HEARTBEAT_MAX = float(os.getenv("HEARTBEAT_MAX", "5"))
     
@@ -465,10 +469,8 @@ def compliance_status():
     wl = os.getenv("WHITELISTED_CLIENTS", "")
     # broker session created_at iso if you persist it, else env fallback:
     oauth_created_iso = os.getenv("KITE_TOKEN_CREATED_AT_ISO")
-    # active client ids: if you have multiple mapped, load from your config/session
-    active_clients = [app_state.get("kite_user_id")] if app_state.get("kite_user_id") else []
-    if settings.kite_user_id:
-        active_clients = list(set(active_clients + [settings.kite_user_id]))
+    # active client IDs: if you have multiple mapped, load from your config/session
+    active_clients = [settings.kite_user_id] if settings.kite_user_id else []
     
     ip_ok, ip_msg, curr_ip = compliance.check_static_ip(expected_ip)
     oauth_ok, oauth_msg = compliance.check_oauth_fresh(oauth_created_iso, 24)

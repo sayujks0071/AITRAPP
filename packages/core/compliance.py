@@ -4,8 +4,15 @@ import os
 import time
 import json
 import datetime as dt
-from typing import Tuple, Optional
+from datetime import datetime
+from typing import Tuple, Optional, List
 import urllib.request
+import httpx
+import structlog
+
+from packages.core.config import app_config, settings
+
+logger = structlog.get_logger(__name__)
 
 TZ = os.getenv("APP_TIMEZONE", "Asia/Kolkata")
 COMPLIANCE_ENABLED = os.getenv("COMPLIANCE_SEBI_2025", "1") == "1"
@@ -239,4 +246,3 @@ class ComplianceManager:
             logger.error("Compliance checks failed", failed_checks=failed)
         
         return all_passed
-
