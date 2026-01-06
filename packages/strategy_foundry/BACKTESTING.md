@@ -1,24 +1,21 @@
 # Backtesting Methodology
 
-## Data Strategy
--   **Primary**: 5m and 15m intraday bars.
--   **Sanity**: 1D bars for checking major trend alignment and structural breaks.
--   **Source**: Yahoo Finance (cached locally).
--   **Timezone**: Normalized to Asia/Kolkata (IST).
+## Data
+- Sources: Yahoo Finance (Research), Core/Broker (Live/Paper).
+- Caching: CSV in `data/cache/`.
+- Timeframes: 5m, 15m (Primary), 1D (Sanity).
 
-## Engine
--   **Type**: Hybrid.
-    -   **Signal Generation**: Vectorized (Pandas/NumPy) for speed.
-    -   **Execution**: Event-driven loop to strictly enforce intraday constraints (time stops, EOD exits).
--   **Execution Price**: Next Open (after signal).
--   **Costs**:
-    -   Slippage: 5 bps per side.
-    -   Commission: 3 bps per side.
+## Engine Assumptions
+- **Execution**: Signal at Close -> Trade at Open of NEXT bar.
+- **Session**: Mandatory flat by 15:25 IST.
+- **Costs**: 3bps + 2bps slippage per side. Spread guard penalty for entries.
 
-## Validation
--   **Walk-Forward**: Data is split into 4 folds (default).
--   **Ranking**: Strategies are ranked on Out-of-Sample (OOS) performance only.
--   **Overfitting Guards**:
-    -   Must have positive expectancy in 3/4 folds.
-    -   Max Drawdown < 30%.
-    -   Profit Factor > 1.1.
+## Evaluation
+- **Walk-Forward**: 4 Folds (default). OOS performance determines rank.
+- **Sanity**:
+  - Daily robustness check (must not crash on 1D).
+  - Intraday turnover check (no overtrading).
+
+## Ranking
+- **Blended Score**: Sharpe (25%), Calmar (25%), CAGR (20%), Stability (15%).
+- **Promotion**: Beat current champion by 10% score OR 5% less drawdown.

@@ -2,33 +2,24 @@
 
 ## Live Signal Consumption
 
-The foundry **does not** execute trades. It produces a signal artifact:
-
-`packages/strategy_foundry/results/live_signal.json`
+The Foundry produces `packages/strategy_foundry/results/live_signal.json`.
+This file is an artifact. It does NOT execute trades.
 
 ### Schema
 ```json
 {
-  "timestamp_ist": "2023-10-27T10:15:00+05:30",
-  "champion_id": "a1b2c3...",
-  "timeframe": "5m",
-  "instrument": "NIFTY",
-  "proxy_symbol_live": "NIFTY 50",
-  "signal": 1,
-  "status": "OK"
+  "signal": 1, // 1 (Long), -1 (Short), 0 (Flat) - Entry Signal
+  "status": "OK",
+  "champion_id": "...",
+  "risk": { "stop": "ATR_TRAIL", ... }
 }
 ```
 
--   `signal`: `1` (Buy), `-1` (Sell), `0` (Neutral).
--   `status`: `OK` or `SKIPPED`.
+## Integration with Execution Bridge
 
-### Gating
-Live execution requires:
-1.  `ENABLE_LIVE=true` environment variable.
-2.  `approvals/ALLOW_LIVE.txt` file presence.
-3.  Core system kill-switches inactive.
+To enable auto-trading:
+1. Ensure `ENABLE_LIVE=true` in env.
+2. Ensure `approvals/ALLOW_LIVE.txt` exists.
+3. Write a bridge script that polls `live_signal.json` and calls Core API.
 
-## Paper Trading
-To run in paper mode:
-1.  Ensure `instrument_map.yaml` has correct `paper_proxy` symbols.
-2.  Consume the JSON and route to a paper broker account.
+**Note**: The Foundry is currently "Signal Only".

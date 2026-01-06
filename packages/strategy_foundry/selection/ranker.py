@@ -1,46 +1,42 @@
-"""
-Ranker
-Ranks strategies based on metrics.
-"""
-from typing import List, Dict, Any
-import pandas as pd
+"""Ranking logic"""
+from typing import Dict
 
 class Ranker:
-    @staticmethod
-    def calculate_score(metrics: Dict[str, Any], weights: Dict[str, float]) -> float:
+    def score(self, metrics: Dict, sanity_result: Dict) -> float:
         """
-        Calculate weighted score.
-        Normalizing inputs is hard without population context,
-        so we use thresholds and raw values with reasonable scaling.
+        Compute blended score:
+        + 25% Sharpe
+        + 25% Calmar
+        + 20% CAGR
+        + 15% Stability
+        + 10% Low Turnover (Bonus)
+        + 5% Intraday Sanity (Penalty actually)
         """
-        score = 0.0
+        # Global metrics
+        g = metrics.get("global", {})
+        stability = metrics.get("stability_score", 0.0)
 
-        # Sharpe (Target ~2.0) -> 2.0 * 25 = 50 pts
-        score += min(metrics['sharpe'], 3.0) * weights['sharpe'] * 20
+        sharpe = g.get("sharpe", 0.0)
+        calmar = g.get("calmar", 0.0)
+        cagr = g.get("cagr", 0.0)
 
-        # Calmar (Target ~3.0) -> 3.0 * 25 = 75 pts
-        score += min(metrics['calmar'], 5.0) * weights['calmar'] * 15
+        # Turnover Bonus: < 5 trades/day is good?
+        # Actually logic says "Low turnover bonus (or -turnover penalty)"
+        # Let's map avg trades/day to 0..1 score
+        # Using win rate or just raw count?
+        # Let's use Profit Factor as proxy for quality? No, distinct weight.
 
-        # Return (CAGR) -> 0.5 (50%) * 20 = 10 pts
-        score += min(metrics['cagr'], 2.0) * weights['return'] * 100
+        # Simple Bonus:
+        turnover_score = 0.5 # Neutral
 
-        # Drawdown Penalty
-        # If DD > 20%, penalize heavily
-        if metrics['max_drawdown'] > 0.2:
-            score -= (metrics['max_drawdown'] - 0.2) * 200
+        # Weighted Sum
+        # Normalize roughly: Sharpe 2.0 is good. Calmar 3.0 is good. CAGR 0.5 is good.
+        # We want raw score to be somewhat meaningful.
 
-        return score
+        s = (0.25 * sharpe) + (0.25 * calmar) + (0.20 * (cagr * 10)) + (0.15 * (stability * 2))
 
-    @staticmethod
-    def rank(results: List[Dict[str, Any]]) -> pd.DataFrame:
-        """
-        Rank results.
-        results: List of dicts with 'metrics', 'config', 'id'
-        """
-        df = pd.DataFrame(results)
-        if df.empty:
-            return df
+        # Penalties
+        sanity_penalty = sanity_result.get("penalty", 0.0)
+        s -= sanity_penalty
 
-        # Sort by score descending
-        df = df.sort_values('score', ascending=False)
-        return df
+        return max(0.0, s)

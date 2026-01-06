@@ -1,105 +1,86 @@
-"""
-Strategy Grammar
-Defines the components and composition rules for strategies.
-"""
+"""Strategy grammar and components"""
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
+import hashlib
+import json
 
 @dataclass
-class Parameter:
-    name: str
-    type: str  # int, float, bool, choice
-    min: Optional[float] = None
-    max: Optional[float] = None
-    step: Optional[float] = None
-    options: Optional[List[Any]] = None
-    default: Any = None
+class StrategyCandidate:
+    id: str
+    entry_logic: Dict[str, Any]
+    exit_logic: Dict[str, Any]
+    filters: List[Dict[str, Any]]
+    timeframe: str
+    params: Dict[str, Any] = field(default_factory=dict)
 
-@dataclass
-class Block:
-    name: str
-    type: str  # entry, exit, filter
-    params: Dict[str, Parameter]
-    logic: str  # Description of logic
+    @property
+    def rule_summary(self) -> str:
+        """Human-readable summary of rules"""
+        entry_s = f"{self.entry_logic['type']}"
+        exit_s = f"{self.exit_logic['type']}"
+        filters_s = ", ".join([f['type'] for f in self.filters])
+        return f"Entry: {entry_s} | Exit: {exit_s} | Filters: {filters_s} | TF: {self.timeframe}"
 
-# Registry of available blocks
-BLOCKS = {
-    # ENTRIES
-    "entry_trend_ema_cross": Block(
-        name="EMA Crossover",
-        type="entry",
-        params={
-            "fast_period": Parameter("fast_period", "int", 5, 50, 5, default=20),
-            "slow_period": Parameter("slow_period", "int", 20, 200, 10, default=50),
-            "adx_filter": Parameter("adx_filter", "bool", default=False),
-            "adx_threshold": Parameter("adx_threshold", "int", 15, 30, 5, default=20)
-        },
-        logic="Fast EMA crosses above Slow EMA. Optional ADX > threshold."
-    ),
-    "entry_breakout_donchian": Block(
-        name="Donchian Breakout",
-        type="entry",
-        params={
-            "period": Parameter("period", "int", 10, 60, 5, default=20),
-            "filter_ma": Parameter("filter_ma", "bool", default=True),
-            "ma_period": Parameter("ma_period", "int", 50, 200, 50, default=200)
-        },
-        logic="Close > Donchian High(period). Optional Close > SMA(ma_period)."
-    ),
-    "entry_mean_rev_rsi": Block(
-        name="RSI Reversion",
-        type="entry",
-        params={
-            "rsi_period": Parameter("rsi_period", "int", 2, 14, 2, default=7),
-            "oversold": Parameter("oversold", "int", 10, 40, 5, default=30),
-            "exit_rsi": Parameter("exit_rsi", "int", 50, 80, 5, default=60)
-        },
-        logic="RSI < oversold. Exit when RSI > exit_rsi (handled as internal exit condition)."
-    ),
+def generate_id(candidate: 'StrategyCandidate') -> str:
+    """Stable ID hash"""
+    raw = json.dumps({
+        "entry": candidate.entry_logic,
+        "exit": candidate.exit_logic,
+        "filters": candidate.filters,
+        "timeframe": candidate.timeframe,
+        "params": candidate.params
+    }, sort_keys=True)
+    return hashlib.md5(raw.encode()).hexdigest()
 
-    # RISKS (Stop Loss / Take Profit)
-    "risk_atr": Block(
-        name="ATR Stop",
-        type="risk",
-        params={
-            "atr_period": Parameter("atr_period", "int", 14, 14, 0, default=14),
-            "multiplier": Parameter("multiplier", "float", 1.0, 4.0, 0.5, default=2.0),
-            "trailing": Parameter("trailing", "bool", default=False)
-        },
-        logic="Stop Loss at Entry - (ATR * multiplier). Optional trailing."
-    ),
+# --- Grammar Blocks ---
 
-    # EXITS (Target)
-    "exit_rr": Block(
-        name="Risk Reward Target",
-        type="exit",
-        params={
-            "risk_reward": Parameter("risk_reward", "float", 1.5, 4.0, 0.5, default=2.0)
-        },
-        logic="Take Profit at Entry + (Risk * RiskReward)."
-    ),
-    "exit_time": Block(
-        name="Time Stop",
-        type="exit",
-        params={
-            "max_bars": Parameter("max_bars", "int", 12, 100, 12, default=36) # ~3-4 hours on 5m
-        },
-        logic="Exit after N bars."
-    )
+ENTRY_TYPES = [
+    "ORB_BREAKOUT",
+    "DONCHIAN_BREAKOUT",
+    "RSI_REVERSION",
+    "EMA_CROSS",
+    "BOLLINGER_REVERSION"
+]
+
+EXIT_TYPES = [
+    "ATR_TRAIL",
+    "TIME_STOP",
+    "FIXED_RR"
+]
+
+FILTER_TYPES = [
+    "TREND_EMA_1H",
+    "VOLATILITY_ATR",
+    "NO_TRADE_ZONE"
+]
+
+# Parameter definitions for randomization
+PARAM_RANGES = {
+    # ORB
+    "orb_window_minutes": [15, 30, 60],
+
+    # Donchian
+    "donchian_period": [10, 20, 40, 60],
+
+    # RSI
+    "rsi_period": [7, 14, 21],
+    "rsi_overbought": [70, 75, 80],
+    "rsi_oversold": [20, 25, 30],
+
+    # EMA
+    "ema_fast": [9, 13, 20],
+    "ema_slow": [21, 34, 50],
+
+    # Bollinger
+    "bb_period": [20],
+    "bb_std": [2.0, 2.5],
+
+    # Exits
+    "atr_period": [14],
+    "atr_multiplier": [1.5, 2.0, 3.0],
+    "time_stop_bars": [6, 12, 24], # e.g. 1-2 hours on 5m
+    "profit_target_rr": [1.5, 2.0, 3.0],
+
+    # Filters
+    "trend_ema_period": [50, 100, 200]
 }
-
-@dataclass
-class StrategyConfig:
-    entry_block: str
-    entry_params: Dict[str, Any]
-    risk_block: str
-    risk_params: Dict[str, Any]
-    exit_block: str
-    exit_params: Dict[str, Any]
-    id: str = ""
-
-    def get_hash(self):
-        import hashlib
-        import json
-        s = json.dumps(self.__dict__, sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()

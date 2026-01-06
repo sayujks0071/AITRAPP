@@ -1,38 +1,60 @@
-"""
-Champion Store
-Manages persistence of champion strategies.
-"""
+"""Champion persistence"""
 import json
-import os
+import shutil
 from pathlib import Path
 from datetime import datetime
-from packages.strategy_foundry.factory.grammar import StrategyConfig
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
 
 CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
 
 class ChampionStore:
-    def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
-
     def load_current(self) -> dict:
-        path = CHAMPION_DIR / "current.json"
-        if path.exists():
-            with open(path, 'r') as f:
-                return json.load(f)
+        p = CHAMPION_DIR / "current.json"
+        if p.exists():
+            return json.loads(p.read_text())
         return {}
 
-    def save_new_champion(self, strategy: dict, metrics: dict, timeframe: str, run_ts: str):
-        # Save historical version
-        version_file = CHAMPION_DIR / f"{run_ts}_{strategy['id']}.json"
+    def save_new_champion(self, candidate: StrategyCandidate, metrics: dict, score: float):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         data = {
-            "strategy": strategy,
+            "id": candidate.id,
+            "candidate": {
+                "entry_logic": candidate.entry_logic,
+                "exit_logic": candidate.exit_logic,
+                "filters": candidate.filters,
+                "timeframe": candidate.timeframe,
+                "params": candidate.params
+            },
             "metrics": metrics,
-            "timeframe": timeframe,
-            "promoted_at": run_ts
+            "score": score,
+            "timestamp": ts
         }
-        with open(version_file, 'w') as f:
-            json.dump(data, f, indent=2)
+
+        # Save versioned
+        (CHAMPION_DIR / f"{ts}_{candidate.id}.json").write_text(json.dumps(data, indent=2))
 
         # Update current
-        with open(CHAMPION_DIR / "current.json", 'w') as f:
-            json.dump(data, f, indent=2)
+        (CHAMPION_DIR / "current.json").write_text(json.dumps(data, indent=2))
+
+    def should_promote(self, new_score: float, new_metrics: dict) -> bool:
+        """
+        Check against current.
+        Rule: Beat score by >= 10% OR reduce MaxDD by >= 5% abs (with similar Sharpe)
+        """
+        current = self.load_current()
+        if not current:
+            return True
+
+        old_score = current.get("score", 0.0)
+        old_dd = current.get("metrics", {}).get("global", {}).get("max_drawdown", 1.0)
+
+        if new_score >= old_score * 1.10:
+            return True
+
+        new_dd = new_metrics.get("global", {}).get("max_drawdown", 1.0)
+        if (old_dd - new_dd) >= 0.05 and new_score >= old_score * 0.9:
+            return True
+
+        return False
