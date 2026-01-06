@@ -61,7 +61,7 @@ class IronCondorStrategy(Strategy):
             return []
         
         # Need underlying value for strike selection
-        if not context.underlying_price and not context.latest_tick:
+        if context.underlying_price is None and context.latest_tick is None:
             return []
         
         # For Iron Condor, we need to construct a 4-leg spread
