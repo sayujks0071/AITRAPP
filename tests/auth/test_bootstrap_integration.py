@@ -9,6 +9,20 @@ from scripts.kite_auth_bootstrap import CallbackHandler, main
 import http.server
 
 class TestBootstrapIntegration(unittest.TestCase):
+    def _setup_mock_server_with_token(self, mock_http_server):
+        """Helper to setup a mock server that simulates token reception."""
+        mock_server_instance = MagicMock()
+        # Initially request_token is None, after one handle_request call it should have a value
+        mock_server_instance.request_token = None
+        
+        def set_token_on_first_call(*args, **kwargs):
+            # Simulate receiving token after first handle_request
+            mock_server_instance.request_token = "test_token"
+        
+        mock_server_instance.handle_request = set_token_on_first_call
+        mock_http_server.return_value = mock_server_instance
+        return mock_server_instance
+
     def test_callback_server(self):
         # Start a real server on a random port
         port = 0 # random port
@@ -91,19 +105,10 @@ class TestBootstrapIntegration(unittest.TestCase):
         mock_instance.profile.side_effect = Exception("Token invalid")
         mock_instance.login_url.return_value = "https://kite.trade/login"
         
-        # Mock server to prevent actual server start and simulate token received
-        mock_server_instance = MagicMock()
-        # Initially request_token is None, after one handle_request call it should have a value
-        mock_server_instance.request_token = None
+        # Setup mock server using helper
+        self._setup_mock_server_with_token(mock_http_server)
         
-        def set_token_on_first_call(*args, **kwargs):
-            # Simulate receiving token after first handle_request
-            mock_server_instance.request_token = "test_token"
-        
-        mock_server_instance.handle_request = set_token_on_first_call
-        mock_http_server.return_value = mock_server_instance
-        
-        # Mock token exchange
+        # Mock token exchange (generate_session is called by exchange_request_token)
         mock_instance.generate_session.return_value = {
             "access_token": "new_token",
             "user_id": "123"
@@ -117,7 +122,7 @@ class TestBootstrapIntegration(unittest.TestCase):
             except SystemExit:
                 pass
         
-        # Verify HTTPServer was called with the custom port
+        # Verify HTTPServer was called with the custom port 9090
         mock_http_server.assert_called_once()
         call_args = mock_http_server.call_args
         self.assertEqual(call_args[0][0], ('localhost', 9090))
@@ -137,19 +142,10 @@ class TestBootstrapIntegration(unittest.TestCase):
         mock_instance.profile.side_effect = Exception("Token invalid")
         mock_instance.login_url.return_value = "https://kite.trade/login"
         
-        # Mock server to prevent actual server start and simulate token received
-        mock_server_instance = MagicMock()
-        # Initially request_token is None, after one handle_request call it should have a value
-        mock_server_instance.request_token = None
+        # Setup mock server using helper
+        self._setup_mock_server_with_token(mock_http_server)
         
-        def set_token_on_first_call(*args, **kwargs):
-            # Simulate receiving token after first handle_request
-            mock_server_instance.request_token = "test_token"
-        
-        mock_server_instance.handle_request = set_token_on_first_call
-        mock_http_server.return_value = mock_server_instance
-        
-        # Mock token exchange
+        # Mock token exchange (generate_session is called by exchange_request_token)
         mock_instance.generate_session.return_value = {
             "access_token": "new_token",
             "user_id": "123"
