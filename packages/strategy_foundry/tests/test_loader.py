@@ -26,5 +26,5 @@ def test_indicators_vectorized():
     assert "supertrend" in res.columns
 
     # Check values not all NaN (after warmup)
-    assert not res["rsi_14"].iloc[-1] == np.nan
-    assert not res["supertrend"].iloc[-1] == np.nan
+    assert not pd.isna(res["rsi_14"].iloc[-1])
+    assert not pd.isna(res["supertrend"].iloc[-1])
