@@ -149,7 +149,7 @@ class BacktestEngine:
             return
         
         if chain.empty:
-            # logger.debug(f"Chain empty for {date}")
+            logger.debug(f"Chain empty for {date}")
             return
         
         # Get underlying value
