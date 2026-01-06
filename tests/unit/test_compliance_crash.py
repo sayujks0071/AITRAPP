@@ -1,6 +1,5 @@
 
 import pytest
-import sys
 from unittest.mock import MagicMock, patch
 
 def test_compliance_module_imports():
