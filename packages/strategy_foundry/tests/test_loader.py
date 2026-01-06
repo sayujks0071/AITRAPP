@@ -25,6 +25,6 @@ def test_indicators_vectorized():
     assert "ema_50" in res.columns
     assert "supertrend" in res.columns
 
-    # Check values not all NaN (after warmpup)
+    # Check values not all NaN (after warmup)
     assert not res["rsi_14"].iloc[-1] == np.nan
     assert not res["supertrend"].iloc[-1] == np.nan
