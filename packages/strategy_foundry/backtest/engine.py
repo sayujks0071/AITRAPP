@@ -51,7 +51,6 @@ def run_backtest(df: pd.DataFrame, positions: pd.Series, costs: Dict[str, float]
     # So positions[i] represents state at END of day i.
 
     # So if positions[i-1] == 1, we are exposed to Day i price action.
-    strat_ret = positions.shift(1).fillna(0) * mkt_ret
 
     # Costs
     # Trades occur when position changes
