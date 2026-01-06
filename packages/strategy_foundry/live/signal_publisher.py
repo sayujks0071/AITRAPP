@@ -46,7 +46,6 @@ def publish_signal(champion_data: Dict[str, Any], instrument: str = "NIFTY"):
     # positions.iloc[-1] corresponds to the last row in DF.
 
     last_date = df.index[-1]
-    today = datetime.now(ist).date()
 
     # If last_date is Today, it's an incomplete candle? Yahoo provides incomplete daily candle sometimes.
     # For safety, let's use the signal from the last row, assuming that's the current "state".

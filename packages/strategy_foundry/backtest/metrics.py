@@ -54,8 +54,16 @@ def calculate_metrics(returns: pd.Series, trades: pd.DataFrame) -> Dict[str, flo
 
     # Stability (Sharpe dispersion)
     # Rolling 6-month Sharpe
-    rolling_sharpe = returns.rolling(window=126).apply(lambda x: (x.mean() / x.std() * np.sqrt(252)) if x.std() > 0 else 0)
-    stability = 1.0 / (rolling_sharpe.std() + 0.1) # Inverse of dispersion
+    window = 126
+    if len(returns) >= window:
+        rolling_sharpe = returns.rolling(window=window).apply(
+            lambda x: (x.mean() / x.std() * np.sqrt(252)) if x.std() > 0 else 0
+        )
+        rs_std = rolling_sharpe.std()
+        stability = 1.0 / (rs_std + 0.1) if pd.notna(rs_std) else 0
+    else:
+        # Insufficient data for a 6-month rolling Sharpe; default to 0 stability
+        stability = 0
 
     return {
         "cagr": cagr,

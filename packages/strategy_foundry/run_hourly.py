@@ -107,15 +107,12 @@ def main():
         champ_store = ChampionStore()
         current = champ_store.load_champion(INSTRUMENT)
 
-        promoted = False
         if current:
             if champ_store.is_better(best['metrics'], current['metrics'], ranker):
                 champ_store.save_champion(best['candidate'], best['metrics'], INSTRUMENT, timestamp)
-                promoted = True
                 logger.info("New Champion Promoted", id=best['candidate'].id)
         else:
             champ_store.save_champion(best['candidate'], best['metrics'], INSTRUMENT, timestamp)
-            promoted = True
             logger.info("First Champion Initialized", id=best['candidate'].id)
 
         # 5. Live Signal

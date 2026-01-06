@@ -2,7 +2,6 @@ import pandas as pd
 import httpx
 import time
 from pathlib import Path
-from datetime import datetime, timezone
 import structlog
 import io
 import random
