@@ -1,5 +1,4 @@
 import pandas as pd
-import pytest
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
 def test_metrics_zeros():

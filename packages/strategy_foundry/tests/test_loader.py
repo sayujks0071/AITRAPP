@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import pytest
 from packages.strategy_foundry.adapters.core_indicators import compute_all_indicators
 
 def test_indicators_vectorized():
@@ -25,6 +24,6 @@ def test_indicators_vectorized():
     assert "ema_50" in res.columns
     assert "supertrend" in res.columns
 
-    # Check values not all NaN (after warmpup)
-    assert not res["rsi_14"].iloc[-1] == np.nan
-    assert not res["supertrend"].iloc[-1] == np.nan
+    # Check values not all NaN (after warmup)
+    assert not pd.isna(res["rsi_14"].iloc[-1])
+    assert not pd.isna(res["supertrend"].iloc[-1])

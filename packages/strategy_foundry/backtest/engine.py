@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 def run_backtest(df: pd.DataFrame, positions: pd.Series, costs: Dict[str, float]) -> Dict[str, Any]:
     """
@@ -17,12 +17,6 @@ def run_backtest(df: pd.DataFrame, positions: pd.Series, costs: Dict[str, float]
     # Align
     # Logic: If position[i] != position[i-1], we trade at Open[i+1].
     # So we execute at Next Open.
-
-    # Target positions
-    target_pos = positions.shift(1).fillna(0) # Logic: Signal at close i -> Trade at i+1
-
-    # Execution price is Open
-    exec_price = df['open']
 
     # Calculate returns
     # Strategy Return = Position[i-1] * (Close[i] - Close[i-1]) / Close[i-1]
@@ -141,7 +135,6 @@ def run_backtest(df: pd.DataFrame, positions: pd.Series, costs: Dict[str, float]
     trades = []
     # Identify trade points
     trades_mask = turnover > 0
-    trade_indices = df.index[trades_mask]
 
     # This is a quick approximation. For detailed trade list (entry price, exit price),
     # we need to iterate.

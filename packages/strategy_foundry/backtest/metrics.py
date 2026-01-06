@@ -23,7 +23,10 @@ def calculate_metrics(returns: pd.Series, trades: pd.DataFrame) -> Dict[str, flo
     # Sortino
     downside_returns = returns[returns < 0]
     downside_vol = downside_returns.std() * np.sqrt(ann_factor)
-    sortino = (cagr / downside_vol) if downside_vol > 0 else 0
+    if len(downside_returns) > 1 and not np.isnan(downside_vol) and downside_vol > 0:
+        sortino = cagr / downside_vol
+    else:
+        sortino = 0
 
     # Max Drawdown
     cum_ret = (1 + returns).cumprod()
@@ -51,8 +54,16 @@ def calculate_metrics(returns: pd.Series, trades: pd.DataFrame) -> Dict[str, flo
 
     # Stability (Sharpe dispersion)
     # Rolling 6-month Sharpe
-    rolling_sharpe = returns.rolling(window=126).apply(lambda x: (x.mean() / x.std() * np.sqrt(252)) if x.std() > 0 else 0)
-    stability = 1.0 / (rolling_sharpe.std() + 0.1) # Inverse of dispersion
+    window = 126
+    if len(returns) >= window:
+        rolling_sharpe = returns.rolling(window=window).apply(
+            lambda x: (x.mean() / x.std() * np.sqrt(252)) if x.std() > 0 else 0
+        )
+        rs_std = rolling_sharpe.std()
+        stability = 1.0 / (rs_std + 0.1) if pd.notna(rs_std) else 0
+    else:
+        # Insufficient data for a 6-month rolling Sharpe; default to 0 stability
+        stability = 0
 
     return {
         "cagr": cagr,

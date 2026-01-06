@@ -1,9 +1,7 @@
 import pandas as pd
 import numpy as np
-import random
-import hashlib
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from dataclasses import dataclass, field
 
 @dataclass
@@ -87,7 +85,6 @@ class StrategyCandidate:
         h = df['high'].values
         l = df['low'].values
         atr = df['atr_14'].values
-        ts = df.index
 
         # Boolean arrays
         entry_arr = (entries & filters).values

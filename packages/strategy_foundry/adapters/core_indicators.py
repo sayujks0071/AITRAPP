@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from typing import Dict
 
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -149,7 +148,6 @@ def _supertrend(high: pd.Series, low: pd.Series, close: pd.Series, period: int, 
         if i == 0:
             direction[i] = 1
         else:
-            prev_st = supertrend[i-1]
             if direction[i-1] == 1:
                 if c[i] < final_lower[i]:
                     direction[i] = -1

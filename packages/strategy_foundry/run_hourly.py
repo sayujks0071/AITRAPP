@@ -9,7 +9,7 @@ import warnings
 # Add repo root to path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
-from packages.strategy_foundry.data.loader import update_cache, load_data
+from packages.strategy_foundry.data.loader import load_data
 from packages.strategy_foundry.adapters.core_indicators import compute_all_indicators
 from packages.strategy_foundry.factory.generator import StrategyGenerator
 from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
@@ -107,15 +107,12 @@ def main():
         champ_store = ChampionStore()
         current = champ_store.load_champion(INSTRUMENT)
 
-        promoted = False
         if current:
             if champ_store.is_better(best['metrics'], current['metrics'], ranker):
                 champ_store.save_champion(best['candidate'], best['metrics'], INSTRUMENT, timestamp)
-                promoted = True
                 logger.info("New Champion Promoted", id=best['candidate'].id)
         else:
             champ_store.save_champion(best['candidate'], best['metrics'], INSTRUMENT, timestamp)
-            promoted = True
             logger.info("First Champion Initialized", id=best['candidate'].id)
 
         # 5. Live Signal
