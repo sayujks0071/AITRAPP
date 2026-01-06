@@ -48,7 +48,7 @@ def main():
     strategy = IronCondorStrategy("IronCondor", iron_condor_params)
     
     # Initialize backtest engine
-    initial_capital = 1000000  # 10 lakh
+    initial_capital = 2000000  # 20 lakh to accommodate risk limits
     engine = BacktestEngine(
         initial_capital=initial_capital,
         data_dir="docs/NSE OPINONS DATA"

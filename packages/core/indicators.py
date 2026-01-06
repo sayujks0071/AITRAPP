@@ -49,24 +49,28 @@ class IndicatorCalculator:
         try:
             indicators = {}
             
+            # Pre-calculate TR once (used by ATR, ADX, Supertrend)
+            # This avoids redundant expensive calculations (3x speedup for TR)
+            tr = self._calculate_tr(df)
+
             # VWAP (reset daily in production)
             indicators["vwap"] = self._vwap(df)
             
-            # ATR
-            indicators["atr"] = self._atr(df)
+            # ATR (reuse TR)
+            indicators["atr"] = self._atr(df, tr=tr)
             
             # RSI
             indicators["rsi"] = self._rsi(df)
             
-            # ADX
-            indicators["adx"] = self._adx(df)
+            # ADX (reuse TR)
+            indicators["adx"] = self._adx(df, tr=tr)
             
             # EMAs
             indicators["ema_fast"] = self._ema(df["close"], self.ema_fast)
             indicators["ema_slow"] = self._ema(df["close"], self.ema_slow)
             
-            # Supertrend
-            st_val, st_dir = self._supertrend(df)
+            # Supertrend (reuse TR)
+            st_val, st_dir = self._supertrend(df, tr=tr)
             indicators["supertrend"] = st_val
             indicators["supertrend_direction"] = st_dir
             
@@ -102,19 +106,40 @@ class IndicatorCalculator:
         except:
             return None
     
-    def _atr(self, df: pd.DataFrame) -> Optional[float]:
+    def _calculate_tr(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Calculate True Range using optimized NumPy operations.
+        Returns numpy array.
+        """
+        high = df["high"].values
+        low = df["low"].values
+        close = df["close"].values
+
+        tr1 = high - low
+
+        # Calculate tr2 and tr3 using previous close
+        # Use roll for efficiency, but handle first element
+        prev_close = np.roll(close, 1)
+
+        tr2 = np.abs(high - prev_close)
+        tr3 = np.abs(low - prev_close)
+
+        # First element of roll is invalid (wrapped from end), so use tr1[0] for it
+        # This matches standard TR definition where first period TR = High - Low
+        tr2[0] = tr1[0]
+        tr3[0] = tr1[0]
+
+        return np.maximum(tr1, np.maximum(tr2, tr3))
+
+    def _atr(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> Optional[float]:
         """Average True Range"""
         try:
-            high = df["high"]
-            low = df["low"]
-            close = df["close"]
+            if tr is None:
+                tr = self._calculate_tr(df)
             
-            tr1 = high - low
-            tr2 = abs(high - close.shift())
-            tr3 = abs(low - close.shift())
-            
-            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            atr = tr.rolling(window=self.atr_period).mean()
+            # Convert to Series for rolling mean (keeps compatibility with rolling behavior)
+            # Using numpy for simple moving average is faster but we need rolling over time
+            atr = pd.Series(tr).rolling(window=self.atr_period).mean()
             
             return float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else None
         except:
@@ -136,12 +161,11 @@ class IndicatorCalculator:
         except:
             return None
     
-    def _adx(self, df: pd.DataFrame) -> Optional[float]:
+    def _adx(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> Optional[float]:
         """Average Directional Index"""
         try:
             high = df["high"]
             low = df["low"]
-            close = df["close"]
             
             # Calculate +DM and -DM
             up_move = high - high.shift()
@@ -151,12 +175,10 @@ class IndicatorCalculator:
             minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
             
             # Calculate ATR
-            tr1 = high - low
-            tr2 = abs(high - close.shift())
-            tr3 = abs(low - close.shift())
-            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            if tr is None:
+                tr = self._calculate_tr(df)
             
-            atr = tr.rolling(window=self.adx_period).mean()
+            atr = pd.Series(tr).rolling(window=self.adx_period).mean()
             
             # Calculate +DI and -DI
             plus_di = 100 * pd.Series(plus_dm).rolling(window=self.adx_period).mean() / atr
@@ -178,7 +200,7 @@ class IndicatorCalculator:
         except:
             return None
     
-    def _supertrend(self, df: pd.DataFrame) -> tuple[Optional[float], Optional[int]]:
+    def _supertrend(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> tuple[Optional[float], Optional[int]]:
         """
         Supertrend indicator.
         
@@ -191,15 +213,8 @@ class IndicatorCalculator:
             close = df["close"].values
             
             # Calculate ATR
-            # We can use pandas for rolling, but let's be careful about overhead
-            # tr calculation is vectorized
-            tr1 = high - low
-            tr2 = np.abs(high - np.roll(close, 1))
-            tr3 = np.abs(low - np.roll(close, 1))
-            tr2[0] = tr1[0]  # First element of roll is invalid (last element wrapped around)
-            tr3[0] = tr1[0]
-
-            tr = np.maximum(tr1, np.maximum(tr2, tr3))
+            if tr is None:
+                tr = self._calculate_tr(df)
 
             # ATR is moving average of TR
             # Using pandas rolling for convenience/correctness matching previous
