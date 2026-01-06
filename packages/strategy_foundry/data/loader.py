@@ -1,85 +1,124 @@
-"""
-Data Loader
-Manages loading, caching, and preprocessing of market data.
-"""
+"""Data loader with Yahoo Finance fallback and caching"""
 import os
+import time
+from datetime import datetime, timedelta
 import pandas as pd
-from datetime import datetime
+import requests
 import structlog
 from pathlib import Path
-from packages.strategy_foundry.data.sources import DataSources
-from packages.strategy_foundry.adapters.core_market_hours import IST
-from packages.strategy_foundry.adapters.core_data_provider import CoreDataProvider
+from typing import Optional, Dict
 
 logger = structlog.get_logger(__name__)
 
 CACHE_DIR = Path("packages/strategy_foundry/data/cache")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 class DataLoader:
-    def __init__(self):
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    def __init__(self, use_cache: bool = True):
+        self.use_cache = use_cache
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+        }
 
-    def get_data(self, symbol: str, timeframe: str, force_refresh: bool = False) -> pd.DataFrame:
+    def get_data(self, symbol: str, timeframe: str, days: int = 60) -> pd.DataFrame:
         """
-        Get OHLCV data for symbol and timeframe.
-        Tries CoreProvider -> Cache -> Yahoo -> Fallback
+        Fetch OHLCV data.
+        Tries cache first, then Yahoo Finance.
+
+        Args:
+            symbol: Yahoo ticker (e.g., ^NSEI)
+            timeframe: 5m, 15m, 1d
+            days: History length
         """
-        # 1. Try Core Provider (if implemented)
-        core_data = CoreDataProvider.get_ohlcv(symbol, timeframe)
-        if core_data is not None and not core_data.empty:
-            return self._process_data(core_data, timeframe)
+        cache_key = f"{symbol}_{timeframe}_{datetime.now().strftime('%Y%m%d')}"
+        cache_path = CACHE_DIR / f"{cache_key}.csv"
 
-        # 2. Check Cache
-        cache_file = CACHE_DIR / f"{symbol}_{timeframe}.csv"
-        if not force_refresh and cache_file.exists():
-            # Check age - refresh if older than 1 hour for intraday, 12 hours for daily
-            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
-            age = datetime.now() - mtime
-            max_age = 3600 if timeframe in ["5m", "15m"] else 43200
+        # 1. Try Cache
+        if self.use_cache and cache_path.exists():
+            try:
+                df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+                logger.info("Loaded from cache", symbol=symbol, timeframe=timeframe)
+                return df
+            except Exception as e:
+                logger.warning("Cache read failed", error=str(e))
 
-            if age.total_seconds() < max_age:
-                try:
-                    df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-                    return self._process_data(df, timeframe)
-                except Exception as e:
-                    logger.warning(f"Corrupt cache for {symbol}: {e}")
+        # 2. Fetch from Yahoo
+        df = self._fetch_yahoo(symbol, timeframe, days)
 
-        # 3. Download from Yahoo
-        logger.info(f"Fetching fresh data for {symbol} {timeframe}")
-        df = DataSources.get_yahoo_data(symbol, timeframe)
+        # 3. Save Cache
+        if not df.empty and self.use_cache:
+            df.to_csv(cache_path)
 
-        if not df.empty:
-            # Save to cache
-            df.to_csv(cache_file)
-            return self._process_data(df, timeframe)
+        return df
 
-        logger.error(f"Failed to load data for {symbol} {timeframe}")
-        return pd.DataFrame()
+    def _fetch_yahoo(self, symbol: str, timeframe: str, days: int) -> pd.DataFrame:
+        """Lightweight Yahoo Finance fetcher using requests"""
+        interval_map = {
+            "5m": "5m",
+            "15m": "15m",
+            "1D": "1d",
+            "1d": "1d"
+        }
 
-    def _process_data(self, df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-        """Standardize data format and timezone"""
-        if df.empty:
+        yahoo_interval = interval_map.get(timeframe, "1d")
+
+        # Yahoo limits intraday to 60 days
+        if timeframe in ["5m", "15m"] and days > 59:
+            days = 59
+
+        start_dt = datetime.now() - timedelta(days=days)
+        start_ts = int(start_dt.timestamp())
+        end_ts = int(datetime.now().timestamp())
+
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        params = {
+            "symbol": symbol,
+            "period1": start_ts,
+            "period2": end_ts,
+            "interval": yahoo_interval,
+            "includePrePost": "false"
+        }
+
+        try:
+            # Need a session to handle cookies sometimes, but simple GET often works for v8 chart
+            # If 401/403, might need crumb ceremony. For now, try simple.
+            response = requests.get(url, params=params, headers=self.headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if "chart" not in data or "result" not in data["chart"] or not data["chart"]["result"]:
+                logger.error("No data found in Yahoo response", symbol=symbol)
+                return pd.DataFrame()
+
+            result = data["chart"]["result"][0]
+            if "timestamp" not in result or "indicators" not in result:
+                return pd.DataFrame()
+
+            timestamps = result["timestamp"]
+            quote = result["indicators"]["quote"][0]
+
+            df = pd.DataFrame({
+                "open": quote["open"],
+                "high": quote["high"],
+                "low": quote["low"],
+                "close": quote["close"],
+                "volume": quote["volume"]
+            }, index=pd.to_datetime(timestamps, unit="s", utc=True))
+
+            # Convert to IST
+            df.index = df.index.tz_convert("Asia/Kolkata")
+
+            # Drop NaNs
+            df.dropna(inplace=True)
+
+            # Standardize columns
+            df.index.name = "date"
+
             return df
 
-        # Ensure UTC then convert to IST
-        if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
-
-        df.index = df.index.tz_convert(IST)
-
-        # Filter for market hours (09:15 - 15:30)
-        # Assuming index is DatetimeIndex
-
-        if timeframe in ["5m", "15m"]:
-            # Simple filter: keeping only 09:15 to 15:30 range
-            # 09:15 is the start. 15:25 is close.
-            # We'll be permissive and keep 09:15 to 15:30
-            # Time components
-            mask = (
-                (df.index.time >= datetime.strptime("09:15", "%H:%M").time()) &
-                (df.index.time <= datetime.strptime("15:30", "%H:%M").time())
-            )
-            df = df[mask]
-
-        return df.sort_index()
+        except Exception as e:
+            logger.error("Yahoo fetch failed", symbol=symbol, error=str(e))
+            # Fallback for testing/offline: random walk or error?
+            # Return empty for now to fail gracefully
+            return pd.DataFrame()
 

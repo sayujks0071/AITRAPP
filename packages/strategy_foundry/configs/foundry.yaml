@@ -1,29 +1,28 @@
-# Packages/Strategy Foundry Configuration
+timeframes:
+  intraday: ["5m", "15m"]
+  sanity: "1D"
 
-# Default settings for the foundry
-defaults:
-  timeframes:
-    - 5m
-    - 15m
+generation:
+  candidates: 80
+  fast_mode_candidates: 15
+  max_tunables: 10
+
+backtest:
   folds: 4
   fast_mode_folds: 2
-  max_candidates: 80
-  fast_mode_candidates: 15
-  start_date: "2023-01-01"  # Or dynamic lookup
-
-# Rejection thresholds
-thresholds:
   min_trades_5m: 80
   min_trades_15m: 40
-  max_drawdown: 0.30
+  min_trades_fast: 10
+  max_drawdown_pct: 30
   min_profit_factor: 1.1
-  min_positive_folds: 3  # out of 4
 
-# Ranking weights
-weights:
-  sharpe: 0.25
-  calmar: 0.25
-  return: 0.20
-  stability: 0.15
-  low_turnover: 0.10
-  sanity: 0.05
+costs:
+  all_in_cost_bps_per_side: 3.0
+  slippage_bps_per_side: 2.0
+  spread_guard_bps: 1.0
+
+market:
+  timezone: "Asia/Kolkata"
+  open: "09:15"
+  close: "15:30"
+  intraday_flatten: "15:25"

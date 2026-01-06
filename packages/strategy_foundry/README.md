@@ -1,44 +1,42 @@
 # Aggressive Intraday Strategy Foundry
 
-Automated research lab that generates, backtests, and selects intraday trading strategies for Indian markets.
+Automated lab for generating, testing, and selecting intraday trading strategies (NIFTY/SENSEX).
 
 ## Overview
 
-The foundry runs hourly (during market hours) to:
-1.  **Generate** random strategies based on a grammar of valid trading components.
-2.  **Backtest** these strategies on 5m and 15m timeframes using Walk-Forward Optimization.
-3.  **Rank** them based on risk-adjusted returns, stability, and robustness.
-4.  **Promote** a "Champion" strategy if it beats the incumbent.
-5.  **Publish** a live signal artifact (`live_signal.json`) if the champion signals an entry.
+- **Timeframes**: 5m and 15m.
+- **Generation**: Grammar-based (ORB, Breakout, Mean Reversion).
+- **Validation**: Walk-Forward Analysis (OOS) + Daily Sanity Check.
+- **Output**: Live signal JSON artifact (no automated execution).
 
-## Architecture
+## Directory Structure
 
--   `adapters/`: Bridges to Core system (Indicators, Market Hours).
--   `data/`: Manages data loading and caching (Yahoo Finance).
--   `factory/`: Strategy grammar and random generation.
--   `backtest/`: Vectorized + Event-driven hybrid engine.
--   `selection/`: Ranking and promotion logic.
--   `live/`: Signal publication.
+- `adapters/`: Connectors to core system (Market Hours, Indicators, Costs).
+- `backtest/`: Intraday engine, metrics, walk-forward analysis.
+- `configs/`: Instrument maps and foundry settings.
+- `data/`: Yahoo downloader and caching.
+- `factory/`: Strategy grammar and generator.
+- `live/`: Signal publishing logic.
+- `results/`: Run artifacts, leaderboards, champions.
+- `selection/`: Ranking and promotion logic.
 
-## Usage
-
-### Run Manually
+## Running Locally
 
 ```bash
-# Full mode
-python packages/strategy_foundry/run_hourly.py
+# Full Run
+python -m packages.strategy_foundry.run_hourly
 
-# Fast mode (fewer candidates, fewer folds)
-FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+# Fast Mode (fewer candidates, fewer folds)
+FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
 ```
 
-### Outputs
+## Live Signals
 
--   **Run Artifacts**: `results/runs/<timestamp>/` (candidates, metrics, leaderboard).
--   **Live Signal**: `results/live_signal.json`.
--   **Champion**: `results/champions/current.json`.
+Signals are published to `results/live_signal.json` only when:
+1. Market is Open.
+2. A valid Champion exists.
+3. Gates are passed.
 
-## Configuration
+## CI/CD
 
--   `configs/foundry.yaml`: Foundry settings (thresholds, weights).
--   `configs/instrument_map.yaml`: Symbol mapping (Research -> Paper -> Live).
+Runs hourly via GitHub Actions.
