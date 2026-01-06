@@ -89,7 +89,9 @@ class BacktestEngine:
         current_date = start_date
         
         # Get strikes if not provided
+        fixed_strikes = strikes is not None
         if strikes is None:
+            # Initial strikes for logging
             strikes = self.data_loader.get_atm_strikes(symbol, start_date, num_strikes=5)
         
         logger.info(f"Testing {len(strikes)} strikes: {strikes}")
@@ -101,8 +103,18 @@ class BacktestEngine:
                 current_date += timedelta(days=1)
                 continue
             
+            # Update strikes if not fixed
+            current_strikes = strikes
+            if not fixed_strikes:
+                current_strikes = self.data_loader.get_atm_strikes(symbol, current_date, num_strikes=5)
+                # If no strikes found for today (e.g. holiday or missing data), skip or use previous?
+                if not current_strikes:
+                    logger.debug(f"No strikes found for {current_date}, skipping")
+                    current_date += timedelta(days=1)
+                    continue
+
             # Process day
-            self._process_day(strategies, symbol, current_date, strikes)
+            self._process_day(strategies, symbol, current_date, current_strikes)
             
             # Move to next day
             current_date += timedelta(days=1)
@@ -137,6 +149,7 @@ class BacktestEngine:
             return
         
         if chain.empty:
+            # logger.debug(f"Chain empty for {date}")
             return
         
         # Get underlying value
@@ -245,7 +258,8 @@ class BacktestEngine:
             bars_1s=bars[-60:] if len(bars) >= 60 else bars,  # Last 60 for 1s
             net_liquid=self.current_capital,
             available_margin=self.current_capital * 0.8,
-            open_positions=len([p for p in self.positions if p.is_open])
+            open_positions=len([p for p in self.positions if p.is_open]),
+            underlying_price=underlying_value
         )
         
         # Generate signals
@@ -333,7 +347,18 @@ class BacktestEngine:
         for position in self.positions:
             if position.is_open:
                 # Get current tick/bar (simplified)
-                tick = None  # Would need to load from data
+                # Create a mock tick from current position price
+                from packages.core.models import Tick
+                tick = Tick(
+                    token=position.instrument.token,
+                    timestamp=date,
+                    last_price=position.current_price,
+                    volume=0,
+                    open=position.current_price,
+                    high=position.current_price,
+                    low=position.current_price,
+                    close=position.current_price
+                )
                 bars = []
                 market_data[position.instrument.token] = (tick, bars)
         

@@ -26,6 +26,7 @@ class StrategyContext:
     # Market regime
     iv_percentile: Optional[float] = None
     oi_change_pct: Optional[float] = None
+    underlying_price: Optional[float] = None
     
     def __post_init__(self):
         if self.bars_1s is None:
