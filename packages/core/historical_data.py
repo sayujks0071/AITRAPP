@@ -253,7 +253,8 @@ class HistoricalDataLoader:
             volumes = np.zeros(len(df), dtype=int)
             
         if 'Open Int' in df.columns:
-            ois = df['Open Int'].where(pd.notna(df['Open Int']), None).to_numpy()
+            # Replace NaN with None safely
+            ois = df['Open Int'].astype(object).where(pd.notna(df['Open Int']), None).to_numpy()
         else:
             ois = np.full(len(df), None)
 
@@ -269,7 +270,7 @@ class HistoricalDataLoader:
                 low=float(l),
                 close=float(c),
                 volume=int(v),
-                oi=int(oi) if oi is not None else None
+                oi=int(oi) if oi is not None and not pd.isna(oi) else None
             )
             for ts, o, h, l, c, v, oi in zip(dates, opens, highs, lows, closes, volumes, ois)
         ]

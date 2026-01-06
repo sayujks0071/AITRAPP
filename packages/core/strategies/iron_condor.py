@@ -61,7 +61,7 @@ class IronCondorStrategy(Strategy):
             return []
         
         # Need underlying value for strike selection
-        if not context.latest_tick:
+        if context.underlying_price is None and context.latest_tick is None:
             return []
         
         # For Iron Condor, we need to construct a 4-leg spread
@@ -69,7 +69,9 @@ class IronCondorStrategy(Strategy):
         # that represents the entire spread
         
         # Get ATM and calculate strikes
-        underlying_value = context.latest_tick.close
+        # Use provided underlying price if available (from backtest/live chain), else fall back to instrument price
+        # (though falling back to instrument price for options strategy is usually wrong unless trading the underlying)
+        underlying_value = context.underlying_price if context.underlying_price else context.latest_tick.close
         
         # Calculate strikes
         call_short_strike = round(underlying_value + self.call_short_strike_offset, 50)
@@ -176,7 +178,10 @@ class IronCondorStrategy(Strategy):
             return False
         
         # Need underlying value
-        if not context.latest_tick or context.latest_tick.close <= 0:
+        has_underlying = context.underlying_price is not None and context.underlying_price > 0
+        has_tick = context.latest_tick is not None and context.latest_tick.close > 0
+
+        if not has_underlying and not has_tick:
             return False
         
         # Check IV percentile if available
