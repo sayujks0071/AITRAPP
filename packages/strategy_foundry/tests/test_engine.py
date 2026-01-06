@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import pytest
 from packages.strategy_foundry.backtest.engine import run_backtest
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
