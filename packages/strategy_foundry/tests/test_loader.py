@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import pytest
 from packages.strategy_foundry.adapters.core_indicators import compute_all_indicators
 
 def test_indicators_vectorized():
