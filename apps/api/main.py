@@ -470,9 +470,7 @@ def compliance_status():
     # broker session created_at iso if you persist it, else env fallback:
     oauth_created_iso = os.getenv("KITE_TOKEN_CREATED_AT_ISO")
     # active client IDs: if you have multiple mapped, load from your config/session
-    active_clients = [app_state.kite_user_id] if hasattr(app_state, "kite_user_id") and app_state.kite_user_id else []
-    if settings.kite_user_id:
-        active_clients = list(set(active_clients + [settings.kite_user_id]))
+    active_clients = [settings.kite_user_id] if settings.kite_user_id else []
     
     ip_ok, ip_msg, curr_ip = compliance.check_static_ip(expected_ip)
     oauth_ok, oauth_msg = compliance.check_oauth_fresh(oauth_created_iso, 24)
