@@ -23,7 +23,10 @@ def calculate_metrics(returns: pd.Series, trades: pd.DataFrame) -> Dict[str, flo
     # Sortino
     downside_returns = returns[returns < 0]
     downside_vol = downside_returns.std() * np.sqrt(ann_factor)
-    sortino = (cagr / downside_vol) if downside_vol > 0 else 0
+    if len(downside_returns) > 1 and not np.isnan(downside_vol) and downside_vol > 0:
+        sortino = cagr / downside_vol
+    else:
+        sortino = 0
 
     # Max Drawdown
     cum_ret = (1 + returns).cumprod()
