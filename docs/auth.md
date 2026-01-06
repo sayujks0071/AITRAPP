@@ -15,7 +15,7 @@ Due to Zerodha's security requirements, full automation is not possible; a manua
     *   If invalid/expired: The script initiates the manual login flow.
 3.  **Manual Login**:
     *   The script prints the **Login URL**.
-    *   It starts a local web server on port `8080`.
+    *   It starts a local web server (default port `8080`).
     *   The user visits the Login URL and authenticates with Zerodha.
 4.  **Token Exchange**:
     *   Zerodha redirects to `http://localhost:8080/callback?request_token=...`.
@@ -35,6 +35,15 @@ You can run the bootstrap script manually at any time:
 python scripts/kite_auth_bootstrap.py
 ```
 
+**Options:**
+*   `--check-only`: Only check session validity and exit. Returns exit code 0 if valid, 1 if invalid (and prints Login URL). Useful for CI/CD checks.
+*   `--port PORT`: Specify the local port to listen on (default: 8080).
+
+Example:
+```bash
+python scripts/kite_auth_bootstrap.py --port 9090
+```
+
 ### Scheduled (Cron)
 
 For a VPS or always-on server, add this to your crontab:
@@ -47,11 +56,11 @@ For a VPS or always-on server, add this to your crontab:
 ### GitHub Actions
 
 In CI/CD environments (GitHub Actions), the script cannot perform the interactive login.
-The workflow `daily_auth.yml` checks the token status. If invalid, it will notify the team (e.g., via Issue or Alert) to perform the manual login on the deployment server.
+The workflow `daily_auth.yml` checks the token status using `--check-only`. If invalid, it will create a GitHub Issue to notify the team to perform the manual login on the deployment server.
 
 ## Security
 
 *   **No Credential Storage**: Passwords and TOTP are never stored or automated.
 *   **Token Safety**: Access tokens are stored in environment variables/files, not in code.
 *   **Logs**: Secrets are never printed to logs.
-*   **Safety Rails**: `APP_MODE` defaults to `PAPER` to prevent accidental live trading during auth.
+*   **Safety Rails**: `TRADING_MODE` defaults to `PAPER` to prevent accidental live trading during auth.

@@ -6,6 +6,7 @@ import os
 import logging
 import threading
 import time
+import argparse
 
 # Ensure we can import from src
 sys.path.append(os.getcwd())
@@ -19,7 +20,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("KiteAuthBootstrap")
 
-PORT = 8080
 CALLBACK_PATH = "/callback"
 
 class CallbackHandler(http.server.SimpleHTTPRequestHandler):
@@ -46,9 +46,14 @@ class CallbackHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
 
 def main():
+    parser = argparse.ArgumentParser(description="Kite Daily Auth Assistant")
+    parser.add_argument("--check-only", action="store_true", help="Only check session validity and exit")
+    parser.add_argument("--port", type=int, default=8080, help="Port to listen for callback (default: 8080)")
+    args = parser.parse_args()
+
     logger.info("Starting Kite Daily Auth Assistant...")
 
-    # 4) Add safety rails: Ensure TRADING_MODE defaults to paper
+    # Safety rails: Ensure TRADING_MODE defaults to paper
     trading_mode = os.getenv("TRADING_MODE", "PAPER").upper()
     if trading_mode == "LIVE":
         logger.warning("⚠️  WARNING: TRADING_MODE is set to LIVE. Be careful!")
@@ -67,23 +72,29 @@ def main():
         logger.info("✅ Session is valid. No action required.")
         sys.exit(0)
 
-    logger.info("❌ Session invalid or expired. Starting manual login flow.")
-
+    # Session is invalid
     try:
         login_url = auth.get_login_url()
     except Exception as e:
         logger.error(f"Failed to generate login URL: {e}")
         sys.exit(1)
 
+    # Print the URL clearly
     logger.info("=" * 60)
-    logger.info(f"👉 Please login here: {login_url}")
+    logger.info(f"Auth required: open login URL: {login_url}")
     logger.info("=" * 60)
+
+    # In check-only mode (e.g. CI), we just fail here so the scheduler knows auth is needed
+    if args.check_only:
+        logger.info("Check-only mode: Exiting with status 1 due to invalid session.")
+        sys.exit(1)
 
     # Start server to listen for callback
-    server = http.server.HTTPServer(('localhost', PORT), CallbackHandler)
+    port = args.port
+    server = http.server.HTTPServer(('localhost', port), CallbackHandler)
     server.request_token = None
 
-    logger.info(f"Listening for callback on http://localhost:{PORT}{CALLBACK_PATH}")
+    logger.info(f"Listening for callback on http://localhost:{port}{CALLBACK_PATH}")
     logger.info("Waiting for redirect...")
 
     try:
@@ -101,7 +112,7 @@ def main():
         auth.persist_access_token(access_token)
 
         logger.info("✅ Token stored successfully.")
-        logger.info("🔄 Please restart your trading application if it is running to pick up the new token.")
+        logger.info("🔄 Runner restarted (or please restart your trading application).")
 
     except KeyboardInterrupt:
         logger.info("\nBootstrap interrupted by user.")

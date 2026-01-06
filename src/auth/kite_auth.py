@@ -1,3 +1,12 @@
+"""
+Kite Authentication Module
+
+This module handles Zerodha Kite Connect authentication, including:
+- Session validity checking
+- Login URL generation
+- Token exchange
+- Access token persistence to .env
+"""
 import os
 import logging
 from typing import Optional
@@ -7,6 +16,9 @@ import dotenv
 logger = logging.getLogger(__name__)
 
 class KiteAuth:
+    """
+    Handles authentication logic for Zerodha Kite Connect.
+    """
     def __init__(self):
         # Support both standard naming and the specific env var from instructions
         self.api_key = os.getenv("KITE_API_KEY") or os.getenv("kiteconnect_api_key")
@@ -16,17 +28,15 @@ class KiteAuth:
         self.access_token = os.getenv("KITE_ACCESS_TOKEN")
 
         if not self.api_key or not self.api_secret:
-            # We don't raise error immediately to allow instantiation for other purposes if needed,
-            # but methods requiring them will fail.
-            # Actually, for this specific class, we need them.
-            # But let's check if we are in a testing context where we might mock things.
-            # For now, we log a warning.
-            logger.warning("KITE_API_KEY or KITE_API_SECRET not found in environment.")
+            logger.warning("KITE_API_KEY or KITE_API_SECRET not found in environment. Auth functions will fail.")
 
         self.kite = KiteConnect(api_key=self.api_key, access_token=self.access_token)
 
     def is_session_valid(self) -> bool:
-        """Checks if the current session (access_token) is valid."""
+        """
+        Checks if the current session (access_token) is valid by making a lightweight API call.
+        Returns True if valid, False otherwise.
+        """
         if not self.access_token:
             return False
 
@@ -47,7 +57,10 @@ class KiteAuth:
         return str(self.kite.login_url())
 
     def exchange_request_token(self, request_token: str) -> str:
-        """Exchanges request_token for access_token."""
+        """
+        Exchanges request_token for access_token using the API Secret.
+        Updates the internal state and returns the access_token.
+        """
         if not self.api_secret:
             raise ValueError("API Secret is missing")
 
@@ -62,7 +75,9 @@ class KiteAuth:
             raise
 
     def persist_access_token(self, access_token: str):
-        """Persists the access token to .env file."""
+        """
+        Persists the access token to the .env file and updates current environment variables.
+        """
         # Find .env file
         env_path = dotenv.find_dotenv()
         if not env_path:
@@ -74,10 +89,6 @@ class KiteAuth:
         # Use dotenv.set_key to update the file
         # This will create the file if it doesn't exist, and update or add the key
         dotenv.set_key(env_path, "KITE_ACCESS_TOKEN", access_token)
-
-        # We assume USER_ID might also be useful but the prompt specifically asked for access_token persistence.
-        # Ideally generate_session returns user_id too.
-        # But we'll stick to what was requested for now.
 
         # Update current process environment
         os.environ["KITE_ACCESS_TOKEN"] = access_token

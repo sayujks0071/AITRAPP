@@ -4,6 +4,7 @@ import os
 from src.auth.kite_auth import KiteAuth
 
 class TestKiteAuth(unittest.TestCase):
+    """Unit tests for the KiteAuth module."""
 
     def setUp(self):
         # Setup environment variables for testing
@@ -19,6 +20,7 @@ class TestKiteAuth(unittest.TestCase):
 
     @patch("src.auth.kite_auth.KiteConnect")
     def test_init(self, mock_kite_connect):
+        """Test initialization of KiteAuth."""
         auth = KiteAuth()
         self.assertEqual(auth.api_key, "test_api_key")
         self.assertEqual(auth.api_secret, "test_api_secret")
@@ -27,6 +29,7 @@ class TestKiteAuth(unittest.TestCase):
 
     @patch("src.auth.kite_auth.KiteConnect")
     def test_is_session_valid_success(self, mock_kite_connect):
+        """Test session validation returns True on success."""
         mock_instance = mock_kite_connect.return_value
         mock_instance.profile.return_value = {"user_id": "123"}
 
@@ -35,6 +38,7 @@ class TestKiteAuth(unittest.TestCase):
 
     @patch("src.auth.kite_auth.KiteConnect")
     def test_is_session_valid_failure(self, mock_kite_connect):
+        """Test session validation returns False on exception."""
         mock_instance = mock_kite_connect.return_value
         mock_instance.profile.side_effect = Exception("Token invalid")
 
@@ -43,6 +47,7 @@ class TestKiteAuth(unittest.TestCase):
 
     @patch("src.auth.kite_auth.KiteConnect")
     def test_get_login_url(self, mock_kite_connect):
+        """Test login URL generation."""
         mock_instance = mock_kite_connect.return_value
         mock_instance.login_url.return_value = "https://kite.trade/login"
 
@@ -51,6 +56,7 @@ class TestKiteAuth(unittest.TestCase):
 
     @patch("src.auth.kite_auth.KiteConnect")
     def test_exchange_request_token(self, mock_kite_connect):
+        """Test token exchange logic."""
         mock_instance = mock_kite_connect.return_value
         mock_instance.generate_session.return_value = {
             "access_token": "new_access_token",
@@ -67,6 +73,7 @@ class TestKiteAuth(unittest.TestCase):
 
     @patch("src.auth.kite_auth.dotenv")
     def test_persist_access_token(self, mock_dotenv):
+        """Test access token persistence to .env."""
         mock_dotenv.find_dotenv.return_value = ".env"
 
         auth = KiteAuth() # Uses setup env
