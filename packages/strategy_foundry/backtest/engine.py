@@ -1,192 +1,214 @@
-"""
-Backtest Engine
-Executes strategies on historical data.
-Vectorized signal generation + Event-driven execution loop.
-"""
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple
-from packages.strategy_foundry.factory.grammar import StrategyConfig
-from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicators
-from packages.strategy_foundry.adapters.core_costs import DEFAULT_COSTS
+from typing import Dict, Any, List
 
-class BacktestEngine:
-    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0):
-        self.data = data.copy()
-        self.initial_capital = initial_capital
-        # Precompute common indicators if not already there
-        self.data = VectorizedIndicators.add_all(self.data)
+def run_backtest(df: pd.DataFrame, positions: pd.Series, costs: Dict[str, float]) -> Dict[str, Any]:
+    """
+    Backtest engine.
+    df: OHLCV data
+    positions: 1 (long), 0 (flat). Series index matches df.
+    costs: {'slippage_bps': 5, 'all_in_cost_bps': 3}
 
-    def run(self, strategy: StrategyConfig) -> Tuple[pd.DataFrame, pd.Series]:
-        """
-        Run the strategy.
-        Returns: (trades_df, equity_curve_series)
-        """
-        df = self.data
+    Returns:
+       metrics: Dict
+       equity_curve: pd.Series
+       trades: pd.DataFrame
+    """
+    # Align
+    # Logic: If position[i] != position[i-1], we trade at Open[i+1].
+    # So we execute at Next Open.
 
-        # 1. Generate Entry/Exit Signals (Vectorized)
-        entries = self._generate_entries(df, strategy)
+    # Target positions
+    target_pos = positions.shift(1).fillna(0) # Logic: Signal at close i -> Trade at i+1
 
-        # 2. Execute Loop (Event-driven for correct risk/management)
-        trades = []
-        equity = [self.initial_capital]
-        current_capital = self.initial_capital
-        position = 0 # 0, 1 (Long), -1 (Short)
-        entry_price = 0.0
-        entry_time = None
-        stop_loss = 0.0
-        take_profit = 0.0
+    # Execution price is Open
+    exec_price = df['open']
 
-        equity_curve = pd.Series(index=df.index, dtype=float)
-        equity_curve.iloc[0] = self.initial_capital
+    # Calculate returns
+    # Strategy Return = Position[i-1] * (Close[i] - Close[i-1]) / Close[i-1]
+    # BUT we need to account for execution at Open.
+    # More precise:
+    # If holding from i-1 to i: Return is (Open[i] - Open[i-1]) / Open[i-1] ???
+    # No, typically daily backtest uses Close-to-Close or Open-to-Open.
+    # Standard "Next Open" method:
+    # We enter at Open[i]. We hold until Open[j].
+    # Daily PnL:
+    # Day i (Entry): (Close[i] - Open[i]) / Open[i]
+    # Day k (Holding): (Close[k] - Close[k-1]) / Close[k-1]
+    # Day j (Exit): (Open[j] - Close[j-1]) / Close[j-1]
 
-        for i in range(1, len(df)):
-            curr_time = df.index[i]
-            curr_open = df['open'].iloc[i]
-            curr_high = df['high'].iloc[i]
-            curr_low = df['low'].iloc[i]
-            curr_close = df['close'].iloc[i]
+    # Let's use a simpler vectorized approach approximating Close-to-Close returns,
+    # adjusted for trade costs at transitions.
 
-            # prev_bar for signals (avoid lookahead)
-            prev_close = df['close'].iloc[i-1]
+    # Market Returns (Close to Close)
+    mkt_ret = df['close'].pct_change().fillna(0)
 
-            # Check Exits if in position
-            if position != 0:
-                exit_price = None
-                reason = ""
+    # Strategy Returns (Gross)
+    # If we hold at end of i-1, we get return of i.
+    # positions[i] indicates if we want to hold AFTER close of i (for next day).
+    # Wait, my generate_positions logic was: "positions[i] = 1" means "we are in position at step i".
+    # And the loop logic checked limits at step i.
+    # So positions[i] represents state at END of day i.
 
-                # Check Stop Loss / Take Profit (intra-bar assumption: Worst case)
-                # If Long
-                if position > 0:
-                    if curr_low <= stop_loss:
-                        exit_price = min(curr_open, stop_loss) # Gap handling: exit at open if below SL
-                        reason = "SL"
-                    elif curr_high >= take_profit:
-                        exit_price = max(curr_open, take_profit)
-                        reason = "TP"
+    # So if positions[i-1] == 1, we are exposed to Day i price action.
 
-                # Check End of Day Exit (15:25) - Higher Priority than Time Exit
-                # Simplification: if time is >= 15:25
-                if exit_price is None:
-                    # In test environment, the timezone might not be properly set on curr_time index,
-                    # but usually it is. We check hour/minute.
-                    # Note: We exit at Open of the bar that starts at 15:25, which is 15:25.
-                    if (curr_time.hour == 15 and curr_time.minute >= 25) or (curr_time.hour > 15):
-                        exit_price = curr_open # Exit on next bar open? Or close of this bar?
-                        # If this bar is 15:25, we exit at open of 15:25? No, usually exit before close.
-                        # If we are strictly backtesting "Open" execution, then 15:25 bar open is 15:25.
-                        exit_price = curr_close # Force close at end of this bar
-                        reason = "EOD"
+    # Costs
+    # Trades occur when position changes
+    # change[i] = positions[i] - positions[i-1]
+    # If change != 0, we pay cost.
+    # Cost is applied on turnover.
+    # Cost bps = slippage + fees
+    total_cost_bps = costs.get('slippage_bps', 5) + costs.get('all_in_cost_bps', 3)
+    cost_pct = total_cost_bps / 10000.0
 
-                # Check Time Exit
-                if exit_price is None and strategy.exit_block == "exit_time":
-                    max_bars = strategy.exit_params['max_bars']
-                    bars_held = i - df.index.get_loc(entry_time)
-                    if bars_held >= max_bars:
-                        exit_price = curr_open
-                        reason = "Time"
+    # Turnover is abs(change)
+    # But wait, logic above says "Signal at i -> Trade at Open i+1".
+    # So if positions[i] != positions[i-1], we trade at Open[i+1].
+    # This means the cost occurs at i+1.
+    # However, the return calculation `positions.shift(1) * mkt_ret` uses Close-to-Close.
+    # This implies we are fully invested from Close[i-1] to Close[i].
+    # This contradicts "Trade at Open".
 
-                # Check RSI exit if applicable
-                if exit_price is None and strategy.entry_block == "entry_mean_rev_rsi":
-                    exit_rsi_thresh = strategy.entry_params['exit_rsi']
-                    prev_rsi = df['rsi_14'].iloc[i-1]
-                    if position > 0 and prev_rsi > exit_rsi_thresh:
-                        exit_price = curr_open
-                        reason = "RSI_Exit"
+    # Let's refine for "Trade at Open".
+    # If positions[i-1] != positions[i-2], we traded at Open[i].
+    # So Day i return is split:
+    #   Part 1: Open[i] to Close[i] (if positions[i-1] == 1)
+    #   But what about Close[i-1] to Open[i]? That gap belongs to previous state?
+    #   Usually:
+    #   If pos[i-2]=0, pos[i-1]=1 -> Enter at Open[i].
+    #   Return on Day i: (Close[i] - Open[i]) / Open[i].
+    #   If pos[i-2]=1, pos[i-1]=1 -> Hold.
+    #   Return on Day i: (Close[i] - Close[i-1]) / Close[i-1].
 
-                # Execute Exit
-                if exit_price is not None:
-                    pnl = (exit_price - entry_price) * position * (current_capital / entry_price) # Simplistic sizing
+    # This "Trade at Open" logic is hard to fully vectorise perfectly with simple pct_change.
+    # But let's try.
 
-                    # Apply costs
-                    notional = current_capital
-                    costs = (notional * (DEFAULT_COSTS.slippage_bps + DEFAULT_COSTS.commission_bps) / 10000) * 2 # Entry + Exit
+    # Open Returns: (Close - Open) / Open
+    # Gap Returns: (Open - PrevClose) / PrevClose
 
-                    net_pnl = pnl - costs
-                    current_capital += net_pnl
-                    position = 0
+    op_ret = (df['close'] - df['open']) / df['open']
+    gap_ret = (df['open'] - df['close'].shift(1)) / df['close'].shift(1)
 
-                    trades.append({
-                        "entry_time": entry_time,
-                        "exit_time": curr_time,
-                        "entry_price": entry_price,
-                        "exit_price": exit_price,
-                        "pnl": net_pnl,
-                        "reason": reason
-                    })
+    # State at start of day i comes from decision at i-1
+    # pos_intended = positions.shift(1)
 
-            # Check Entries if flat
-            if position == 0:
-                # Intraday constraint: Don't enter after 15:00
-                if not (curr_time.hour == 15 and curr_time.minute >= 0):
-                     if entries.iloc[i-1]: # Signal from previous close
-                        position = 1 # Long only for now
-                        entry_price = curr_open
-                        entry_time = curr_time
+    # State at PREVIOUS day (i-1) comes from decision at i-2
+    # prev_pos = positions.shift(2)
 
-                        # Set SL/TP
-                        atr_val = df['atr_14'].iloc[i-1]
+    # Actual Return on Day i:
+    # If prev_pos == pos_intended:
+    #    We held through gap.
+    #    Ret = GapRet + (1+GapRet)*OpRet = (Close[i]/Close[i-1]) - 1. (Standard Close-Close)
+    # If prev_pos != pos_intended:
+    #    We traded at Open.
+    #    We did NOT participate in Gap (assuming we were flat, or gap was for prev pos).
+    #    Wait, if we were Long and switch to Flat:
+    #      We sell at Open. We get Gap return. Then flat for OpRet.
+    #    If we were Flat and switch to Long:
+    #      We buy at Open. We miss Gap return. We get OpRet.
 
-                        # Calculate Risk Params
-                        if strategy.risk_block == "risk_atr":
-                            sl_dist = atr_val * strategy.risk_params['multiplier']
-                            stop_loss = entry_price - sl_dist
+    pos_prev = positions.shift(2).fillna(0) # State entering the gap
+    pos_curr = positions.shift(1).fillna(0) # State desired for the day
 
-                        if strategy.exit_block == "exit_rr":
-                            rr = strategy.exit_params['risk_reward']
-                            take_profit = entry_price + (entry_price - stop_loss) * rr
-                        else:
-                            take_profit = float('inf')
+    # Returns from Gap
+    r_gap = pos_prev * gap_ret
 
-            equity_curve.iloc[i] = current_capital
+    # Returns from Session
+    r_session = pos_curr * op_ret
 
-        return pd.DataFrame(trades), equity_curve
+    # Total Day Return approx = r_gap + r_session
+    # (ignoring compounding within the day for simplicity, or use (1+r)*(1+r)-1)
+    # Correct compounding: (1 + r_gap) * (1 + r_session) - 1
+    # But wait, if pos changed, r_gap applies to OLD pos, r_session applies to NEW pos.
 
-    def _generate_entries(self, df: pd.DataFrame, strategy: StrategyConfig) -> pd.Series:
-        """Vectorized entry signal generation"""
-        signals = pd.Series(False, index=df.index)
+    day_ret = (1 + r_gap) * (1 + r_session) - 1
 
-        if strategy.entry_block == "entry_trend_ema_cross":
-            fast = df.ewm(span=strategy.entry_params['fast_period'], adjust=False).mean()
-            slow = df.ewm(span=strategy.entry_params['slow_period'], adjust=False).mean()
-            # Crossover logic: Fast crosses above Slow
-            # Fast > Slow AND PrevFast <= PrevSlow
-            # Actually, we just need the condition. The engine loop checks signal[i-1] so "True" means "Buy Next Open"
+    # Costs
+    # We trade if pos_curr != pos_prev
+    turnover = (pos_curr - pos_prev).abs()
+    costs_series = turnover * cost_pct
 
-            cond = (fast['close'] > slow['close']) & (fast['close'].shift(1) <= slow['close'].shift(1))
+    net_ret = day_ret - costs_series
 
-            if strategy.entry_params.get('adx_filter'):
-                cond = cond & (df['adx_14'] > strategy.entry_params['adx_threshold'])
+    # Equity Curve
+    equity_curve = (1 + net_ret).cumprod()
 
-            signals = cond
+    # Drawdown
+    peak = equity_curve.cummax()
+    drawdown = (equity_curve - peak) / peak
 
-        elif strategy.entry_block == "entry_breakout_donchian":
-            period = strategy.entry_params['period']
-            # We need to recompute donchian with dynamic period if not standard 20
-            # Optimization: don't recompute if period is 20
-            if period == 20 and 'donchian_upper' in df.columns:
-                upper = df['donchian_upper']
-            else:
-                 upper = df['high'].rolling(window=period).max()
+    # Trades list
+    trades = []
+    # Identify trade points
+    trades_mask = turnover > 0
+    trade_indices = df.index[trades_mask]
 
-            cond = df['close'] > upper.shift(1) # Breakout of previous high
+    # This is a quick approximation. For detailed trade list (entry price, exit price),
+    # we need to iterate.
+    # Since we need "trades table", let's reconstruct it.
 
-            if strategy.entry_params['filter_ma']:
-                 ma_period = strategy.entry_params['ma_period']
-                 sma = df['close'].rolling(window=ma_period).mean()
-                 cond = cond & (df['close'] > sma)
+    in_trade = False
+    entry_date = None
+    entry_price = 0.0
 
-            signals = cond
+    # Scan for trades
+    # Using the pos_curr series which represents holding status during the day
+    p = pos_curr.values
+    dates = df.index
+    opens = df['open'].values
+    closes = df['close'].values
 
-        elif strategy.entry_block == "entry_mean_rev_rsi":
-            rsi = df['rsi_14']
-            # If dynamic RSI period needed, recompute. Assuming 14 for speed or implementing dynamic later.
-            # Using standard 14 for now as strict optimization.
-            # To support dynamic period:
-            if strategy.entry_params['rsi_period'] != 14:
-                 rsi = VectorizedIndicators.rsi(df['close'], strategy.entry_params['rsi_period'])
+    # Reuse loop or just use the changes
+    # transitions: 0->1 (Buy at Open), 1->0 (Sell at Open)
 
-            cond = rsi < strategy.entry_params['oversold']
-            signals = cond
+    for i in range(len(p)):
+        if i == 0: continue
 
-        return signals
+        # Buy
+        if p[i] == 1 and p[i-1] == 0:
+            entry_date = dates[i]
+            entry_price = opens[i] # Trade at Open
+            in_trade = True
+
+        # Sell
+        elif p[i] == 0 and p[i-1] == 1:
+            if in_trade:
+                exit_date = dates[i]
+                exit_price = opens[i] # Trade at Open
+                pnl = (exit_price - entry_price) / entry_price
+                pnl -= (cost_pct * 2) # Entry + Exit cost
+
+                trades.append({
+                    "entry_date": entry_date,
+                    "exit_date": exit_date,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "return": pnl, # alias
+                    "bars": (exit_date - entry_date).days # rough
+                })
+                in_trade = False
+
+    # Close open trade at end
+    if in_trade:
+        exit_date = dates[-1]
+        exit_price = closes[-1]
+        pnl = (exit_price - entry_price) / entry_price
+        pnl -= (cost_pct * 2)
+        trades.append({
+            "entry_date": entry_date,
+            "exit_date": exit_date,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "pnl": pnl,
+            "return": pnl,
+            "bars": (exit_date - entry_date).days,
+            "status": "OPEN"
+        })
+
+    return {
+        "equity_curve": equity_curve,
+        "drawdown": drawdown,
+        "trades": pd.DataFrame(trades),
+        "returns": net_ret
+    }

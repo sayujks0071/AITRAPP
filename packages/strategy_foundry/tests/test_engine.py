@@ -1,89 +1,59 @@
-"""
-Tests for Strategy Foundry Engine
-"""
-import pytest
 import pandas as pd
 import numpy as np
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import StrategyConfig
+from packages.strategy_foundry.backtest.engine import run_backtest
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
-class TestEngine:
-    @pytest.fixture
-    def sample_data(self):
-        # Create a simple trend
-        # 100 bars
-        dates = pd.date_range(start='2023-01-01 09:15', periods=100, freq='5min', tz='Asia/Kolkata')
+def test_backtest_engine_simple():
+    # 10 days
+    dates = pd.date_range(start="2023-01-01", periods=10)
+    # Price goes up 10% every day
+    prices = [100 * (1.1 ** i) for i in range(10)]
 
-        # Linear uptrend
-        price = np.linspace(100, 200, 100)
+    df = pd.DataFrame({
+        "open": prices,
+        "close": prices,
+        "high": prices,
+        "low": prices
+    }, index=dates)
 
-        df = pd.DataFrame({
-            'open': price,
-            'high': price + 1,
-            'low': price - 1,
-            'close': price, # Close = Open for simplicity
-            'volume': [1000] * 100
-        }, index=dates)
+    # Always long
+    positions = pd.Series(1, index=dates)
 
-        return df
+    costs = {'slippage_bps': 0, 'all_in_cost_bps': 0}
 
-    def test_engine_run_basic(self, sample_data):
-        engine = BacktestEngine(sample_data)
+    res = run_backtest(df, positions, costs)
 
-        # Simple config that should trigger
-        config = StrategyConfig(
-            entry_block="entry_trend_ema_cross",
-            entry_params={"fast_period": 5, "slow_period": 10, "adx_filter": False},
-            risk_block="risk_atr",
-            risk_params={"atr_period": 14, "multiplier": 2.0, "trailing": False},
-            exit_block="exit_time",
-            exit_params={"max_bars": 5}
-        )
+    # Expect equity curve to match price roughly (delayed by 1 day entry)
+    # Day 0: Signal Long.
+    # Day 1: Enter at Open (110). Close is 110. Return 0?
+    # Actually if Open=Close, intraday return is 0.
+    # Gap return from Day 0 Close (100) to Day 1 Open (110) is missed if we enter at Day 1 Open.
+    # So we miss the gaps.
 
-        trades, equity = engine.run(config)
+    # If Open == Close, and NextOpen == NextClose (stepwise jumps),
+    # OpRet = 0.
+    # GapRet = 10%.
+    # If we enter at Open Day 1, we miss Gap 0->1.
+    # We hold 1->2. We catch Gap 1->2? No.
+    # Logic:
+    # positions[i-2] determines state entering Gap i.
+    # positions[i-1] determines state for Session i.
 
-        # With linear uptrend, EMA 5 > EMA 10 quickly.
-        # Should have trades.
-        assert not trades.empty or not equity.empty
-        assert len(equity) == 100
+    # Day 0: pos=1.
+    # Day 1: pos_prev (Day-1?) = 0. pos_curr (Day0) = 1.
+    # We enter at Open 1. We missed Gap 0->1.
+    # Session 1: Held.
+    # Gap 1->2: pos_prev(Day0) = 1. We catch Gap.
 
-    def test_engine_eod_exit(self, sample_data):
-        # Set time to near EOD
-        dates = pd.date_range(start='2023-01-01 13:00', periods=50, freq='5min', tz='Asia/Kolkata')
-        # last bar will be ~ 17:05, so we cross 15:25
+    # So we should catch returns from Day 2 onwards.
 
-        df = pd.DataFrame({
-            'open': [100]*50,
-            'high': [100]*50,
-            'low': [100]*50,
-            'close': [100]*50,
-            'volume': [1000]*50
-        }, index=dates)
+    returns = res['returns']
+    assert len(returns) == 10
+    # Day 0: NaN or 0
+    # Day 1: Entry cost (0). Return 0 (no intraday move).
+    # Day 2: Gap return (10%).
 
-        # IMPORTANT: With a flat price, ATR might be zero or very small if not handled.
-        # If ATR is 0, then stop loss is entry_price - 0 = entry_price.
-        # Low <= SL (100 <= 100) -> Trigger SL immediately.
-        # We need to make prices volatile enough to have non-zero ATR but not hit SL.
+    assert returns.iloc[2] > 0.09 # approx 10%
 
-        # Or force ATR to be large by mocking VectorizedIndicators.
-        # Let's modify the data to have some range.
-
-        df['high'] = df['high'] + 1
-        df['low'] = df['low'] - 1
-
-        # Force a signal early
-        engine = BacktestEngine(df)
-        engine._generate_entries = lambda d, s: pd.Series([True] + [False]*49, index=d.index)
-
-        config = StrategyConfig(
-            entry_block="mock", entry_params={},
-            risk_block="risk_atr", risk_params={"atr_period": 14, "multiplier": 1000, "trailing": False}, # very wide stop
-            exit_block="exit_time", exit_params={"max_bars": 100} # long hold
-        )
-
-        trades, _ = engine.run(config)
-
-        # Should exit at EOD
-        assert not trades.empty
-        # Check reason
-        assert trades.iloc[0]['reason'] == "EOD"
+    metrics = calculate_metrics(returns, res['trades'])
+    assert metrics['cagr'] > 0

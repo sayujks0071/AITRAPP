@@ -1,38 +1,43 @@
-"""
-Champion Store
-Manages persistence of champion strategies.
-"""
 import json
-import os
 from pathlib import Path
-from datetime import datetime
-from packages.strategy_foundry.factory.grammar import StrategyConfig
+from typing import Dict, Any, Optional
 
-CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+CHAMPION_DIR = Path(__file__).parent.parent / "results" / "champions"
+CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
 
 class ChampionStore:
-    def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
-
-    def load_current(self) -> dict:
-        path = CHAMPION_DIR / "current.json"
+    def load_champion(self, instrument: str = "NIFTY") -> Optional[Dict[str, Any]]:
+        path = CHAMPION_DIR / f"current_{instrument}.json"
         if path.exists():
-            with open(path, 'r') as f:
-                return json.load(f)
-        return {}
+            return json.loads(path.read_text())
+        return None
 
-    def save_new_champion(self, strategy: dict, metrics: dict, timeframe: str, run_ts: str):
-        # Save historical version
-        version_file = CHAMPION_DIR / f"{run_ts}_{strategy['id']}.json"
+    def save_champion(self, candidate, metrics: Dict[str, Any], instrument: str = "NIFTY", timestamp: str = ""):
         data = {
-            "strategy": strategy,
+            "id": candidate.id,
+            "candidate": candidate.to_json(),
             "metrics": metrics,
-            "timeframe": timeframe,
-            "promoted_at": run_ts
+            "timestamp": timestamp,
+            "instrument": instrument
         }
-        with open(version_file, 'w') as f:
-            json.dump(data, f, indent=2)
 
-        # Update current
-        with open(CHAMPION_DIR / "current.json", 'w') as f:
-            json.dump(data, f, indent=2)
+        # Save current
+        path = CHAMPION_DIR / f"current_{instrument}.json"
+        path.write_text(json.dumps(data, indent=2))
+
+        # Save versioned
+        vpath = CHAMPION_DIR / f"{timestamp}_{candidate.id}.json"
+        vpath.write_text(json.dumps(data, indent=2))
+
+    def is_better(self, new_metrics: Dict[str, Any], current_metrics: Dict[str, Any], ranker) -> bool:
+        new_score = ranker.score(new_metrics)
+        curr_score = ranker.score(current_metrics)
+
+        # Rule: Must exceed by 10% OR significantly lower MaxDD
+        if new_score > curr_score * 1.1:
+            return True
+
+        if new_metrics['max_dd'] < current_metrics['max_dd'] * 0.7 and new_score > curr_score * 0.9:
+            return True
+
+        return False

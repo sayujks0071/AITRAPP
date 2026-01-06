@@ -1,24 +1,32 @@
 # Backtesting Methodology
 
-## Data Strategy
--   **Primary**: 5m and 15m intraday bars.
--   **Sanity**: 1D bars for checking major trend alignment and structural breaks.
--   **Source**: Yahoo Finance (cached locally).
--   **Timezone**: Normalized to Asia/Kolkata (IST).
-
 ## Engine
--   **Type**: Hybrid.
-    -   **Signal Generation**: Vectorized (Pandas/NumPy) for speed.
-    -   **Execution**: Event-driven loop to strictly enforce intraday constraints (time stops, EOD exits).
--   **Execution Price**: Next Open (after signal).
--   **Costs**:
-    -   Slippage: 5 bps per side.
-    -   Commission: 3 bps per side.
+- **Type**: Vectorized daily resolution.
+- **Execution**: Trades are executed at the **Open** of the day following the signal.
+  - Signal generated at Close(T).
+  - Trade executed at Open(T+1).
+- **Costs**:
+  - Slippage: 5 bps per side.
+  - All-in Cost (Brokerage + Taxes): 3 bps per side.
+  - Total: 8 bps per side (0.16% round trip).
 
-## Validation
--   **Walk-Forward**: Data is split into 4 folds (default).
--   **Ranking**: Strategies are ranked on Out-of-Sample (OOS) performance only.
--   **Overfitting Guards**:
-    -   Must have positive expectancy in 3/4 folds.
-    -   Max Drawdown < 30%.
-    -   Profit Factor > 1.1.
+## Walk-Forward Validation
+To prevent overfitting, we use Expanding Window Walk-Forward Analysis:
+- Data is split into N folds.
+- **Train**: Growing window.
+- **Test**: Fixed window following Train.
+- We report metrics ONLY on the concatenated Out-of-Sample (Test) periods.
+
+## Ranking
+Composite Score Weights:
+- **Sharpe Ratio**: 30%
+- **Calmar Ratio**: 25%
+- **CAGR**: 20%
+- **Stability**: 15%
+- **Turnover**: Implicit penalty via trade counts and costs.
+
+## Sanity Checks
+Strategies are rejected if:
+- Trades < 30 (10 in Fast Mode).
+- Max Drawdown > 35%.
+- Consistency: Fewer than 2 positive OOS folds.
