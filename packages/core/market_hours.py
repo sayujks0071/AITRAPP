@@ -1,5 +1,5 @@
 """Market hours and holiday management"""
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import List, Set
 import pytz
 import structlog
@@ -125,7 +125,7 @@ class MarketHoursGuard:
         # This is a placeholder - should load from NSE calendar
         if dt.weekday() == 3:  # Thursday
             # Check if last Thursday of month (rough check)
-            next_thursday = dt.replace(day=dt.day + 7)
+            next_thursday = dt + timedelta(days=7)
             if next_thursday.month != dt.month:
                 return True  # Monthly expiry
             return True  # Weekly expiry
