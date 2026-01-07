@@ -60,14 +60,13 @@ def test_equity_intraday_fee_calculation(risk_manager):
         exit_price=1010.0
     )
 
-    # Current implementation in risk.py:
-    # fees += self.config.fees_per_order * 2  # 20 * 2 = 40
-    # It does NOT implement the 0.03% rule.
-    # So the current code will return roughly 40 + taxes ~ 50-60.
+    # Current implementation in risk.py now applies the brokerage rule:
+    # brokerage_per_side = min(20.0, 0.0003 * side_turnover)
+    # For this trade, that yields a total brokerage of ~6.03 and total fees of ~10.73.
+    # This test asserts that the computed fees stay in a reasonable vicinity of that value.
 
     print(f"Calculated Fees: {fees}")
 
-    # We expect this to FAIL if the code blindly charges 20 per order
-    # But if we want to fix it, we should assert the CORRECT value.
-    # For now, let's see what it returns.
+    # Sanity check: for this small equity intraday trade, total fees should not be excessive.
+    # If the code were still blindly charging 20 per order, this assertion would fail.
     assert fees < 15.0, f"Fees {fees} seems too high for small equity trade. Should be ~10.73"
