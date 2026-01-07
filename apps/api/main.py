@@ -351,7 +351,15 @@ app.add_middleware(
 )
 
 # Add API Key Authentication
-app.add_middleware(APIKeyMiddleware)
+app.add_middleware(APIKeyMiddleware, public_paths=[
+    "/",
+    "/health",
+    "/metrics",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/auth/kite/callback"
+])
 
 # Mount Prometheus metrics
 if settings.enable_metrics:
@@ -362,6 +370,10 @@ if settings.enable_metrics:
 from apps.api import debug, debug_supervisor
 app.include_router(debug.router, tags=["debug"])
 app.include_router(debug_supervisor.router, tags=["debug"])
+
+# Include auth router
+from apps.api.routes import kite_auth
+app.include_router(kite_auth.router, tags=["auth"])
 
 
 # ===== API Models =====

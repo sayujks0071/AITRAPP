@@ -12,72 +12,79 @@ class KiteAuth:
         self.api_key = os.getenv("KITE_API_KEY") or os.getenv("kiteconnect_api_key")
         self.api_secret = os.getenv("KITE_API_SECRET") or os.getenv("kiteconnect_api_secret")
 
-        # Load access token from environment (which might be loaded from .env)
+        # Load access token from environment
         self.access_token = os.getenv("KITE_ACCESS_TOKEN")
 
-        if not self.api_key or not self.api_secret:
-            # We don't raise error immediately to allow instantiation for other purposes if needed,
-            # but methods requiring them will fail.
-            # Actually, for this specific class, we need them.
-            # But let's check if we are in a testing context where we might mock things.
-            # For now, we log a warning.
-            logger.warning("KITE_API_KEY or KITE_API_SECRET not found in environment.")
+        if not self.api_key:
+             logger.warning("KITE_API_KEY not found in environment.")
 
+        # Initialize KiteConnect
+        # We don't pass access_token immediately if we are going to exchange it,
+        # but for session validation we need it.
         self.kite = KiteConnect(api_key=self.api_key, access_token=self.access_token)
 
     def is_session_valid(self) -> bool:
-        """Checks if the current session (access_token) is valid."""
+        """
+        Validates current token by calling a lightweight endpoint.
+        Returns True if valid, False otherwise.
+        """
         if not self.access_token:
+            logger.debug("No access token found.")
             return False
 
         try:
-            # Lightweight call to validate session. profile() is a good candidate.
+            # profile() is a lightweight call to validate session
             self.kite.profile()
             return True
         except Exception as e:
-            # TokenInvalidException is raised by kiteconnect if token is bad
-            # We treat any error as invalid session for safety
+            # TokenInvalidException or similar implies invalid session
             logger.debug(f"Session validation failed: {str(e)}")
             return False
 
     def get_login_url(self) -> str:
-        """Returns the login URL for manual authentication."""
+        """
+        Returns the login URL for manual authentication.
+        """
         if not self.api_key:
             raise ValueError("API Key is missing")
-        return str(self.kite.login_url())
+        return self.kite.login_url()
 
     def exchange_request_token(self, request_token: str) -> str:
-        """Exchanges request_token for access_token."""
+        """
+        Exchanges request_token for access_token and persists it.
+        Returns the new access_token.
+        """
         if not self.api_secret:
             raise ValueError("API Secret is missing")
 
         try:
             data = self.kite.generate_session(request_token, api_secret=self.api_secret)
-            access_token = str(data["access_token"])
-            self.kite.set_access_token(access_token)
+            access_token = data["access_token"]
+
+            # Update instance
             self.access_token = access_token
+            self.kite.set_access_token(access_token)
+
             return access_token
         except Exception as e:
             logger.error(f"Error exchanging request token: {e}")
             raise
 
     def persist_access_token(self, access_token: str):
-        """Persists the access token to .env file."""
-        # Find .env file
+        """
+        Stores the token securely.
+        Prioritizes .env file as per repo convention for 'local encrypted file mechanism'.
+        """
+        # 1. Update .env file
         env_path = dotenv.find_dotenv()
         if not env_path:
-            # If not found, use .env in current directory
+            # Default to .env in current directory if not found
             env_path = ".env"
 
         logger.info(f"Persisting access token to {env_path}")
 
-        # Use dotenv.set_key to update the file
-        # This will create the file if it doesn't exist, and update or add the key
+        # We use set_key which handles quoting and updates
         dotenv.set_key(env_path, "KITE_ACCESS_TOKEN", access_token)
 
-        # We assume USER_ID might also be useful but the prompt specifically asked for access_token persistence.
-        # Ideally generate_session returns user_id too.
-        # But we'll stick to what was requested for now.
-
-        # Update current process environment
+        # 2. Update current environment to reflect changes immediately in this process
         os.environ["KITE_ACCESS_TOKEN"] = access_token

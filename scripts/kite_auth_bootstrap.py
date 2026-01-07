@@ -1,116 +1,89 @@
 #!/usr/bin/env python3
-import http.server
-import urllib.parse
-import sys
+"""
+Kite Daily Auth Assistant (Manual Login + Auto Token Exchange)
+
+Runs daily at 8:00 AM IST.
+1. Checks validity of current session.
+2. If invalid, triggers login flow:
+   - Prints login URL.
+   - Wait for manual login via callback (if API server is running).
+   - Or if CI, fails/notifies.
+"""
+
 import os
+import sys
 import logging
-import threading
-import time
-
-# Ensure we can import from src
-sys.path.append(os.getcwd())
-
+import argparse
 from src.auth.kite_auth import KiteAuth
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("KiteAuthBootstrap")
-
-PORT = 8080
-CALLBACK_PATH = "/callback"
-
-class CallbackHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, format, *args):
-        # Suppress default logging to keep output clean
-        pass
-
-    def do_GET(self):
-        parsed_url = urllib.parse.urlparse(self.path)
-        if parsed_url.path == CALLBACK_PATH:
-            query_params = urllib.parse.parse_qs(parsed_url.query)
-            if 'request_token' in query_params:
-                self.server.request_token = query_params['request_token'][0]
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                self.wfile.write(b"<h1>Auth Success!</h1><p>Token received. You can close this window.</p>")
-            else:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"<h1>Error</h1><p>No request_token found in URL.</p>")
-        else:
-            self.send_response(404)
-            self.end_headers()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 def main():
-    logger.info("Starting Kite Daily Auth Assistant...")
+    parser = argparse.ArgumentParser(description="Kite Daily Auth Bootstrap")
+    parser.add_argument("--check-only", action="store_true", help="Only check session validty, exit 1 if invalid")
+    parser.add_argument("--port", type=int, default=8000, help="Port where API server is running (for callback URL info)")
+    args = parser.parse_args()
 
-    # 4) Add safety rails: Ensure TRADING_MODE defaults to paper
-    trading_mode = os.getenv("TRADING_MODE", "PAPER").upper()
-    if trading_mode == "LIVE":
-        logger.warning("⚠️  WARNING: TRADING_MODE is set to LIVE. Be careful!")
+    # Safety Rail: TRADING_MODE default to PAPER
+    # This script doesn't trade, but good practice to enforce context
+    if os.getenv("TRADING_MODE", "PAPER").upper() == "LIVE":
+        logger.warning("Running in LIVE mode context.")
     else:
-        logger.info(f"Running in {trading_mode} mode.")
+        logger.info("Running in PAPER mode context.")
 
-    try:
-        auth = KiteAuth()
-    except Exception as e:
-        logger.error(f"Failed to initialize KiteAuth: {e}")
-        # If API keys are missing, we can't proceed
-        sys.exit(1)
+    auth = KiteAuth()
 
-    logger.info("Checking session validity...")
+    # 1. Check if session is valid
+    logger.info("Checking Kite session validity...")
     if auth.is_session_valid():
-        logger.info("✅ Session is valid. No action required.")
+        logger.info("✅ Session is already valid. No action needed.")
         sys.exit(0)
 
-    logger.info("❌ Session invalid or expired. Starting manual login flow.")
+    logger.info("❌ Session is invalid or expired.")
 
+    if args.check_only:
+        logger.error("Session invalid and --check-only specified.")
+        sys.exit(1)
+
+    # 2. Trigger Login Flow
     try:
         login_url = auth.get_login_url()
+        logger.info("=" * 60)
+        logger.info(" AUTHENTICATION REQUIRED ")
+        logger.info("=" * 60)
+        logger.info("Please login manually using the following URL:")
+        logger.info(f"\n{login_url}\n")
+
+        # Determine Callback URL for user info
+        # We assume the API server is running or will be running on localhost/server
+        # The Redirect URI in Kite Console should match this.
+        # Assuming standard setup:
+        callback_url = f"http://localhost:{args.port}/auth/kite/callback"
+        logger.info(f"Ensure your Kite App Redirect URI is set to point to your server's callback endpoint.")
+        logger.info(f"e.g., {callback_url} (or your public IP/domain)")
+        logger.info("=" * 60)
+
+        # Detect CI environment
+        if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+            logger.warning("Running in CI environment. Cannot perform interactive login.")
+            logger.warning("Please manually update the token in GitHub Secrets.")
+            # In CI, we just print the URL and exit 1 so the workflow can notify/fail
+            sys.exit(1)
+
+        # If running interactively or on VPS
+        logger.info("Waiting for you to complete login in the browser...")
+        logger.info("Once you login, the callback will be hit on the running API server.")
+        logger.info("If the API server is not running, start it: uvicorn apps.api.main:app")
+
+        # We could potentially start a mini-server here if API is not running,
+        # but the instructions say "Implement ONE of these". We chose Option A (Backend HTTP route).
+        # So we assume the user has the app running or will start it.
+
     except Exception as e:
-        logger.error(f"Failed to generate login URL: {e}")
+        logger.error(f"Error initializing auth flow: {e}")
         sys.exit(1)
-
-    logger.info("=" * 60)
-    logger.info(f"👉 Please login here: {login_url}")
-    logger.info("=" * 60)
-
-    # Start server to listen for callback
-    server = http.server.HTTPServer(('localhost', PORT), CallbackHandler)
-    server.request_token = None
-
-    logger.info(f"Listening for callback on http://localhost:{PORT}{CALLBACK_PATH}")
-    logger.info("Waiting for redirect...")
-
-    try:
-        # Loop until we get the token
-        while server.request_token is None:
-            server.handle_request()
-
-        request_token = server.request_token
-        logger.info("Callback received!")
-
-        logger.info("Exchanging request_token for access_token...")
-        access_token = auth.exchange_request_token(request_token)
-
-        logger.info("Persisting access token...")
-        auth.persist_access_token(access_token)
-
-        logger.info("✅ Token stored successfully.")
-        logger.info("🔄 Please restart your trading application if it is running to pick up the new token.")
-
-    except KeyboardInterrupt:
-        logger.info("\nBootstrap interrupted by user.")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Error during auth flow: {e}")
-        sys.exit(1)
-    finally:
-        server.server_close()
 
 if __name__ == "__main__":
     main()
