@@ -312,7 +312,7 @@ class RiskManager:
         # Simplified fee calculation (Zerodha-like structure)
         fees = 0.0
         
-        # Brokerage: Rs 20 per order or 0.03% (equity delivery)
+        # Brokerage: 0.03% of turnover or Rs 20 per order, whichever is lower (per side for equities)
         if instrument.is_equity:
             # Equity Intraday: 0.03% or Rs 20/executing order whichever is lower
             # Calculate per side to be accurate
