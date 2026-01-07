@@ -239,29 +239,45 @@ class IndicatorCalculator:
             final_lb[0] = basic_lb[0]
             
             # Optimized loop using numpy arrays (avoiding pandas overhead)
+            # Optimization: Use local variables to avoid repeated array access in loop
+            curr_ub = basic_ub[0]
+            curr_lb = basic_lb[0]
+            final_ub[0] = curr_ub
+            final_lb[0] = curr_lb
+
             for i in range(1, n):
                 # Final Upper Band
-                if np.isnan(final_ub[i-1]):
-                    final_ub[i] = basic_ub[i]
-                elif (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
-                    final_ub[i] = basic_ub[i]
+                bub = basic_ub[i]
+                prev_ub = final_ub[i-1]
+                prev_close = close[i-1]
+
+                if np.isnan(prev_ub):
+                    curr_ub = bub
+                elif (bub < prev_ub) or (prev_close > prev_ub):
+                    curr_ub = bub
                 else:
-                    final_ub[i] = final_ub[i-1]
+                    curr_ub = prev_ub
+                final_ub[i] = curr_ub
 
                 # Final Lower Band
-                if np.isnan(final_lb[i-1]):
-                    final_lb[i] = basic_lb[i]
-                elif (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
-                    final_lb[i] = basic_lb[i]
+                blb = basic_lb[i]
+                prev_lb = final_lb[i-1]
+
+                if np.isnan(prev_lb):
+                    curr_lb = blb
+                elif (blb > prev_lb) or (prev_close < prev_lb):
+                    curr_lb = blb
                 else:
-                    final_lb[i] = final_lb[i-1]
+                    curr_lb = prev_lb
+                final_lb[i] = curr_lb
 
                 # Supertrend
-                if close[i] <= final_ub[i]:
-                    supertrend[i] = final_ub[i]
+                c = close[i]
+                if c <= curr_ub:
+                    supertrend[i] = curr_ub
                     direction[i] = -1
                 else:
-                    supertrend[i] = final_lb[i]
+                    supertrend[i] = curr_lb
                     direction[i] = 1
             
             return (

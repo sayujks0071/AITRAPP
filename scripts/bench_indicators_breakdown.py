@@ -4,56 +4,70 @@ import pandas as pd
 import numpy as np
 from packages.core.indicators import IndicatorCalculator
 
-def bench_breakdown():
-    # Create 200 bars data
-    n = 200
-    df = pd.DataFrame({
-        'open': np.random.rand(n) * 100,
-        'high': np.random.rand(n) * 100,
-        'low': np.random.rand(n) * 100,
-        'close': np.random.rand(n) * 100,
-        'volume': np.random.randint(100, 1000, n)
-    })
+# Mock Bar class
+class Bar:
+    def __init__(self, o, h, l, c, v):
+        self.open = o
+        self.high = h
+        self.low = l
+        self.close = c
+        self.volume = v
 
+def benchmark_breakdown():
     calc = IndicatorCalculator()
+
+    # Create 200 bars
+    bars = [
+        Bar(
+            100.0 + i * 0.1,
+            101.0 + i * 0.1,
+            99.0 + i * 0.1,
+            100.5 + i * 0.1,
+            1000 + i
+        )
+        for i in range(200)
+    ]
 
     iterations = 1000
 
-    # VWAP
-    start = time.time()
+    # 1. Measure DataFrame Creation
+    start_df = time.time()
     for _ in range(iterations):
-        calc._vwap(df)
-    print(f"VWAP: {(time.time()-start)/iterations*1000:.3f} ms")
+        df = pd.DataFrame([
+            {
+                "open": b.open,
+                "high": b.high,
+                "low": b.low,
+                "close": b.close,
+                "volume": b.volume
+            }
+            for b in bars
+        ])
+    end_df = time.time()
+    time_df = end_df - start_df
 
-    # ATR
-    start = time.time()
-    for _ in range(iterations):
-        calc._atr(df)
-    print(f"ATR: {(time.time()-start)/iterations*1000:.3f} ms")
+    # Pre-create DataFrame for next step
+    df = pd.DataFrame([
+        {
+            "open": b.open,
+            "high": b.high,
+            "low": b.low,
+            "close": b.close,
+            "volume": b.volume
+        }
+        for b in bars
+    ])
 
-    # RSI
-    start = time.time()
+    # 2. Measure Calculation
+    start_calc = time.time()
     for _ in range(iterations):
-        calc._rsi(df)
-    print(f"RSI: {(time.time()-start)/iterations*1000:.3f} ms")
+        indicators = calc.compute_all(df)
+    end_calc = time.time()
+    time_calc = end_calc - start_calc
 
-    # ADX
-    start = time.time()
-    for _ in range(iterations):
-        calc._adx(df)
-    print(f"ADX: {(time.time()-start)/iterations*1000:.3f} ms")
-
-    # Supertrend
-    start = time.time()
-    for _ in range(iterations):
-        calc._supertrend(df)
-    print(f"Supertrend: {(time.time()-start)/iterations*1000:.3f} ms")
-
-    # Bollinger
-    start = time.time()
-    for _ in range(iterations):
-        calc._bollinger_bands(df['close'])
-    print(f"Bollinger: {(time.time()-start)/iterations*1000:.3f} ms")
+    print(f"DataFrame Creation: {time_df:.4f}s ({time_df/iterations*1000:.4f}ms/call)")
+    print(f"Calculation: {time_calc:.4f}s ({time_calc/iterations*1000:.4f}ms/call)")
+    print(f"Total: {time_df + time_calc:.4f}s")
 
 if __name__ == "__main__":
-    bench_breakdown()
+    benchmark_breakdown()
