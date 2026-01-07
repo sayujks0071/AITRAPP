@@ -1,34 +1,46 @@
 # Deployment Guide
 
-## Live Signal Consumption
+## Signal Consumption
 
-The foundry **does not** execute trades. It produces a signal artifact:
+The Foundry produces a `live_signal.json` artifact.
 
-`packages/strategy_foundry/results/live_signal.json`
+**Path**: `packages/strategy_foundry/results/live_signal.json`
 
-### Schema
+**Schema**:
 ```json
 {
-  "timestamp_ist": "2023-10-27T10:15:00+05:30",
-  "champion_id": "a1b2c3...",
-  "timeframe": "5m",
+  "timestamp_ist": "2023-10-27T10:00:00+05:30",
+  "champion_id": "a1b2c3d4",
+  "timeframe": "15m",
   "instrument": "NIFTY",
-  "proxy_symbol_live": "NIFTY 50",
+  "proxy_symbol_live": "NIFTY23OCTFUT",
   "signal": 1,
+  "rule_summary": "trend_ema_cross + trailing_stop_atr",
+  "risk": {
+      "stop": "atr_stop",
+      "params": {"multiplier": 2.0},
+      "flat_by": "15:25"
+  },
   "status": "OK"
 }
 ```
 
--   `signal`: `1` (Buy), `-1` (Sell), `0` (Neutral).
--   `status`: `OK` or `SKIPPED`.
+## Gating Requirements
 
-### Gating
 Live execution requires:
-1.  `ENABLE_LIVE=true` environment variable.
-2.  `approvals/ALLOW_LIVE.txt` file presence.
-3.  Core system kill-switches inactive.
+1. `ENABLE_LIVE=true` environment variable.
+2. `approvals/ALLOW_LIVE.txt` file presence.
+3. Successful authentication with Broker.
+4. `live_signal.json` status == "OK".
 
 ## Paper Trading
+
 To run in paper mode:
-1.  Ensure `instrument_map.yaml` has correct `paper_proxy` symbols.
-2.  Consume the JSON and route to a paper broker account.
+1. Ensure `foundry.yaml` has correct paper proxies.
+2. Run the hourly job.
+3. Consume `live_signal.json` and route to paper simulator.
+
+## Monitoring
+
+- Check GitHub Actions logs for "Strategy Foundry Hourly" workflow.
+- Review `leaderboard.md` in artifacts for current champion performance.

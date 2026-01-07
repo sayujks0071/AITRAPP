@@ -82,4 +82,3 @@ class DataLoader:
             df = df[mask]
 
         return df.sort_index()
-

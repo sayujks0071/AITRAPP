@@ -1,24 +1,43 @@
 # Backtesting Methodology
 
-## Data Strategy
--   **Primary**: 5m and 15m intraday bars.
--   **Sanity**: 1D bars for checking major trend alignment and structural breaks.
--   **Source**: Yahoo Finance (cached locally).
--   **Timezone**: Normalized to Asia/Kolkata (IST).
+## Data Sources
 
-## Engine
--   **Type**: Hybrid.
-    -   **Signal Generation**: Vectorized (Pandas/NumPy) for speed.
-    -   **Execution**: Event-driven loop to strictly enforce intraday constraints (time stops, EOD exits).
--   **Execution Price**: Next Open (after signal).
--   **Costs**:
-    -   Slippage: 5 bps per side.
-    -   Commission: 3 bps per side.
+1. **Core Data Provider**: First preference (if available).
+2. **Yahoo Finance Fallback**: Uses `requests` to fetch `^NSEI` (NIFTY) and `^BSESN` (SENSEX).
+   - Caches to CSV in `packages/strategy_foundry/data/cache/`.
+   - Auto-refreshes if cache is stale (1h for intraday, 12h for daily).
 
-## Validation
--   **Walk-Forward**: Data is split into 4 folds (default).
--   **Ranking**: Strategies are ranked on Out-of-Sample (OOS) performance only.
--   **Overfitting Guards**:
-    -   Must have positive expectancy in 3/4 folds.
-    -   Max Drawdown < 30%.
-    -   Profit Factor > 1.1.
+## Strategy Generation
+
+Strategies are composed of:
+- **Entry**: Breakout (Donchian, ORB), Trend (EMA Cross), Mean Reversion (RSI).
+- **Exit**: Target/Stop (RR), Trailing Stop (ATR), EOD (Time).
+- **Risk**: Fixed % or ATR-based stop.
+- **Filters**: Trend filter (Higher TF EMA), Time filter (No trade first 30m).
+
+## Walk-Forward Validation
+
+To ensure robustness, we use Walk-Forward Analysis:
+- **Train**: Optimization window (implicit in generation selection).
+- **Test**: Out-of-Sample (OOS) window immediately following train.
+- **Folds**: 4 folds by default (expanding window).
+
+## Sanity Checks
+
+1. **Daily Sanity**: Top candidates are run on 1D data.
+   - Rejection if Sharpe < -0.2 or MaxDD > 45%.
+   - Ensures strategy doesn't blow up on longer horizons.
+2. **Intraday constraints**:
+   - Mandatory flattening at 15:25 IST.
+   - Spread guard costs applied.
+
+## Ranking
+
+Strategies are ranked by a weighted score:
+- 25% Sharpe
+- 25% Calmar
+- 20% CAGR
+- 15% Stability (Positive Folds)
+- 10% Efficiency (Turnover/Profit Factor)
+
+Champions are promoted only if they significantly outperform the incumbent.

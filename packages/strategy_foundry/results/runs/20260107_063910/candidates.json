@@ -1,0 +1,290 @@
+[
+  {
+    "id": "b2e0180120da",
+    "entry_block": "breakout_orb",
+    "entry_params": {
+      "minutes": 60
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "5ace324e7164",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 9,
+      "slow": 50
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.0
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "ee32bbaea308",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 30,
+      "upper": 70
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.0
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "21da7b702018",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 5,
+      "slow": 20
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 2.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 1.5
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "90754aa28770",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 25,
+      "upper": 75
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 2.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 1.5
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "0ed8c503fd3f",
+    "entry_block": "breakout_orb",
+    "entry_params": {
+      "minutes": 60
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 2.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.5
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "b07df72aea37",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 9,
+      "slow": 20
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 1.5
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 0.5
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 200
+    }
+  },
+  {
+    "id": "d213452091bb",
+    "entry_block": "breakout_donchian",
+    "entry_params": {
+      "period": 20
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "891979f31ded",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 25,
+      "upper": 75
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 0.5
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 50
+    }
+  },
+  {
+    "id": "97f163cc3cdd",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 9,
+      "slow": 20
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 1.5
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "a9d9ff3f3ac9",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 9,
+      "slow": 20
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 1.5
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "42f3d97f431c",
+    "entry_block": "breakout_orb",
+    "entry_params": {
+      "minutes": 60
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.0
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "815832c186c9",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 25,
+      "upper": 70
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 1.5
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.5
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "19690dd86234",
+    "entry_block": "breakout_donchian",
+    "entry_params": {
+      "period": 20
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 1.5
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "67e889f3267e",
+    "entry_block": "breakout_orb",
+    "entry_params": {
+      "minutes": 15
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  }
+]

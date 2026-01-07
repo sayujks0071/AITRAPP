@@ -1,30 +1,50 @@
 """
 Live Signal Publisher
-Publishes trade signals to JSON artifact.
 """
 import json
-from datetime import datetime
+import structlog
 from pathlib import Path
-from packages.strategy_foundry.adapters.core_market_hours import IST, MarketHoursGuard
+from datetime import datetime
+from packages.strategy_foundry.adapters.core_market_hours import IST
 
-OUTPUT_FILE = Path("packages/strategy_foundry/results/live_signal.json")
+logger = structlog.get_logger(__name__)
+
+RESULTS_DIR = Path("packages/strategy_foundry/results")
 
 class SignalPublisher:
     @staticmethod
     def publish(signal_data: dict):
-        OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        """
+        Publish signal JSON.
+        """
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        file_path = RESULTS_DIR / "live_signal.json"
 
-        # Add timestamp if missing
-        if "timestamp_ist" not in signal_data:
-            signal_data["timestamp_ist"] = datetime.now(IST).isoformat()
+        payload = {
+            "timestamp_ist": datetime.now(IST).isoformat(),
+            **signal_data
+        }
 
-        with open(OUTPUT_FILE, 'w') as f:
-            json.dump(signal_data, f, indent=2)
+        with open(file_path, 'w') as f:
+            json.dump(payload, f, indent=2)
+
+        logger.info("Published live signal", signal=signal_data)
 
     @staticmethod
     def publish_skipped(reason: str):
-        SignalPublisher.publish({
+        """
+        Publish SKIPPED signal.
+        """
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        file_path = RESULTS_DIR / "live_signal.json"
+
+        payload = {
+            "timestamp_ist": datetime.now(IST).isoformat(),
             "status": "SKIPPED",
-            "reason": reason,
-            "timestamp_ist": datetime.now(IST).isoformat()
-        })
+            "reason": reason
+        }
+
+        with open(file_path, 'w') as f:
+            json.dump(payload, f, indent=2)
+
+        logger.info("Published skipped signal", reason=reason)

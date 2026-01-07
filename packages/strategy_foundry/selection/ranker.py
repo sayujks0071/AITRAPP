@@ -1,46 +1,43 @@
 """
-Ranker
-Ranks strategies based on metrics.
+Strategy Ranker
 """
-from typing import List, Dict, Any
-import pandas as pd
+from typing import Dict, Any
 
 class Ranker:
     @staticmethod
-    def calculate_score(metrics: Dict[str, Any], weights: Dict[str, float]) -> float:
+    def calculate_score(metrics: Dict[str, float], weights: Dict[str, float]) -> float:
         """
-        Calculate weighted score.
-        Normalizing inputs is hard without population context,
-        so we use thresholds and raw values with reasonable scaling.
+        Calculate weighted score for a strategy based on metrics.
         """
+        # Normalize metrics roughly
+        # Sharpe: 0 to 3
+        # Calmar: 0 to 5
+        # CAGR: 0 to 1
+        # Stability: (1 - std_dev)
+        # Turnover: penalize
+
         score = 0.0
 
-        # Sharpe (Target ~2.0) -> 2.0 * 25 = 50 pts
-        score += min(metrics['sharpe'], 3.0) * weights['sharpe'] * 20
+        # Sharpe (clip at 3)
+        sharpe_score = min(max(metrics['sharpe'], 0), 3.0) / 3.0
+        score += sharpe_score * weights.get('sharpe', 0.25)
 
-        # Calmar (Target ~3.0) -> 3.0 * 25 = 75 pts
-        score += min(metrics['calmar'], 5.0) * weights['calmar'] * 15
+        # Calmar (clip at 5)
+        calmar_score = min(max(metrics['calmar'], 0), 5.0) / 5.0
+        score += calmar_score * weights.get('calmar', 0.25)
 
-        # Return (CAGR) -> 0.5 (50%) * 20 = 10 pts
-        score += min(metrics['cagr'], 2.0) * weights['return'] * 100
+        # CAGR (clip at 100%)
+        cagr_score = min(max(metrics['cagr'], 0), 1.0)
+        score += cagr_score * weights.get('cagr', 0.20)
 
-        # Drawdown Penalty
-        # If DD > 20%, penalize heavily
-        if metrics['max_drawdown'] > 0.2:
-            score -= (metrics['max_drawdown'] - 0.2) * 200
+        # Stability (Approximated by positive folds ratio)
+        # Using metrics['positive_folds'] assuming 4 folds max
+        stability_score = metrics.get('positive_folds', 0) / 4.0
+        score += stability_score * weights.get('stability', 0.15)
 
-        return score
+        # Turnover (Lower is better? Or just bonus for low?)
+        # Let's say we want efficient trades. Profit Factor is a good proxy.
+        pf_score = min(max(metrics['profit_factor'] - 1, 0), 2.0) / 2.0
+        score += pf_score * weights.get('turnover', 0.10) # reusing turnover weight for efficiency
 
-    @staticmethod
-    def rank(results: List[Dict[str, Any]]) -> pd.DataFrame:
-        """
-        Rank results.
-        results: List of dicts with 'metrics', 'config', 'id'
-        """
-        df = pd.DataFrame(results)
-        if df.empty:
-            return df
-
-        # Sort by score descending
-        df = df.sort_values('score', ascending=False)
-        return df
+        return score * 100.0 # Scale to 0-100
