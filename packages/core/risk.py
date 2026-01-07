@@ -314,7 +314,11 @@ class RiskManager:
         
         # Brokerage: Rs 20 per order or 0.03% (equity delivery)
         if instrument.is_equity:
-            fees += self.config.fees_per_order * 2  # Entry + Exit
+            # Equity Intraday: 0.03% or Rs 20/executing order whichever is lower
+            # Calculate per side to be accurate
+            entry_brokerage = min(self.config.fees_per_order, entry_price * quantity * 0.0003)
+            exit_brokerage = min(self.config.fees_per_order, exit_price * quantity * 0.0003)
+            fees += entry_brokerage + exit_brokerage
         elif instrument.is_future or instrument.is_option:
             fees += self.config.fees_per_order * 2
             # Note: Unlike the previous implementation, fees_per_option_leg is not added here
