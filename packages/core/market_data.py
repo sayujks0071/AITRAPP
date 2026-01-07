@@ -237,16 +237,15 @@ class MarketDataStream:
                 return
             
             # Convert to DataFrame
-            df = pd.DataFrame([
-                {
-                    "open": b.open,
-                    "high": b.high,
-                    "low": b.low,
-                    "close": b.close,
-                    "volume": b.volume
-                }
-                for b in bars
-            ])
+            # Optimization: Use dict of lists instead of list of dicts for faster DataFrame creation
+            data = {
+                "open": [b.open for b in bars],
+                "high": [b.high for b in bars],
+                "low": [b.low for b in bars],
+                "close": [b.close for b in bars],
+                "volume": [b.volume for b in bars]
+            }
+            df = pd.DataFrame(data)
             
             # Compute indicators
             indicators = self.indicator_calc.compute_all(df)
