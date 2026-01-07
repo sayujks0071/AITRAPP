@@ -19,7 +19,7 @@ def risk_manager():
 def test_equity_intraday_fee_calculation(risk_manager):
     """
     Test fee calculation for Equity Intraday.
-    Brokerage: Min(20, 0.03% turnover) per side.
+    Brokerage: Min(20, 0.03% of order value) per side (order value = price * quantity for each side).
 
     Parameters:
         Buy Price: 1000
