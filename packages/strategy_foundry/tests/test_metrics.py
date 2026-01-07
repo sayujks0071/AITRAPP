@@ -1,26 +1,22 @@
-"""
-Tests for Strategy Foundry Metrics
-"""
-import pytest
 import pandas as pd
-from packages.strategy_foundry.backtest.metrics import BacktestMetrics
+import pytest
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
+from packages.strategy_foundry.backtest.engine import Trade
 
-class TestMetrics:
-    def test_metrics_calculation(self):
-        trades = pd.DataFrame([
-            {'pnl': 100},
-            {'pnl': -50},
-            {'pnl': 100}
-        ])
+def test_metrics_empty():
+    res = calculate_metrics(pd.Series(), [])
+    assert res['cagr'] == 0.0
+    assert res['sharpe'] == 0.0
 
-        # Equity curve: 100 -> 200 -> 150 -> 250
-        dates = pd.date_range('2023-01-01', periods=4)
-        equity = pd.Series([100000, 100100, 100050, 100150], index=dates)
+def test_metrics_simple():
+    dates = pd.date_range(start="2023-01-01", periods=5)
+    equity = pd.Series([100, 101, 102, 103, 104], index=dates)
 
-        metrics = BacktestMetrics.calculate(trades, equity)
+    trades = [
+        Trade(dates[0], 100, dates[1], 101, 1, 1, 1.0, 0.01, "", "")
+    ]
 
-        assert metrics['total_trades'] == 3
-        assert metrics['net_profit'] == 150
-        assert metrics['win_rate'] == 2/3
-        assert metrics['profit_factor'] == 200/50 # 4.0
-        assert metrics['max_drawdown'] > 0
+    res = calculate_metrics(equity, trades)
+    assert res['cagr'] > 0
+    assert res['trades'] == 1
+    assert res['win_rate'] == 1.0

@@ -1,46 +1,55 @@
-"""
-Ranker
-Ranks strategies based on metrics.
-"""
-from typing import List, Dict, Any
 import pandas as pd
+from typing import List, Dict, Any
 
-class Ranker:
-    @staticmethod
-    def calculate_score(metrics: Dict[str, Any], weights: Dict[str, float]) -> float:
-        """
-        Calculate weighted score.
-        Normalizing inputs is hard without population context,
-        so we use thresholds and raw values with reasonable scaling.
-        """
-        score = 0.0
+def rank_candidates(results: List[Dict[str, Any]]) -> pd.DataFrame:
+    """
+    Rank candidates based on composite score.
+    results: List of dicts containing 'id', 'metrics', 'params'
+    """
+    if not results:
+        return pd.DataFrame()
 
-        # Sharpe (Target ~2.0) -> 2.0 * 25 = 50 pts
-        score += min(metrics['sharpe'], 3.0) * weights['sharpe'] * 20
+    df = pd.DataFrame([
+        {
+            'id': r['id'],
+            'sharpe': r['metrics']['sharpe'],
+            'calmar': r['metrics']['calmar'],
+            'cagr': r['metrics']['cagr'],
+            'stability': r['metrics'].get('stability_score', 0),
+            'trades': r['metrics']['trades'],
+            'max_dd': r['metrics']['max_dd'],
+            'win_rate': r['metrics']['win_rate'],
+            'metrics': r['metrics'],
+            'params': r['params'],
+            'rule_summary': r['rule_summary']
+        }
+        for r in results
+    ])
 
-        # Calmar (Target ~3.0) -> 3.0 * 25 = 75 pts
-        score += min(metrics['calmar'], 5.0) * weights['calmar'] * 15
+    # Normalize
+    # We want relative ranking.
+    # Simple MinMax scaling or Rank scaling.
+    # Let's use Rank (percentile) to be robust to outliers.
 
-        # Return (CAGR) -> 0.5 (50%) * 20 = 10 pts
-        score += min(metrics['cagr'], 2.0) * weights['return'] * 100
+    cols = ['sharpe', 'calmar', 'cagr', 'stability']
+    for col in cols:
+        df[f'{col}_rank'] = df[col].rank(pct=True)
 
-        # Drawdown Penalty
-        # If DD > 20%, penalize heavily
-        if metrics['max_drawdown'] > 0.2:
-            score -= (metrics['max_drawdown'] - 0.2) * 200
+    # Turnover penalty: More trades = bad? Not necessarily.
+    # High turnover = high cost.
+    # Let's penalize very high trade count?
+    # Or just use raw count rank (inverted).
+    df['turnover_rank'] = df['trades'].rank(pct=True, ascending=False)
 
-        return score
+    # Composite Score
+    # 30% Sharpe, 25% Calmar, 20% CAGR, 15% Stability, 10% Turnover
+    df['score'] = (
+        0.30 * df['sharpe_rank'] +
+        0.25 * df['calmar_rank'] +
+        0.20 * df['cagr_rank'] +
+        0.15 * df['stability_rank'] +
+        0.10 * df['turnover_rank']
+    )
 
-    @staticmethod
-    def rank(results: List[Dict[str, Any]]) -> pd.DataFrame:
-        """
-        Rank results.
-        results: List of dicts with 'metrics', 'config', 'id'
-        """
-        df = pd.DataFrame(results)
-        if df.empty:
-            return df
-
-        # Sort by score descending
-        df = df.sort_values('score', ascending=False)
-        return df
+    df.sort_values('score', ascending=False, inplace=True)
+    return df

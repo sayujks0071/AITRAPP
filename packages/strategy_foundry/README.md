@@ -1,44 +1,35 @@
-# Aggressive Intraday Strategy Foundry
+# Strategy Foundry
 
-Automated research lab that generates, backtests, and selects intraday trading strategies for Indian markets.
-
-## Overview
-
-The foundry runs hourly (during market hours) to:
-1.  **Generate** random strategies based on a grammar of valid trading components.
-2.  **Backtest** these strategies on 5m and 15m timeframes using Walk-Forward Optimization.
-3.  **Rank** them based on risk-adjusted returns, stability, and robustness.
-4.  **Promote** a "Champion" strategy if it beats the incumbent.
-5.  **Publish** a live signal artifact (`live_signal.json`) if the champion signals an entry.
+A self-generating strategy lab that runs hourly to discover, backtest, and select trading strategies for NIFTY and SENSEX.
 
 ## Architecture
 
--   `adapters/`: Bridges to Core system (Indicators, Market Hours).
--   `data/`: Manages data loading and caching (Yahoo Finance).
--   `factory/`: Strategy grammar and random generation.
--   `backtest/`: Vectorized + Event-driven hybrid engine.
--   `selection/`: Ranking and promotion logic.
--   `live/`: Signal publication.
+- **Hybrid Model**: Reuses `packages/core` for indicators and market logic via adapters.
+- **Autonomous**: Generates strategies, tests them, and promotes champions without human intervention.
+- **Safe**: No live execution. Publishes `live_signal.json` artifacts only.
+
+## Directory Structure
+
+- `data/`: Data loading and caching (CSV).
+- `factory/`: Strategy grammar and generation.
+- `backtest/`: Vectorized backtest engine.
+- `selection/`: Ranking and champion storage.
+- `live/`: Signal publishing.
 
 ## Usage
 
-### Run Manually
-
+Run manually:
 ```bash
-# Full mode
+export PYTHONPATH=.
 python packages/strategy_foundry/run_hourly.py
-
-# Fast mode (fewer candidates, fewer folds)
-FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
 ```
 
-### Outputs
+Fast mode (fewer candidates/folds):
+```bash
+export FAST_MODE=1
+python packages/strategy_foundry/run_hourly.py
+```
 
--   **Run Artifacts**: `results/runs/<timestamp>/` (candidates, metrics, leaderboard).
--   **Live Signal**: `results/live_signal.json`.
--   **Champion**: `results/champions/current.json`.
+## CI/CD
 
-## Configuration
-
--   `configs/foundry.yaml`: Foundry settings (thresholds, weights).
--   `configs/instrument_map.yaml`: Symbol mapping (Research -> Paper -> Live).
+Runs hourly via GitHub Actions. Artifacts are uploaded for inspection.

@@ -1,105 +1,88 @@
-"""
-Strategy Grammar
-Defines the components and composition rules for strategies.
-"""
-from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
+from abc import ABC, abstractmethod
+from typing import Dict, Any, List
+import pandas as pd
+import hashlib
+import json
 
-@dataclass
-class Parameter:
-    name: str
-    type: str  # int, float, bool, choice
-    min: Optional[float] = None
-    max: Optional[float] = None
-    step: Optional[float] = None
-    options: Optional[List[Any]] = None
-    default: Any = None
+class Strategy(ABC):
+    def __init__(self, params: Dict[str, Any]):
+        self.params = params
+        self.rule_summary = "Base Strategy"
 
-@dataclass
-class Block:
-    name: str
-    type: str  # entry, exit, filter
-    params: Dict[str, Parameter]
-    logic: str  # Description of logic
+    @abstractmethod
+    def generate_positions(self, df: pd.DataFrame) -> pd.Series:
+        """Return series of -1, 0, 1"""
+        pass
 
-# Registry of available blocks
-BLOCKS = {
-    # ENTRIES
-    "entry_trend_ema_cross": Block(
-        name="EMA Crossover",
-        type="entry",
-        params={
-            "fast_period": Parameter("fast_period", "int", 5, 50, 5, default=20),
-            "slow_period": Parameter("slow_period", "int", 20, 200, 10, default=50),
-            "adx_filter": Parameter("adx_filter", "bool", default=False),
-            "adx_threshold": Parameter("adx_threshold", "int", 15, 30, 5, default=20)
-        },
-        logic="Fast EMA crosses above Slow EMA. Optional ADX > threshold."
-    ),
-    "entry_breakout_donchian": Block(
-        name="Donchian Breakout",
-        type="entry",
-        params={
-            "period": Parameter("period", "int", 10, 60, 5, default=20),
-            "filter_ma": Parameter("filter_ma", "bool", default=True),
-            "ma_period": Parameter("ma_period", "int", 50, 200, 50, default=200)
-        },
-        logic="Close > Donchian High(period). Optional Close > SMA(ma_period)."
-    ),
-    "entry_mean_rev_rsi": Block(
-        name="RSI Reversion",
-        type="entry",
-        params={
-            "rsi_period": Parameter("rsi_period", "int", 2, 14, 2, default=7),
-            "oversold": Parameter("oversold", "int", 10, 40, 5, default=30),
-            "exit_rsi": Parameter("exit_rsi", "int", 50, 80, 5, default=60)
-        },
-        logic="RSI < oversold. Exit when RSI > exit_rsi (handled as internal exit condition)."
-    ),
+    @abstractmethod
+    def apply_risk_overlay(self, df: pd.DataFrame, positions: pd.Series) -> pd.Series:
+        """Apply stops/targets"""
+        pass
 
-    # RISKS (Stop Loss / Take Profit)
-    "risk_atr": Block(
-        name="ATR Stop",
-        type="risk",
-        params={
-            "atr_period": Parameter("atr_period", "int", 14, 14, 0, default=14),
-            "multiplier": Parameter("multiplier", "float", 1.0, 4.0, 0.5, default=2.0),
-            "trailing": Parameter("trailing", "bool", default=False)
-        },
-        logic="Stop Loss at Entry - (ATR * multiplier). Optional trailing."
-    ),
+    def get_id(self) -> str:
+        """Stable hash of params"""
+        s = json.dumps(self.params, sort_keys=True)
+        return hashlib.sha256(s.encode()).hexdigest()[:12]
 
-    # EXITS (Target)
-    "exit_rr": Block(
-        name="Risk Reward Target",
-        type="exit",
-        params={
-            "risk_reward": Parameter("risk_reward", "float", 1.5, 4.0, 0.5, default=2.0)
-        },
-        logic="Take Profit at Entry + (Risk * RiskReward)."
-    ),
-    "exit_time": Block(
-        name="Time Stop",
-        type="exit",
-        params={
-            "max_bars": Parameter("max_bars", "int", 12, 100, 12, default=36) # ~3-4 hours on 5m
-        },
-        logic="Exit after N bars."
-    )
-}
+    def __repr__(self):
+        return f"Strategy({self.rule_summary})"
 
-@dataclass
-class StrategyConfig:
-    entry_block: str
-    entry_params: Dict[str, Any]
-    risk_block: str
-    risk_params: Dict[str, Any]
-    exit_block: str
-    exit_params: Dict[str, Any]
-    id: str = ""
+class SimpleTrendStrategy(Strategy):
+    """
+    EMA Crossover + RSI Filter
+    """
+    def __init__(self, params: Dict[str, Any]):
+        super().__init__(params)
+        self.fast_period = params.get('ema_fast', 10)
+        self.slow_period = params.get('ema_slow', 50)
+        self.rsi_period = params.get('rsi_period', 14)
+        self.rsi_min = params.get('rsi_min', 40)
+        self.rsi_max = params.get('rsi_max', 60)
+        self.rule_summary = f"EMA Cross({self.fast_period}/{self.slow_period}) + RSI({self.rsi_period}) in [{self.rsi_min}, {self.rsi_max}]"
 
-    def get_hash(self):
-        import hashlib
-        import json
-        s = json.dumps(self.__dict__, sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()
+    def generate_positions(self, df: pd.DataFrame) -> pd.Series:
+        ema_fast = df[f"ema_{self.fast_period}"] if f"ema_{self.fast_period}" in df else df['close'].ewm(span=self.fast_period).mean()
+        ema_slow = df[f"ema_{self.slow_period}"] if f"ema_{self.slow_period}" in df else df['close'].ewm(span=self.slow_period).mean()
+        rsi = df['rsi'] if 'rsi' in df else pd.Series(50, index=df.index)
+
+        long_cond = (ema_fast > ema_slow) & (rsi > self.rsi_min)
+        short_cond = (ema_fast < ema_slow) & (rsi < self.rsi_max)
+
+        positions = pd.Series(0, index=df.index)
+        positions[long_cond] = 1
+        positions[short_cond] = -1 # Assuming short enabled, if not engine will filter
+
+        return positions
+
+    def apply_risk_overlay(self, df: pd.DataFrame, positions: pd.Series) -> pd.Series:
+        # Simple stop logic could be applied here, but for now we trust the signal
+        # Engine handles ATR stops usually.
+        # But if we want time-based exits or specific logic:
+        return positions
+
+class MeanReversionStrategy(Strategy):
+    """
+    Bollinger Band + RSI Reversion
+    """
+    def __init__(self, params):
+        super().__init__(params)
+        self.rsi_lower = params.get('rsi_lower', 30)
+        self.rsi_upper = params.get('rsi_upper', 70)
+        self.rule_summary = f"BB Reversion + RSI < {self.rsi_lower} / > {self.rsi_upper}"
+
+    def generate_positions(self, df: pd.DataFrame) -> pd.Series:
+        close = df['close']
+        bb_lower = df['bb_lower']
+        bb_upper = df['bb_upper']
+        rsi = df['rsi']
+
+        long_cond = (close < bb_lower) & (rsi < self.rsi_lower)
+        short_cond = (close > bb_upper) & (rsi > self.rsi_upper)
+
+        positions = pd.Series(0, index=df.index)
+        positions[long_cond] = 1
+        positions[short_cond] = -1
+        return positions
+
+    def apply_risk_overlay(self, df, positions):
+        return positions
