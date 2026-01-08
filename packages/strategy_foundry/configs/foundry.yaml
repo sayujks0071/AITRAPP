@@ -1,29 +1,12 @@
-# Packages/Strategy Foundry Configuration
-
-# Default settings for the foundry
 defaults:
-  timeframes:
-    - 5m
-    - 15m
-  folds: 4
-  fast_mode_folds: 2
-  max_candidates: 80
-  fast_mode_candidates: 15
-  start_date: "2023-01-01"  # Or dynamic lookup
-
-# Rejection thresholds
-thresholds:
-  min_trades_5m: 80
-  min_trades_15m: 40
-  max_drawdown: 0.30
-  min_profit_factor: 1.1
-  min_positive_folds: 3  # out of 4
-
-# Ranking weights
-weights:
-  sharpe: 0.25
-  calmar: 0.25
-  return: 0.20
-  stability: 0.15
-  low_turnover: 0.10
-  sanity: 0.05
+  timeframes: ["5m", "15m"]
+  lookback_days: 60
+  risk:
+    max_dd_percent: 30
+    min_trades: 40
+    min_sharpe: 1.0
+  live:
+    enabled: false
+    gating:
+      min_oos_sharpe: 1.2
+      max_dd_percent: 20

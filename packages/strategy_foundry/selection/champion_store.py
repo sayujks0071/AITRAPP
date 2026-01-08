@@ -1,38 +1,59 @@
 """
-Champion Store
-Manages persistence of champion strategies.
+Champion Persistence.
 """
-import json
 import os
-from pathlib import Path
-from datetime import datetime
+import json
+import structlog
 from packages.strategy_foundry.factory.grammar import StrategyConfig
 
-CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+logger = structlog.get_logger(__name__)
+
+CHAMP_DIR = os.path.join(os.path.dirname(__file__), "..", "results", "champions")
 
 class ChampionStore:
     def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+        os.makedirs(CHAMP_DIR, exist_ok=True)
+        self.current_path = os.path.join(CHAMP_DIR, "current.json")
 
-    def load_current(self) -> dict:
-        path = CHAMPION_DIR / "current.json"
-        if path.exists():
-            with open(path, 'r') as f:
-                return json.load(f)
-        return {}
+    def load_champion(self) -> dict:
+        if not os.path.exists(self.current_path):
+            return None
+        try:
+            with open(self.current_path, "r") as f:
+                data = json.load(f)
+                # Ensure we can reconstruct config
+                data["candidate"] = StrategyConfig.from_json(data["candidate_json"])
+                return data
+        except Exception as e:
+            logger.error("Failed to load champion", error=str(e))
+            return None
 
-    def save_new_champion(self, strategy: dict, metrics: dict, timeframe: str, run_ts: str):
-        # Save historical version
-        version_file = CHAMPION_DIR / f"{run_ts}_{strategy['id']}.json"
-        data = {
-            "strategy": strategy,
-            "metrics": metrics,
-            "timeframe": timeframe,
-            "promoted_at": run_ts
+    def save_champion(self, champion_data: dict):
+        """
+        Save champion.
+        champion_data: {
+            "candidate": StrategyConfig object,
+            "metrics": dict,
+            "score": float,
+            "instrument": str,
+            "timeframe": str
         }
-        with open(version_file, 'w') as f:
+        """
+        # Serialize candidate
+        data = champion_data.copy()
+        data["candidate_json"] = data["candidate"].to_json()
+        del data["candidate"] # Remove object
+
+        # Save current
+        with open(self.current_path, "w") as f:
             json.dump(data, f, indent=2)
 
-        # Update current
-        with open(CHAMPION_DIR / "current.json", 'w') as f:
+        # Versioned
+        ts = int(os.path.getmtime(self.current_path)) if os.path.exists(self.current_path) else 0 # Use file time or now
+        # Actually better to use ID
+        cid = champion_data["candidate"].id
+        v_path = os.path.join(CHAMP_DIR, f"{cid}.json")
+        with open(v_path, "w") as f:
             json.dump(data, f, indent=2)
+
+        logger.info("Champion saved", id=cid)

@@ -1,30 +1,52 @@
 """
-Live Signal Publisher
-Publishes trade signals to JSON artifact.
+Live Signal Publisher.
 """
 import json
+import os
 from datetime import datetime
-from pathlib import Path
-from packages.strategy_foundry.adapters.core_market_hours import IST, MarketHoursGuard
+from packages.strategy_foundry.configs.config import load_instrument_map
+from packages.strategy_foundry.adapters.core_market_hours import FoundryMarketHours, IST
 
-OUTPUT_FILE = Path("packages/strategy_foundry/results/live_signal.json")
+RESULTS_DIR = os.path.join(os.path.dirname(__file__), "..", "results")
 
 class SignalPublisher:
-    @staticmethod
-    def publish(signal_data: dict):
-        OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self):
+        self.instrument_map = load_instrument_map()
+        self.market_hours = FoundryMarketHours()
 
-        # Add timestamp if missing
-        if "timestamp_ist" not in signal_data:
-            signal_data["timestamp_ist"] = datetime.now(IST).isoformat()
+    def publish(self, champion: dict, signal: int, reason: str = ""):
+        """
+        Publish signal artifact.
+        """
+        os.makedirs(RESULTS_DIR, exist_ok=True)
 
-        with open(OUTPUT_FILE, 'w') as f:
-            json.dump(signal_data, f, indent=2)
+        now = datetime.now(IST)
+        is_open = self.market_hours.is_market_open(now)
 
-    @staticmethod
-    def publish_skipped(reason: str):
-        SignalPublisher.publish({
-            "status": "SKIPPED",
-            "reason": reason,
-            "timestamp_ist": datetime.now(IST).isoformat()
-        })
+        status = "OK"
+        if not is_open:
+            status = "SKIPPED"
+            reason = "Market Closed"
+        elif champion is None:
+            status = "SKIPPED"
+            reason = reason or "No Eligible Champion"
+
+        output = {
+            "timestamp_ist": now.isoformat(),
+            "champion_id": champion.get("id") if champion else None,
+            "timeframe": champion.get("timeframe") if champion else None,
+            "instrument": "NIFTY", # TODO: Dynamic
+            "proxy_symbol_paper": self.instrument_map.get("paper_proxy", {}).get("NIFTY"),
+            "proxy_symbol_live": self.instrument_map.get("live_proxy", {}).get("NIFTY"),
+            "signal": signal,
+            "rule_summary": champion.get("rule_summary") if champion else "",
+            "risk": champion.get("risk_config", {"stop": "ATR", "flat_by": "15:25"}) if champion else {},
+            "status": status,
+            "reason": reason
+        }
+
+        path = os.path.join(RESULTS_DIR, "live_signal.json")
+        with open(path, "w") as f:
+            json.dump(output, f, indent=2)
+
+        return output
