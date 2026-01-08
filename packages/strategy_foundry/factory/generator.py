@@ -1,66 +1,35 @@
-"""
-Strategy Generator
-Generates random strategies based on the grammar.
-"""
-import random
 from typing import List
-from packages.strategy_foundry.factory.grammar import BLOCKS, StrategyConfig, Parameter
+from .grammar import Strategy, SimpleTrendStrategy, MeanReversionStrategy
+from .parameter_space import ParameterSpace
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 class StrategyGenerator:
-    @staticmethod
-    def generate_random_param(param: Parameter):
-        if param.type == "int":
-            return random.randrange(param.min, param.max + param.step, param.step)
-        elif param.type == "float":
-            # Avoid floating point weirdness
-            steps = int((param.max - param.min) / param.step)
-            return round(param.min + (random.randint(0, steps) * param.step), 2)
-        elif param.type == "bool":
-            return random.choice([True, False])
-        elif param.type == "choice":
-            return random.choice(param.options)
-        return param.default
+    def __init__(self, count: int = 50):
+        self.count = count
 
-    @staticmethod
-    def generate_candidate() -> StrategyConfig:
-        # Pick one entry
-        entry_names = [k for k, v in BLOCKS.items() if v.type == "entry"]
-        entry_name = random.choice(entry_names)
-        entry_block = BLOCKS[entry_name]
-        entry_params = {
-            name: StrategyGenerator.generate_random_param(p)
-            for name, p in entry_block.params.items()
-        }
+    def generate(self) -> List[Strategy]:
+        strategies = []
+        seen_ids = set()
 
-        # Pick one risk
-        risk_names = [k for k, v in BLOCKS.items() if v.type == "risk"]
-        risk_name = random.choice(risk_names)
-        risk_block = BLOCKS[risk_name]
-        risk_params = {
-            name: StrategyGenerator.generate_random_param(p)
-            for name, p in risk_block.params.items()
-        }
+        for _ in range(self.count * 2): # Try 2x to hit count
+            if len(strategies) >= self.count:
+                break
 
-        # Pick one exit
-        exit_names = [k for k, v in BLOCKS.items() if v.type == "exit"]
-        exit_name = random.choice(exit_names)
-        exit_block = BLOCKS[exit_name]
-        exit_params = {
-            name: StrategyGenerator.generate_random_param(p)
-            for name, p in exit_block.params.items()
-        }
+            # Randomly pick type
+            import random
+            if random.random() < 0.6: # Favor trend
+                params = ParameterSpace.get_random_trend_params()
+                strat = SimpleTrendStrategy(params)
+            else:
+                params = ParameterSpace.get_random_mean_rev_params()
+                strat = MeanReversionStrategy(params)
 
-        config = StrategyConfig(
-            entry_block=entry_name,
-            entry_params=entry_params,
-            risk_block=risk_name,
-            risk_params=risk_params,
-            exit_block=exit_name,
-            exit_params=exit_params
-        )
-        config.id = config.get_hash()
-        return config
+            sid = strat.get_id()
+            if sid not in seen_ids:
+                seen_ids.add(sid)
+                strategies.append(strat)
 
-    @staticmethod
-    def generate_population(n: int) -> List[StrategyConfig]:
-        return [StrategyGenerator.generate_candidate() for _ in range(n)]
+        logger.info(f"Generated {len(strategies)} unique strategies")
+        return strategies

@@ -1,0 +1,32 @@
+{
+  "id": "5a65c85f4fe3",
+  "promoted_at": "20260107_061437",
+  "params": {
+    "type": "SimpleTrend",
+    "ema_fast": 50,
+    "ema_slow": 100,
+    "rsi_period": 14,
+    "rsi_min": 40,
+    "rsi_max": 50,
+    "stop_atr_mult": 2.0
+  },
+  "metrics": {
+    "cagr": 0.0036313225346493727,
+    "sharpe": 0.12679664796097181,
+    "sortino": 0.21389764171864717,
+    "max_dd": 0.034552951918609034,
+    "calmar": 0.10509442270527593,
+    "win_rate": 0.21428571428571427,
+    "profit_factor": 1.3190576849933213,
+    "trades": 14,
+    "positive_folds": 1,
+    "min_fold_sharpe": -0.24940923752730887,
+    "stability_score": 2.1230394611349896,
+    "fold_sharpes": [
+      -0.24940923752730887,
+      0.4926363704854541
+    ]
+  },
+  "score": 1.0,
+  "rule_summary": "EMA Cross(50/100) + RSI(14) in [40, 50]"
+}

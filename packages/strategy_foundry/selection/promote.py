@@ -1,20 +1,29 @@
-"""
-Promotion Logic
-Decides if a candidate should replace the current champion.
-"""
-class Promoter:
-    @staticmethod
-    def should_promote(challenger_metrics: dict, champion_metrics: dict) -> bool:
-        if not champion_metrics:
+from typing import Dict, Any, Optional
+
+def should_promote(challenger: Dict[str, Any], champion: Optional[Dict[str, Any]]) -> bool:
+    """
+    Check if challenger should replace champion.
+    """
+    if not champion:
+        return True
+
+    # Scores
+    c_score = champion.get('score', 0)
+    ch_score = challenger.get('score', 0)
+
+    # Check score improvement (10%)
+    if ch_score > c_score * 1.10:
+        return True
+
+    # Check MaxDD improvement (Materially lower, e.g. 20% less DD)
+    # Note: MaxDD is a positive number (0.20 = 20%)
+    c_dd = champion.get('metrics', {}).get('max_dd', 1.0)
+    ch_dd = challenger.get('metrics', {}).get('max_dd', 1.0)
+
+    if ch_dd < c_dd * 0.8:
+        # But must not degrade Return too much?
+        # Let's say if Score is at least 90% of champion
+        if ch_score > c_score * 0.90:
             return True
 
-        # Rule: Beat score by >= 10%
-        if challenger_metrics['score'] >= champion_metrics['score'] * 1.1:
-            return True
-
-        # Rule: Reduce MaxDD by >= 5% absolute, without degrading Sharpe
-        if (champion_metrics['max_drawdown'] - challenger_metrics['max_drawdown'] >= 0.05) and \
-           (challenger_metrics['sharpe'] >= champion_metrics['sharpe'] * 0.9):
-            return True
-
-        return False
+    return False

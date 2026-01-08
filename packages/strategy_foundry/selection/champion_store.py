@@ -1,38 +1,58 @@
-"""
-Champion Store
-Manages persistence of champion strategies.
-"""
 import json
-import os
+import shutil
 from pathlib import Path
-from datetime import datetime
-from packages.strategy_foundry.factory.grammar import StrategyConfig
+from typing import Dict, Any, Optional
+import structlog
 
-CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+logger = structlog.get_logger(__name__)
 
 class ChampionStore:
-    def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+    def __init__(self, base_dir: Path):
+        self.base_dir = base_dir
+        self.current_file = base_dir / "current.json"
+        self.history_dir = base_dir / "history"
+        self.history_dir.mkdir(parents=True, exist_ok=True)
 
-    def load_current(self) -> dict:
-        path = CHAMPION_DIR / "current.json"
-        if path.exists():
-            with open(path, 'r') as f:
+    def load_champion(self) -> Optional[Dict[str, Any]]:
+        if not self.current_file.exists():
+            return None
+        try:
+            with open(self.current_file, 'r') as f:
                 return json.load(f)
-        return {}
+        except Exception as e:
+            logger.error(f"Failed to load champion: {e}")
+            return None
 
-    def save_new_champion(self, strategy: dict, metrics: dict, timeframe: str, run_ts: str):
-        # Save historical version
-        version_file = CHAMPION_DIR / f"{run_ts}_{strategy['id']}.json"
-        data = {
-            "strategy": strategy,
-            "metrics": metrics,
-            "timeframe": timeframe,
-            "promoted_at": run_ts
+    def promote_champion(self, candidate: Dict[str, Any], timestamp: str):
+        """
+        Promote a new champion.
+        candidate: dict with id, params, metrics, score
+        """
+        # Archive current if exists
+        if self.current_file.exists():
+            # Generate backup name
+            # Try to read ID from it
+            old_champ = self.load_champion()
+            old_id = old_champ.get('id', 'unknown') if old_champ else 'unknown'
+            archive_path = self.history_dir / f"{timestamp}_archived_{old_id}.json"
+            shutil.copy(self.current_file, archive_path)
+
+        # Save new
+        champion_data = {
+            "id": candidate['id'],
+            "promoted_at": timestamp,
+            "params": candidate['params'],
+            "metrics": candidate['metrics'],
+            "score": candidate['score'],
+            "rule_summary": candidate['rule_summary']
         }
-        with open(version_file, 'w') as f:
-            json.dump(data, f, indent=2)
 
-        # Update current
-        with open(CHAMPION_DIR / "current.json", 'w') as f:
-            json.dump(data, f, indent=2)
+        with open(self.current_file, 'w') as f:
+            json.dump(champion_data, f, indent=2)
+
+        # Also save a versioned copy
+        version_path = self.history_dir / f"{timestamp}_{candidate['id']}.json"
+        with open(version_path, 'w') as f:
+            json.dump(champion_data, f, indent=2)
+
+        logger.info(f"Promoted new champion: {candidate['id']}")

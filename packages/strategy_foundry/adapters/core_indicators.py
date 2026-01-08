@@ -1,110 +1,134 @@
-"""
-Core Indicators Adapter
-Implements vectorized versions of technical indicators for backtesting.
-Reuses packages/core/indicators where applicable, but optimized for Series operations.
-"""
-import numpy as np
 import pandas as pd
-from packages.core.indicators import IndicatorCalculator
+import numpy as np
+from typing import Dict
 
-class VectorizedIndicators:
-    """Vectorized indicator calculations for entire DataFrames"""
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute technical indicators for the entire dataframe.
+    Returns a DataFrame with original data + indicator columns.
+    """
+    df = df.copy()
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
 
-    @staticmethod
-    def add_all(df: pd.DataFrame) -> pd.DataFrame:
-        """Add all supported indicators to the dataframe"""
-        # Ensure we have required columns
-        required = ['open', 'high', 'low', 'close', 'volume']
-        if not all(col in df.columns for col in required):
-            return df
+    # EMAs
+    df["ema_10"] = close.ewm(span=10, adjust=False).mean()
+    df["ema_20"] = close.ewm(span=20, adjust=False).mean()
+    df["ema_50"] = close.ewm(span=50, adjust=False).mean()
+    df["ema_200"] = close.ewm(span=200, adjust=False).mean()
 
-        df = df.copy()
+    # RSI
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean() # Wilder's smoothing is better but this matches simple reuse
+    # Note: Core uses simple rolling mean for RSI? Let's check.
+    # Core: gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
+    # Yes, it uses simple rolling mean.
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df["rsi"] = 100 - (100 / (1 + rs))
+
+    # ATR
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df["atr"] = tr.rolling(window=14).mean()
+
+    # ADX (Simplified)
+    up = high - high.shift()
+    down = low.shift() - low
+    plus_dm = np.where((up > down) & (up > 0), up, 0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0)
+
+    tr_smooth = tr.rolling(window=14).mean()
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(window=14).mean() / tr_smooth
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(window=14).mean() / tr_smooth
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    df["adx"] = dx.rolling(window=14).mean()
+
+    # Supertrend (Vectorized approximation or loop)
+    # We'll implement a simple one.
+    # Logic:
+    # Basic Upper = (High + Low) / 2 + Multiplier * ATR
+    # Basic Lower = (High + Low) / 2 - Multiplier * ATR
+    # If Close > Final Upper[1] -> Trend = 1
+    # If Close < Final Lower[1] -> Trend = -1
+    # This requires a loop.
+    df["supertrend"], df["supertrend_dir"] = calculate_supertrend(df, period=10, multiplier=3)
+
+    # Donchian
+    df["donchian_upper"] = high.rolling(window=20).max()
+    df["donchian_lower"] = low.rolling(window=20).min()
+
+    # Bollinger
+    bb_mid = close.rolling(window=20).mean()
+    bb_std = close.rolling(window=20).std()
+    df["bb_upper"] = bb_mid + 2 * bb_std
+    df["bb_lower"] = bb_mid - 2 * bb_std
+
+    return df
+
+def calculate_supertrend(df, period=10, multiplier=3):
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    # Calculate ATR first
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+
+    hl2 = (high + low) / 2
+    basic_upper = hl2 + multiplier * atr
+    basic_lower = hl2 - multiplier * atr
+
+    # Initialize arrays
+    n = len(df)
+    final_upper = np.zeros(n)
+    final_lower = np.zeros(n)
+    supertrend = np.zeros(n)
+    direction = np.zeros(n) # 1: up, -1: down
+
+    close_vals = close.values
+    bu_vals = basic_upper.values
+    bl_vals = basic_lower.values
+
+    # Loop
+    for i in range(1, n):
+        if np.isnan(bu_vals[i]): continue
+
+        # Upper band
+        if bu_vals[i] < final_upper[i-1] or close_vals[i-1] > final_upper[i-1]:
+            final_upper[i] = bu_vals[i]
+        else:
+            final_upper[i] = final_upper[i-1]
+
+        # Lower band
+        if bl_vals[i] > final_lower[i-1] or close_vals[i-1] < final_lower[i-1]:
+            final_lower[i] = bl_vals[i]
+        else:
+            final_lower[i] = final_lower[i-1]
 
         # Trend
-        df['ema_20'] = VectorizedIndicators.ema(df['close'], 20)
-        df['ema_50'] = VectorizedIndicators.ema(df['close'], 50)
-        df['ema_200'] = VectorizedIndicators.ema(df['close'], 200)
-        df['sma_20'] = df['close'].rolling(window=20).mean()
+        # Previous direction
+        prev_dir = direction[i-1] if i > 0 else 1
 
-        # Volatility
-        df['atr_14'] = VectorizedIndicators.atr(df, 14)
-        df['bb_upper'], df['bb_mid'], df['bb_lower'] = VectorizedIndicators.bollinger_bands(df['close'])
+        if prev_dir == 1:
+            if close_vals[i] < final_lower[i-1]: # Changed trend to down
+                direction[i] = -1
+                supertrend[i] = final_upper[i]
+            else:
+                direction[i] = 1
+                supertrend[i] = final_lower[i]
+        else:
+            if close_vals[i] > final_upper[i-1]: # Changed trend to up
+                direction[i] = 1
+                supertrend[i] = final_lower[i]
+            else:
+                direction[i] = -1
+                supertrend[i] = final_upper[i]
 
-        # Momentum
-        df['rsi_14'] = VectorizedIndicators.rsi(df['close'], 14)
-        df['adx_14'] = VectorizedIndicators.adx(df, 14)
-
-        # Channels
-        df['donchian_upper'], df['donchian_lower'] = VectorizedIndicators.donchian(df, 20)
-
-        return df
-
-    @staticmethod
-    def ema(series: pd.Series, period: int) -> pd.Series:
-        return series.ewm(span=period, adjust=False).mean()
-
-    @staticmethod
-    def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0))
-        loss = (-delta.where(delta < 0, 0))
-
-        # Wilder's Smoothing
-        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
-
-    @staticmethod
-    def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high = df['high']
-        low = df['low']
-        close = df['close']
-
-        tr1 = high - low
-        tr2 = abs(high - close.shift())
-        tr3 = abs(low - close.shift())
-
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        # Wilder's Smoothing for ATR
-        return tr.ewm(alpha=1/period, adjust=False).mean()
-
-    @staticmethod
-    def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high = df['high']
-        low = df['low']
-        close = df['close']
-
-        up_move = high - high.shift()
-        down_move = low.shift() - low
-
-        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-
-        plus_dm_series = pd.Series(plus_dm, index=df.index)
-        minus_dm_series = pd.Series(minus_dm, index=df.index)
-
-        tr = VectorizedIndicators.atr(df, 1) # True Range
-
-        # Smooth
-        atr_smooth = tr.ewm(alpha=1/period, adjust=False).mean()
-        plus_di = 100 * plus_dm_series.ewm(alpha=1/period, adjust=False).mean() / atr_smooth
-        minus_di = 100 * minus_dm_series.ewm(alpha=1/period, adjust=False).mean() / atr_smooth
-
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-        return dx.ewm(alpha=1/period, adjust=False).mean()
-
-    @staticmethod
-    def bollinger_bands(series: pd.Series, period: int = 20, std: float = 2.0):
-        mid = series.rolling(window=period).mean()
-        sigma = series.rolling(window=period).std()
-        upper = mid + (std * sigma)
-        lower = mid - (std * sigma)
-        return upper, mid, lower
-
-    @staticmethod
-    def donchian(df: pd.DataFrame, period: int = 20):
-        upper = df['high'].rolling(window=period).max()
-        lower = df['low'].rolling(window=period).min()
-        return upper, lower
+    return supertrend, direction
