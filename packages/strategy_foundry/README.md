@@ -1,44 +1,44 @@
 # Aggressive Intraday Strategy Foundry
 
-Automated research lab that generates, backtests, and selects intraday trading strategies for Indian markets.
+Automated research lab that generates, backtests, and selects intraday trading strategies (5m, 15m) for Indian markets (NIFTY/SENSEX).
 
 ## Overview
 
-The foundry runs hourly (during market hours) to:
-1.  **Generate** random strategies based on a grammar of valid trading components.
-2.  **Backtest** these strategies on 5m and 15m timeframes using Walk-Forward Optimization.
-3.  **Rank** them based on risk-adjusted returns, stability, and robustness.
-4.  **Promote** a "Champion" strategy if it beats the incumbent.
-5.  **Publish** a live signal artifact (`live_signal.json`) if the champion signals an entry.
-
-## Architecture
-
--   `adapters/`: Bridges to Core system (Indicators, Market Hours).
--   `data/`: Manages data loading and caching (Yahoo Finance).
--   `factory/`: Strategy grammar and random generation.
--   `backtest/`: Vectorized + Event-driven hybrid engine.
--   `selection/`: Ranking and promotion logic.
--   `live/`: Signal publication.
+- **Generates** thousands of strategies using a grammar (Trend, Breakout, Mean Reversion).
+- **Backtests** on 5m and 15m data (Yahoo Finance fallback).
+- **Ranks** using Sharpe, Calmar, Stability, and Robustness.
+- **Publishes** a JSON signal artifact for consumption.
+- **Safe**: No live trading by default. Signal only.
 
 ## Usage
 
 ### Run Manually
 
 ```bash
-# Full mode
+export PYTHONPATH=.
 python packages/strategy_foundry/run_hourly.py
-
-# Fast mode (fewer candidates, fewer folds)
-FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
 ```
 
-### Outputs
+### Configuration
 
--   **Run Artifacts**: `results/runs/<timestamp>/` (candidates, metrics, leaderboard).
--   **Live Signal**: `results/live_signal.json`.
--   **Champion**: `results/champions/current.json`.
+- `configs/foundry.yaml`: Global settings (risk limits, timeframes).
+- `configs/instrument_map.yaml`: Symbol mapping (Research -> Live).
 
-## Configuration
+### Output
 
--   `configs/foundry.yaml`: Foundry settings (thresholds, weights).
--   `configs/instrument_map.yaml`: Symbol mapping (Research -> Paper -> Live).
+Results are stored in `results/`:
+- `live_signal.json`: Current trading signal.
+- `champions/`: Saved champion strategies.
+- `runs/`: Logs and leaderboards.
+
+## Live Trading
+
+Live trading is **OFF** by default.
+To enable:
+1. Set `ENABLE_LIVE=true` env var.
+2. Create `approvals/ALLOW_LIVE.txt`.
+3. Ensure core kill-switches are inactive.
+
+## Data
+
+Uses `requests` to fetch data from Yahoo Finance if Core data is unavailable. Caches to CSV.

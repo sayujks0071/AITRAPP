@@ -1,105 +1,85 @@
 """
-Strategy Grammar
-Defines the components and composition rules for strategies.
+Strategy Grammar and Parameter Space.
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
-
-@dataclass
-class Parameter:
-    name: str
-    type: str  # int, float, bool, choice
-    min: Optional[float] = None
-    max: Optional[float] = None
-    step: Optional[float] = None
-    options: Optional[List[Any]] = None
-    default: Any = None
-
-@dataclass
-class Block:
-    name: str
-    type: str  # entry, exit, filter
-    params: Dict[str, Parameter]
-    logic: str  # Description of logic
-
-# Registry of available blocks
-BLOCKS = {
-    # ENTRIES
-    "entry_trend_ema_cross": Block(
-        name="EMA Crossover",
-        type="entry",
-        params={
-            "fast_period": Parameter("fast_period", "int", 5, 50, 5, default=20),
-            "slow_period": Parameter("slow_period", "int", 20, 200, 10, default=50),
-            "adx_filter": Parameter("adx_filter", "bool", default=False),
-            "adx_threshold": Parameter("adx_threshold", "int", 15, 30, 5, default=20)
-        },
-        logic="Fast EMA crosses above Slow EMA. Optional ADX > threshold."
-    ),
-    "entry_breakout_donchian": Block(
-        name="Donchian Breakout",
-        type="entry",
-        params={
-            "period": Parameter("period", "int", 10, 60, 5, default=20),
-            "filter_ma": Parameter("filter_ma", "bool", default=True),
-            "ma_period": Parameter("ma_period", "int", 50, 200, 50, default=200)
-        },
-        logic="Close > Donchian High(period). Optional Close > SMA(ma_period)."
-    ),
-    "entry_mean_rev_rsi": Block(
-        name="RSI Reversion",
-        type="entry",
-        params={
-            "rsi_period": Parameter("rsi_period", "int", 2, 14, 2, default=7),
-            "oversold": Parameter("oversold", "int", 10, 40, 5, default=30),
-            "exit_rsi": Parameter("exit_rsi", "int", 50, 80, 5, default=60)
-        },
-        logic="RSI < oversold. Exit when RSI > exit_rsi (handled as internal exit condition)."
-    ),
-
-    # RISKS (Stop Loss / Take Profit)
-    "risk_atr": Block(
-        name="ATR Stop",
-        type="risk",
-        params={
-            "atr_period": Parameter("atr_period", "int", 14, 14, 0, default=14),
-            "multiplier": Parameter("multiplier", "float", 1.0, 4.0, 0.5, default=2.0),
-            "trailing": Parameter("trailing", "bool", default=False)
-        },
-        logic="Stop Loss at Entry - (ATR * multiplier). Optional trailing."
-    ),
-
-    # EXITS (Target)
-    "exit_rr": Block(
-        name="Risk Reward Target",
-        type="exit",
-        params={
-            "risk_reward": Parameter("risk_reward", "float", 1.5, 4.0, 0.5, default=2.0)
-        },
-        logic="Take Profit at Entry + (Risk * RiskReward)."
-    ),
-    "exit_time": Block(
-        name="Time Stop",
-        type="exit",
-        params={
-            "max_bars": Parameter("max_bars", "int", 12, 100, 12, default=36) # ~3-4 hours on 5m
-        },
-        logic="Exit after N bars."
-    )
-}
+from typing import List, Dict, Any, Optional
+import random
+import hashlib
+import json
 
 @dataclass
 class StrategyConfig:
-    entry_block: str
-    entry_params: Dict[str, Any]
-    risk_block: str
-    risk_params: Dict[str, Any]
-    exit_block: str
-    exit_params: Dict[str, Any]
-    id: str = ""
+    id: str
+    entry_rules: List[Dict[str, Any]]
+    exit_rules: List[Dict[str, Any]]
+    filters: List[Dict[str, Any]]
+    params: Dict[str, Any]
+    timeframe: str
 
-    def get_hash(self):
-        import hashlib
-        import json
-        s = json.dumps(self.__dict__, sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()
+    def to_json(self):
+        return json.dumps(self.__dict__, sort_keys=True)
+
+    @staticmethod
+    def from_json(json_str):
+        data = json.loads(json_str)
+        return StrategyConfig(**data)
+
+class Grammar:
+    ENTRY_TYPES = ["trend_ema_cross", "breakout_donchian", "mean_reversion_rsi"]
+    EXIT_TYPES = ["atr_stop", "time_stop", "fixed_rr"]
+    FILTERS = ["ema_trend_filter", "time_filter"]
+
+    @staticmethod
+    def generate_random(timeframe: str) -> StrategyConfig:
+        entry_type = random.choice(Grammar.ENTRY_TYPES)
+        exit_type = random.choice(Grammar.EXIT_TYPES)
+        # Always include time filter for intraday
+        filters = [{"type": "time_filter", "params": {"start": "09:30", "end": "15:00"}}]
+
+        # Randomly add trend filter
+        if random.random() > 0.5:
+            filters.append({"type": "ema_trend_filter", "params": {"period": random.choice([50, 100, 200])}})
+
+        entry_rule = {"type": entry_type, "params": {}}
+        exit_rule = {"type": exit_type, "params": {}}
+
+        params = {}
+
+        if entry_type == "trend_ema_cross":
+            params["ema_fast"] = random.randint(5, 20)
+            params["ema_slow"] = random.randint(21, 50)
+        elif entry_type == "breakout_donchian":
+            params["donchian_period"] = random.choice([10, 20, 30, 40, 50])
+        elif entry_type == "mean_reversion_rsi":
+            params["rsi_period"] = 14
+            params["rsi_oversold"] = random.choice([20, 25, 30])
+            params["rsi_overbought"] = random.choice([70, 75, 80])
+
+        if exit_type == "atr_stop":
+            params["atr_period"] = 14
+            params["atr_multiplier"] = random.choice([1.5, 2.0, 3.0])
+        elif exit_type == "time_stop":
+            params["max_bars"] = random.choice([12, 24, 36]) # 1-3 hours on 5m
+        elif exit_type == "fixed_rr":
+             params["stop_loss_pct"] = random.choice([0.5, 1.0])
+             params["take_profit_pct"] = params["stop_loss_pct"] * random.choice([1.5, 2.0])
+
+        # Generate ID
+        spec = json.dumps({
+            "entry": entry_rule,
+            "exit": exit_rule,
+            "filters": filters,
+            "params": params,
+            "timeframe": timeframe
+        }, sort_keys=True)
+        sid = hashlib.md5(spec.encode()).hexdigest()[:8]
+
+        return StrategyConfig(
+            id=sid,
+            entry_rules=[entry_rule],
+            exit_rules=[exit_rule],
+            filters=filters,
+            params=params,
+            timeframe=timeframe
+        )
+

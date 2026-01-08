@@ -1,34 +1,23 @@
 # Deployment Guide
 
-## Live Signal Consumption
+## Architecture
 
-The foundry **does not** execute trades. It produces a signal artifact:
+The Foundry runs as an autonomous sidecar (GitHub Action or Cron Job). It produces `live_signal.json`.
 
-`packages/strategy_foundry/results/live_signal.json`
+The Core Execution System (if enabled) reads this JSON and executes orders.
 
-### Schema
-```json
-{
-  "timestamp_ist": "2023-10-27T10:15:00+05:30",
-  "champion_id": "a1b2c3...",
-  "timeframe": "5m",
-  "instrument": "NIFTY",
-  "proxy_symbol_live": "NIFTY 50",
-  "signal": 1,
-  "status": "OK"
-}
-```
+## Safety Gates
 
--   `signal`: `1` (Buy), `-1` (Sell), `0` (Neutral).
--   `status`: `OK` or `SKIPPED`.
+1. **Signal Artifact**: Pure JSON. No broker code in Foundry.
+2. **Environment**: `ENABLE_LIVE=true` required.
+3. **File Lock**: `approvals/ALLOW_LIVE.txt` required.
+4. **Market Hours**: Strict session enforcement.
 
-### Gating
-Live execution requires:
-1.  `ENABLE_LIVE=true` environment variable.
-2.  `approvals/ALLOW_LIVE.txt` file presence.
-3.  Core system kill-switches inactive.
+## Consumption
 
-## Paper Trading
-To run in paper mode:
-1.  Ensure `instrument_map.yaml` has correct `paper_proxy` symbols.
-2.  Consume the JSON and route to a paper broker account.
+To consume the signal:
+1. Parse `results/live_signal.json`.
+2. Verify `status == "OK"`.
+3. Check `timestamp_ist` is fresh (< 5 mins).
+4. Map `signal` (1, -1, 0) to orders.
+5. Use `proxy_symbol_live` for execution.

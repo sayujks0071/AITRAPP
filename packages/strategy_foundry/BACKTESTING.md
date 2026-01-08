@@ -1,24 +1,30 @@
 # Backtesting Methodology
 
-## Data Strategy
--   **Primary**: 5m and 15m intraday bars.
--   **Sanity**: 1D bars for checking major trend alignment and structural breaks.
--   **Source**: Yahoo Finance (cached locally).
--   **Timezone**: Normalized to Asia/Kolkata (IST).
+## Data Sources
 
-## Engine
--   **Type**: Hybrid.
-    -   **Signal Generation**: Vectorized (Pandas/NumPy) for speed.
-    -   **Execution**: Event-driven loop to strictly enforce intraday constraints (time stops, EOD exits).
--   **Execution Price**: Next Open (after signal).
--   **Costs**:
-    -   Slippage: 5 bps per side.
-    -   Commission: 3 bps per side.
+1. **Core**: If available, high-quality broker data.
+2. **Yahoo Finance**: Fallback. 5m/15m data (last 60 days).
 
-## Validation
--   **Walk-Forward**: Data is split into 4 folds (default).
--   **Ranking**: Strategies are ranked on Out-of-Sample (OOS) performance only.
--   **Overfitting Guards**:
-    -   Must have positive expectancy in 3/4 folds.
-    -   Max Drawdown < 30%.
-    -   Profit Factor > 1.1.
+## Execution Model
+
+- **Signals**: Generated on Bar Close.
+- **Entry**: Next Bar Open.
+- **Costs**: 5bps slippage + 2bps transaction cost per side.
+- **Intraday**:
+  - Entries allowed 09:15 - 15:20 IST.
+  - Hard close at 15:25 IST.
+  - No overnight positions.
+
+## Walk-Forward Analysis
+
+Strategies are evaluated on Out-of-Sample (OOS) data.
+- **Fast Mode**: 2 folds.
+- **Full Mode**: 4 folds.
+
+## Sanity Checks
+
+- **1D Sanity**: Top intraday candidates are checked on Daily data to ensure they aren't counter to major trends (fragility check).
+- **Filters**:
+  - Min Trades: 40
+  - Min Sharpe: 1.0
+  - Max Drawdown: 30%
