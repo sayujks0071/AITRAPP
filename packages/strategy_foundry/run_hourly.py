@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.append(os.getcwd())
 
 from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.factory.generator import StrategyGenerator
+from packages.strategy_foundry.factory.generator import StrategyGenerator, StrategyConfig
 from packages.strategy_foundry.backtest.engine import BacktestEngine
 from packages.strategy_foundry.backtest.walkforward import WalkForward
 from packages.strategy_foundry.backtest.metrics import BacktestMetrics
@@ -71,6 +71,8 @@ def main():
     research_symbol = instrument_map['research']['NIFTY']
 
     for tf in config['defaults']['timeframes']:
+        if tf == "1d": continue # Skip 1d for training, used for sanity
+
         logger.info(f"Processing {research_symbol} {tf}")
 
         # Load Data
@@ -90,12 +92,6 @@ def main():
             fold_metrics = []
 
             for train_df, test_df in splits:
-                engine = BacktestEngine(train_df) # Train on train_df?
-                # Actually, standard WF is optimize on train, test on test.
-                # Here we are just evaluating the random candidate on OOS.
-                # We don't optimize params per fold (that's too heavy for now).
-                # We treat the candidate as fixed.
-
                 # Test on OOS
                 test_engine = BacktestEngine(test_df)
                 trades, equity = test_engine.run(cand)
@@ -103,7 +99,9 @@ def main():
                 fold_metrics.append(metrics)
 
             # Aggregate OOS metrics
-            # Average Sharpe, Total Net Profit, etc.
+            if not fold_metrics:
+                continue
+
             avg_sharpe = sum(m['sharpe'] for m in fold_metrics) / len(fold_metrics)
             avg_calmar = sum(m['calmar'] for m in fold_metrics) / len(fold_metrics)
             avg_cagr = sum(m['cagr'] for m in fold_metrics) / len(fold_metrics)
@@ -117,7 +115,9 @@ def main():
                 "cagr": avg_cagr,
                 "max_drawdown": max_dd,
                 "positive_folds": positive_folds,
-                "total_trades": sum(m['total_trades'] for m in fold_metrics)
+                "total_trades": sum(m['total_trades'] for m in fold_metrics),
+                "profit_factor": sum(m['profit_factor'] for m in fold_metrics) / len(fold_metrics),
+                "net_profit": sum(m['net_profit'] for m in fold_metrics)
             }
 
             # Score
@@ -136,115 +136,86 @@ def main():
 
     # Convert to DataFrame
     df_results = pd.DataFrame(all_results)
-    if df_results.empty:
-        logger.warning("No results to rank")
-        return
 
-    # Calculate Blended Score if multiple timeframes exist
-    # Group by ID
-    pivot = df_results.pivot(index='id', columns='timeframe', values='score')
+    ranked_df = pd.DataFrame() # Initialize empty
 
-    # If we have both 5m and 15m, calculate blended
-    # blended_score = 0.6*score_15m + 0.4*score_5m
-    if '5m' in pivot.columns and '15m' in pivot.columns:
-        pivot['blended_score'] = (0.6 * pivot['15m'].fillna(0)) + (0.4 * pivot['5m'].fillna(0))
-        # If one is missing, use the other? Or require both?
-        # Requirement: "else use whichever exists"
-        pivot['blended_score'] = pivot.apply(
-            lambda x: (0.6 * x['15m'] + 0.4 * x['5m']) if pd.notna(x['15m']) and pd.notna(x['5m'])
-            else (x['15m'] if pd.notna(x['15m']) else x['5m']), axis=1
-        )
-    elif '15m' in pivot.columns:
-        pivot['blended_score'] = pivot['15m']
-    elif '5m' in pivot.columns:
-        pivot['blended_score'] = pivot['5m']
-    else:
-        pivot['blended_score'] = 0
+    if not df_results.empty:
+        # Calculate Blended Score if multiple timeframes exist
+        pivot = df_results.pivot(index='id', columns='timeframe', values='score')
 
-    # Merge blended score back to candidates
-    # We take the row with the best single timeframe performance as the base?
-    # Or we construct a "blended" candidate object.
-    # For simplicity, we attach blended_score to the best performing timeframe row for that ID.
-
-    # Let's re-rank based on blended score.
-    pivot = pivot.sort_values('blended_score', ascending=False)
-
-    ranked_results = []
-    for cid in pivot.index:
-        # Find original rows
-        rows = df_results[df_results['id'] == cid]
-        if rows.empty: continue
-
-        # Pick the representative row (prefer 15m for config/metrics baseline)
-        # But wait, if we pick 15m, the timeframe in res_dict will be 15m.
-        # If we pick 5m, it will be 5m.
-        # The blended score reflects both. But the champion must be executed on a specific timeframe.
-        # Strategy: "The champion is run on the timeframe that contributed most to its score?"
-        # Or simpler: Always run on 5m if available for granularity?
-        # Actually, if we generated the strategy on 5m, it might behave differently on 15m parameters.
-        # But parameters are shared.
-        # Let's say we prioritize the timeframe with the higher individual score.
-
-        row_15m = rows[rows['timeframe'] == '15m']
-        row_5m = rows[rows['timeframe'] == '5m']
-
-        score_15m = row_15m.iloc[0]['score'] if not row_15m.empty else -1
-        score_5m = row_5m.iloc[0]['score'] if not row_5m.empty else -1
-
-        if score_15m >= score_5m:
-            rep = row_15m.iloc[0]
+        if '5m' in pivot.columns and '15m' in pivot.columns:
+            pivot['blended_score'] = pivot.apply(
+                lambda x: (0.6 * x['15m'] + 0.4 * x['5m']) if pd.notna(x['15m']) and pd.notna(x['5m'])
+                else (x['15m'] if pd.notna(x['15m']) else x['5m']), axis=1
+            )
+        elif '15m' in pivot.columns:
+            pivot['blended_score'] = pivot['15m']
+        elif '5m' in pivot.columns:
+            pivot['blended_score'] = pivot['5m']
         else:
-            rep = row_5m.iloc[0]
+            pivot['blended_score'] = 0
 
-        res_dict = rep.to_dict()
-        res_dict['score'] = pivot.loc[cid, 'blended_score'] # Update score to blended
-        ranked_results.append(res_dict)
+        pivot = pivot.sort_values('blended_score', ascending=False)
 
-    ranked_df = pd.DataFrame(ranked_results)
+        ranked_results = []
+        for cid in pivot.index:
+            rows = df_results[df_results['id'] == cid]
+            if rows.empty: continue
 
-    # Daily Sanity Overlay
-    # Take top 10 candidates (by intraday OOS score) and run 1D sanity backtest
-    final_candidates = []
+            # Pick representative row
+            row_15m = rows[rows['timeframe'] == '15m']
+            row_5m = rows[rows['timeframe'] == '5m']
 
-    # Load 1D data once
-    df_daily = loader.get_data(research_symbol, "1d")
+            if not row_15m.empty and not row_5m.empty:
+                 # Prefer 15m as base if score is better there, else 5m
+                 # Logic: Use the timeframe that has the higher score contribution?
+                 # Or default to 15m for robustness.
+                 if row_15m.iloc[0]['score'] >= row_5m.iloc[0]['score']:
+                     rep = row_15m.iloc[0]
+                 else:
+                     rep = row_5m.iloc[0]
+            elif not row_15m.empty:
+                rep = row_15m.iloc[0]
+            else:
+                rep = row_5m.iloc[0]
 
-    for i, row in ranked_df.head(15).iterrows(): # Check top 15 in case some fail
-        # Run 1D Backtest
-        if not df_daily.empty and len(df_daily) > 200:
-             # Just run on whole history for sanity
-             sanity_engine = BacktestEngine(df_daily)
-             config_obj = StrategyConfig(**row['config'])
-             # Override EOD exit for daily?
-             # The engine enforces EOD exit if it detects intraday times?
-             # For 1D data, time is usually 00:00 or similar.
-             # We should ensure engine handles 1D.
-             # Engine checks "curr_time.hour == 15". If 1D data has 00:00, it won't trigger EOD.
+            res_dict = rep.to_dict()
+            res_dict['score'] = pivot.loc[cid, 'blended_score']
+            ranked_results.append(res_dict)
 
-             t_sanity, e_sanity = sanity_engine.run(config_obj)
-             m_sanity = BacktestMetrics.calculate(t_sanity, e_sanity)
+        ranked_df = pd.DataFrame(ranked_results)
 
-             if not SanityChecker.check_daily_sanity(m_sanity):
-                 logger.info(f"Candidate {row['id']} failed daily sanity check", metrics=m_sanity)
-                 continue
+        # Daily Sanity Overlay
+        final_candidates = []
+        df_daily = loader.get_data(research_symbol, "1d")
 
-        final_candidates.append(row)
-        if len(final_candidates) >= 10:
-            break
+        for i, row in ranked_df.head(15).iterrows():
+            if not df_daily.empty and len(df_daily) > 200:
+                 sanity_engine = BacktestEngine(df_daily)
+                 config_obj = StrategyConfig(**row['config'])
+                 t_sanity, e_sanity = sanity_engine.run(config_obj)
+                 m_sanity = BacktestMetrics.calculate(t_sanity, e_sanity)
 
-    ranked_df = pd.DataFrame(final_candidates)
+                 if not SanityChecker.check_daily_sanity(m_sanity):
+                     logger.info(f"Candidate {row['id']} failed daily sanity check", metrics=m_sanity)
+                     continue
+
+            final_candidates.append(row)
+            if len(final_candidates) >= 10:
+                break
+
+        ranked_df = pd.DataFrame(final_candidates)
 
     if ranked_df.empty:
         logger.warning("No results after ranking and sanity checks")
-        return
+    else:
+        # Save full results
+        ranked_df.to_csv(results_dir / "metrics.csv")
 
-    # Save full results
-    ranked_df.to_csv(results_dir / "metrics.csv")
-
-    # Generate Leaderboard Markdown
-    top_10 = ranked_df.head(10)
-    with open(results_dir / "leaderboard.md", 'w') as f:
-        f.write(top_10.to_markdown())
+        # Generate Leaderboard Markdown
+        top_10 = ranked_df.head(10)
+        with open(results_dir / "leaderboard.md", 'w') as f:
+            f.write(top_10.to_markdown())
 
     # 4. Champion Promotion (Full Mode Only)
     champion_store = ChampionStore()
@@ -253,8 +224,6 @@ def main():
     if not fast_mode and not ranked_df.empty:
         best_candidate = ranked_df.iloc[0].to_dict()
 
-        # Check specific gates for promotion
-        # Must have min positive folds
         min_folds = config['thresholds']['min_positive_folds']
         if best_candidate['metrics']['positive_folds'] >= min_folds:
 
@@ -273,47 +242,41 @@ def main():
                 }
 
     # 5. Live Signal Publishing
-    # Only if market is open and we have a valid champion
     if mh_guard.is_market_open():
         if not current_champ_data:
              SignalPublisher.publish_skipped("No champion available")
         else:
-            # Re-verify champion on latest data?
-            # Ideally yes, but for now we trust the champion logic.
-            # We need to run the champion on the *very latest* data to get the signal.
-            champ_config = StrategyConfig(**current_champ_data['strategy'])
-            # We use the timeframe the champion was trained on?
-            # Wait, the champion is tied to a timeframe in ranking.
-            # But here `current_champ_data` might not store timeframe if I didn't save it.
-            # Let's assume NIFTY 5m or 15m.
-            # The ranked_df has 'timeframe'. I should save that in champion store.
-
-            # Use saved timeframe or default to 5m
             tf = current_champ_data.get('timeframe', "5m")
+            champ_config = StrategyConfig(**current_champ_data['strategy'])
 
-            # Load fresh data
+            # Use live proxy or research symbol?
+            # We need data to calculate signal. Research symbol is what we have data for.
+            # Ideally we download fresh data for research symbol.
+
             df = loader.get_data(research_symbol, tf, force_refresh=True)
 
             if df.empty:
                 SignalPublisher.publish_skipped("Live data fetch failed")
             else:
                 engine = BacktestEngine(df)
-                # We need the signal for the NEXT bar.
-                # The engine generates entries based on current bar.
-                # If engine.run returns trades, that's historical.
-                # We need `_generate_entries` on the last bar.
-
                 entries = engine._generate_entries(df, champ_config)
+
+                # Signal is the last entry value.
+                # If entries[-1] is 1, it means at the CLOSE of the last bar, we got a buy signal.
+                # Executable at the OPEN of the NEXT bar (now).
+
                 last_signal = entries.iloc[-1]
 
-                # Check current position? The script is stateless.
-                # We publish the INTENT.
-                # "signal": 1 (Buy), 0 (Flat/Hold), -1 (Sell)
-                # But entries are triggers.
-
                 signal_val = 0
-                if last_signal:
-                    signal_val = 1 # Long only
+                if last_signal == 1:
+                    signal_val = 1
+                elif last_signal == -1:
+                    signal_val = -1
+
+                # Wait, if we are already in a trade?
+                # The prompt says "Signal calculated on bar close... execute next bar open".
+                # It doesn't ask for full position management in the signal JSON, just the signal.
+                # "signal": -1|0|1
 
                 SignalPublisher.publish({
                     "champion_id": champ_config.id,
@@ -321,12 +284,12 @@ def main():
                     "instrument": "NIFTY",
                     "proxy_symbol_paper": instrument_map['paper_proxy']['NIFTY'],
                     "proxy_symbol_live": instrument_map['live_proxy']['NIFTY'],
-                    "signal": signal_val,
+                    "signal": int(signal_val),
                     "rule_summary": f"{champ_config.entry_block} + {champ_config.exit_block}",
                     "risk": {
                         "stop": champ_config.risk_block,
                         "params": champ_config.risk_params,
-                        "flat_by": "15:25"
+                        "flat_by": config['defaults']['flat_time']
                     },
                     "status": "OK"
                 })

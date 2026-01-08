@@ -1,0 +1,293 @@
+[
+  {
+    "id": "b20e48cf9956",
+    "entry_block": "breakout_orb",
+    "entry_params": {
+      "minutes": 30
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "1e0d3a4bd5e9",
+    "entry_block": "breakout_donchian",
+    "entry_params": {
+      "period": 50
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.0
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 200
+    }
+  },
+  {
+    "id": "7d5caa1fe8af",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 30,
+      "upper": 75
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 0.5
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 200
+    }
+  },
+  {
+    "id": "250aee3ebf1e",
+    "entry_block": "breakout_orb",
+    "entry_params": {
+      "minutes": 30
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 0.5
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "c6360727cbd9",
+    "entry_block": "breakout_orb",
+    "entry_params": {
+      "minutes": 30
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 2.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.0
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "e95289def18a",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 25,
+      "upper": 75
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 1.5
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 1.5
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 200
+    }
+  },
+  {
+    "id": "382d57954ee3",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 5,
+      "slow": 50
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 0.5
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "279cbb46e544",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 30,
+      "upper": 75
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.5
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 200
+    }
+  },
+  {
+    "id": "9f4117c2611c",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 13,
+      "slow": 50
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 2.0
+    },
+    "filter_block": "none",
+    "filter_params": {}
+  },
+  {
+    "id": "6f4e09f5259f",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 9,
+      "slow": 20
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 0.5
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 50
+    }
+  },
+  {
+    "id": "acfcd2aa95c7",
+    "entry_block": "breakout_donchian",
+    "entry_params": {
+      "period": 10
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 50
+    }
+  },
+  {
+    "id": "cbc44d08ea57",
+    "entry_block": "breakout_donchian",
+    "entry_params": {
+      "period": 20
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 50
+    }
+  },
+  {
+    "id": "2816e7675ba8",
+    "entry_block": "trend_ema_cross",
+    "entry_params": {
+      "fast": 5,
+      "slow": 50
+    },
+    "exit_block": "simple_target_stop",
+    "exit_params": {
+      "rr_ratio": 1.5
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  },
+  {
+    "id": "d15e5a75df6c",
+    "entry_block": "mean_reversion_rsi",
+    "entry_params": {
+      "period": 14,
+      "lower": 30,
+      "upper": 70
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 2.0
+    },
+    "risk_block": "percent_stop",
+    "risk_params": {
+      "pct": 1.0
+    },
+    "filter_block": "trend_filter_ema",
+    "filter_params": {
+      "period": 200
+    }
+  },
+  {
+    "id": "6d0624c0af07",
+    "entry_block": "breakout_donchian",
+    "entry_params": {
+      "period": 10
+    },
+    "exit_block": "trailing_stop_atr",
+    "exit_params": {
+      "multiplier": 3.0
+    },
+    "risk_block": "atr_stop",
+    "risk_params": {
+      "multiplier": 1.5
+    },
+    "filter_block": "time_filter_chop",
+    "filter_params": {
+      "start_time": "09:45"
+    }
+  }
+]

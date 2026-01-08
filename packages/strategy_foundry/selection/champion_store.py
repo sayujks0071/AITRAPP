@@ -3,36 +3,39 @@ Champion Store
 Manages persistence of champion strategies.
 """
 import json
-import os
+import shutil
 from pathlib import Path
-from datetime import datetime
-from packages.strategy_foundry.factory.grammar import StrategyConfig
+from typing import Dict, Any, Optional
 
-CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+CHAMPIONS_DIR = Path("packages/strategy_foundry/results/champions")
 
 class ChampionStore:
     def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+        CHAMPIONS_DIR.mkdir(parents=True, exist_ok=True)
+        self.current_file = CHAMPIONS_DIR / "current.json"
 
-    def load_current(self) -> dict:
-        path = CHAMPION_DIR / "current.json"
-        if path.exists():
-            with open(path, 'r') as f:
-                return json.load(f)
+    def load_current(self) -> Dict[str, Any]:
+        if self.current_file.exists():
+            try:
+                with open(self.current_file, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
         return {}
 
-    def save_new_champion(self, strategy: dict, metrics: dict, timeframe: str, run_ts: str):
-        # Save historical version
-        version_file = CHAMPION_DIR / f"{run_ts}_{strategy['id']}.json"
+    def save_new_champion(self, strategy_config: Dict, metrics: Dict, timeframe: str, run_ts: str):
         data = {
-            "strategy": strategy,
+            "strategy": strategy_config,
             "metrics": metrics,
             "timeframe": timeframe,
             "promoted_at": run_ts
         }
+
+        # Save versioned
+        version_file = CHAMPIONS_DIR / f"{run_ts}_{strategy_config['id']}.json"
         with open(version_file, 'w') as f:
             json.dump(data, f, indent=2)
 
         # Update current
-        with open(CHAMPION_DIR / "current.json", 'w') as f:
+        with open(self.current_file, 'w') as f:
             json.dump(data, f, indent=2)

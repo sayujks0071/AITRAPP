@@ -1,105 +1,128 @@
 """
-Strategy Grammar
-Defines the components and composition rules for strategies.
+Strategy Grammar and Factory
+Defines the building blocks for strategies and generates random combinations.
 """
+import random
+import hashlib
+import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
-
-@dataclass
-class Parameter:
-    name: str
-    type: str  # int, float, bool, choice
-    min: Optional[float] = None
-    max: Optional[float] = None
-    step: Optional[float] = None
-    options: Optional[List[Any]] = None
-    default: Any = None
-
-@dataclass
-class Block:
-    name: str
-    type: str  # entry, exit, filter
-    params: Dict[str, Parameter]
-    logic: str  # Description of logic
-
-# Registry of available blocks
-BLOCKS = {
-    # ENTRIES
-    "entry_trend_ema_cross": Block(
-        name="EMA Crossover",
-        type="entry",
-        params={
-            "fast_period": Parameter("fast_period", "int", 5, 50, 5, default=20),
-            "slow_period": Parameter("slow_period", "int", 20, 200, 10, default=50),
-            "adx_filter": Parameter("adx_filter", "bool", default=False),
-            "adx_threshold": Parameter("adx_threshold", "int", 15, 30, 5, default=20)
-        },
-        logic="Fast EMA crosses above Slow EMA. Optional ADX > threshold."
-    ),
-    "entry_breakout_donchian": Block(
-        name="Donchian Breakout",
-        type="entry",
-        params={
-            "period": Parameter("period", "int", 10, 60, 5, default=20),
-            "filter_ma": Parameter("filter_ma", "bool", default=True),
-            "ma_period": Parameter("ma_period", "int", 50, 200, 50, default=200)
-        },
-        logic="Close > Donchian High(period). Optional Close > SMA(ma_period)."
-    ),
-    "entry_mean_rev_rsi": Block(
-        name="RSI Reversion",
-        type="entry",
-        params={
-            "rsi_period": Parameter("rsi_period", "int", 2, 14, 2, default=7),
-            "oversold": Parameter("oversold", "int", 10, 40, 5, default=30),
-            "exit_rsi": Parameter("exit_rsi", "int", 50, 80, 5, default=60)
-        },
-        logic="RSI < oversold. Exit when RSI > exit_rsi (handled as internal exit condition)."
-    ),
-
-    # RISKS (Stop Loss / Take Profit)
-    "risk_atr": Block(
-        name="ATR Stop",
-        type="risk",
-        params={
-            "atr_period": Parameter("atr_period", "int", 14, 14, 0, default=14),
-            "multiplier": Parameter("multiplier", "float", 1.0, 4.0, 0.5, default=2.0),
-            "trailing": Parameter("trailing", "bool", default=False)
-        },
-        logic="Stop Loss at Entry - (ATR * multiplier). Optional trailing."
-    ),
-
-    # EXITS (Target)
-    "exit_rr": Block(
-        name="Risk Reward Target",
-        type="exit",
-        params={
-            "risk_reward": Parameter("risk_reward", "float", 1.5, 4.0, 0.5, default=2.0)
-        },
-        logic="Take Profit at Entry + (Risk * RiskReward)."
-    ),
-    "exit_time": Block(
-        name="Time Stop",
-        type="exit",
-        params={
-            "max_bars": Parameter("max_bars", "int", 12, 100, 12, default=36) # ~3-4 hours on 5m
-        },
-        logic="Exit after N bars."
-    )
-}
+from typing import List, Dict, Any
 
 @dataclass
 class StrategyConfig:
-    entry_block: str
-    entry_params: Dict[str, Any]
-    risk_block: str
-    risk_params: Dict[str, Any]
-    exit_block: str
-    exit_params: Dict[str, Any]
     id: str = ""
+    entry_block: str = ""
+    entry_params: Dict[str, Any] = field(default_factory=dict)
+    exit_block: str = ""
+    exit_params: Dict[str, Any] = field(default_factory=dict)
+    risk_block: str = ""
+    risk_params: Dict[str, Any] = field(default_factory=dict)
+    filter_block: str = ""
+    filter_params: Dict[str, Any] = field(default_factory=dict)
 
-    def get_hash(self):
-        import hashlib
-        import json
-        s = json.dumps(self.__dict__, sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()
+    def generate_id(self):
+        """Generate a stable ID hash based on config"""
+        payload = {
+            "entry": self.entry_block,
+            "entry_p": self.entry_params,
+            "exit": self.exit_block,
+            "exit_p": self.exit_params,
+            "risk": self.risk_block,
+            "risk_p": self.risk_params,
+            "filter": self.filter_block,
+            "filter_p": self.filter_params
+        }
+        s = json.dumps(payload, sort_keys=True)
+        self.id = hashlib.md5(s.encode()).hexdigest()[:12]
+
+class Grammar:
+    # Entry Blocks
+    ENTRY_BLOCKS = [
+        "breakout_donchian",
+        "breakout_orb",
+        "trend_ema_cross",
+        "mean_reversion_rsi"
+    ]
+
+    # Exit/Risk Blocks
+    EXIT_BLOCKS = [
+        "simple_target_stop",
+        "trailing_stop_atr"
+    ]
+
+    RISK_BLOCKS = [
+        "atr_stop",
+        "percent_stop"
+    ]
+
+    FILTERS = [
+        "none",
+        "trend_filter_ema",
+        "time_filter_chop"
+    ]
+
+    @staticmethod
+    def get_params(block_name: str):
+        if block_name == "breakout_donchian":
+            return {"period": [10, 20, 50]}
+        elif block_name == "breakout_orb":
+            return {"minutes": [15, 30, 60]}
+        elif block_name == "trend_ema_cross":
+            return {"fast": [5, 9, 13], "slow": [20, 50]}
+        elif block_name == "mean_reversion_rsi":
+            return {"period": [14], "lower": [30, 25], "upper": [70, 75]}
+
+        elif block_name == "simple_target_stop":
+            return {"rr_ratio": [1.5, 2.0, 3.0]}
+        elif block_name == "trailing_stop_atr":
+            return {"multiplier": [2.0, 3.0]}
+
+        elif block_name == "atr_stop":
+            return {"multiplier": [1.5, 2.0, 2.5]}
+        elif block_name == "percent_stop":
+            return {"pct": [0.5, 1.0]}
+
+        elif block_name == "trend_filter_ema":
+             return {"period": [50, 200]}
+        elif block_name == "time_filter_chop":
+             return {"start_time": ["09:45"]} # Avoid first 30m
+
+        return {}
+
+    @staticmethod
+    def sample_params(block_name: str) -> Dict[str, Any]:
+        params = Grammar.get_params(block_name)
+        sampled = {}
+        for k, v in params.items():
+            sampled[k] = random.choice(v)
+        return sampled
+
+class StrategyGenerator:
+    @staticmethod
+    def generate_population(n: int) -> List[StrategyConfig]:
+        population = []
+        seen_ids = set()
+
+        while len(population) < n:
+            entry = random.choice(Grammar.ENTRY_BLOCKS)
+            exit_ = random.choice(Grammar.EXIT_BLOCKS)
+            risk = random.choice(Grammar.RISK_BLOCKS)
+            filt = random.choice(Grammar.FILTERS)
+
+            cfg = StrategyConfig(
+                entry_block=entry,
+                entry_params=Grammar.sample_params(entry),
+                exit_block=exit_,
+                exit_params=Grammar.sample_params(exit_),
+                risk_block=risk,
+                risk_params=Grammar.sample_params(risk),
+                filter_block=filt,
+                filter_params=Grammar.sample_params(filt)
+            )
+            cfg.generate_id()
+
+            if cfg.id not in seen_ids:
+                population.append(cfg)
+                seen_ids.add(cfg.id)
+
+        return population
