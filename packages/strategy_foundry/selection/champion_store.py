@@ -1,38 +1,52 @@
 """
-Champion Store
-Manages persistence of champion strategies.
+Champion Store.
+Manages the current champion strategy.
 """
-import json
 import os
-from pathlib import Path
+import json
+import shutil
 from datetime import datetime
-from packages.strategy_foundry.factory.grammar import StrategyConfig
+from typing import Optional, Dict, Any
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
 
-CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+CHAMPION_DIR = "packages/strategy_foundry/results/champions"
+CURRENT_FILE = os.path.join(CHAMPION_DIR, "current.json")
 
-class ChampionStore:
-    def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+def load_champion() -> Optional[StrategyCandidate]:
+    if not os.path.exists(CURRENT_FILE):
+        return None
+    try:
+        with open(CURRENT_FILE, "r") as f:
+            data = json.load(f)
+            # data wraps the candidate
+            return StrategyCandidate(id=data["id"], blocks=data["blocks"])
+    except Exception:
+        return None
 
-    def load_current(self) -> dict:
-        path = CHAMPION_DIR / "current.json"
-        if path.exists():
-            with open(path, 'r') as f:
-                return json.load(f)
-        return {}
+def save_champion(candidate: StrategyCandidate, metrics: Dict[str, Any], score: float):
+    # Archive old
+    if os.path.exists(CURRENT_FILE):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        old_id = load_champion().id
+        shutil.copy(CURRENT_FILE, os.path.join(CHAMPION_DIR, f"{ts}_{old_id}.json"))
 
-    def save_new_champion(self, strategy: dict, metrics: dict, timeframe: str, run_ts: str):
-        # Save historical version
-        version_file = CHAMPION_DIR / f"{run_ts}_{strategy['id']}.json"
-        data = {
-            "strategy": strategy,
-            "metrics": metrics,
-            "timeframe": timeframe,
-            "promoted_at": run_ts
-        }
-        with open(version_file, 'w') as f:
-            json.dump(data, f, indent=2)
+    # Save new
+    data = {
+        "id": candidate.id,
+        "blocks": candidate.blocks,
+        "metrics": metrics,
+        "score": score,
+        "promoted_at": datetime.now().isoformat()
+    }
+    with open(CURRENT_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-        # Update current
-        with open(CHAMPION_DIR / "current.json", 'w') as f:
-            json.dump(data, f, indent=2)
+def get_champion_score() -> float:
+    if not os.path.exists(CURRENT_FILE):
+        return -1.0
+    try:
+        with open(CURRENT_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("score", 0.0)
+    except:
+        return -1.0

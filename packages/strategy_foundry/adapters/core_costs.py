@@ -1,17 +1,33 @@
 """
-Core Costs Adapter
-Defines trading costs using packages/core/risk.py if available or defaults.
+Cost adapter.
+Simple cost model for backtesting.
 """
 from typing import NamedTuple
 
 class CostModel(NamedTuple):
     slippage_bps: float
-    commission_bps: float
-    fixed_per_order: float
+    brokerage_per_order: float
+    tax_bps: float  # blended STT + other taxes
 
-# Default conservative costs for Indian Equity/Derivatives
-DEFAULT_COSTS = CostModel(
-    slippage_bps=5.0,     # 0.05% slippage
-    commission_bps=3.0,   # 0.03% approx blended taxes/charges
-    fixed_per_order=0.0   # Simplified, use bps mostly
+    def estimate_cost(self, price: float, quantity: int, side: str) -> float:
+        """
+        Estimate total cost for a trade leg.
+        """
+        value = price * quantity
+
+        # Slippage
+        slippage = value * (self.slippage_bps / 10000.0)
+
+        # Brokerage (simplified flat fee)
+        brokerage = self.brokerage_per_order
+
+        # Taxes
+        taxes = value * (self.tax_bps / 10000.0)
+
+        return slippage + brokerage + taxes
+
+DEFAULT_COST_MODEL = CostModel(
+    slippage_bps=5.0,        # 5 bps slippage
+    brokerage_per_order=20.0, # Rs 20 flat
+    tax_bps=3.0              # Approx taxes
 )
