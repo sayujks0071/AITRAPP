@@ -1,85 +1,102 @@
 """
-Data Loader
-Manages loading, caching, and preprocessing of market data.
+Data Loader for NIFTY/SENSEX.
+Fetches from Yahoo Finance via requests, caches to CSV.
 """
 import os
+import csv
+import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Optional
 import structlog
-from pathlib import Path
-from packages.strategy_foundry.data.sources import DataSources
-from packages.strategy_foundry.adapters.core_market_hours import IST
-from packages.strategy_foundry.adapters.core_data_provider import CoreDataProvider
 
 logger = structlog.get_logger(__name__)
 
-CACHE_DIR = Path("packages/strategy_foundry/data/cache")
+CACHE_DIR = "packages/strategy_foundry/data/cache"
+MAPPINGS = {
+    "NIFTY": "^NSEI",
+    "SENSEX": "^BSESN"
+}
 
-class DataLoader:
-    def __init__(self):
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+def ensure_cache_dir():
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
 
-    def get_data(self, symbol: str, timeframe: str, force_refresh: bool = False) -> pd.DataFrame:
-        """
-        Get OHLCV data for symbol and timeframe.
-        Tries CoreProvider -> Cache -> Yahoo -> Fallback
-        """
-        # 1. Try Core Provider (if implemented)
-        core_data = CoreDataProvider.get_ohlcv(symbol, timeframe)
-        if core_data is not None and not core_data.empty:
-            return self._process_data(core_data, timeframe)
+def fetch_yahoo_data(symbol: str, period1: int, period2: int) -> Optional[str]:
+    """
+    Fetch CSV data from Yahoo Finance.
+    """
+    url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}?period1={period1}&period2={period2}&interval=1d&events=history&includeAdjustedClose=true"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
+    }
+    try:
+        resp = requests.get(url, headers=headers)
+        if resp.status_code == 200:
+            return resp.text
+        else:
+            logger.error("Failed to fetch data", symbol=symbol, status=resp.status_code)
+            return None
+    except Exception as e:
+        logger.error("Error fetching data", symbol=symbol, error=str(e))
+        return None
 
-        # 2. Check Cache
-        cache_file = CACHE_DIR / f"{symbol}_{timeframe}.csv"
-        if not force_refresh and cache_file.exists():
-            # Check age - refresh if older than 1 hour for intraday, 12 hours for daily
-            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
-            age = datetime.now() - mtime
-            max_age = 3600 if timeframe in ["5m", "15m"] else 43200
+def load_instrument(name: str, force_refresh: bool = False) -> pd.DataFrame:
+    """
+    Load instrument data (NIFTY/SENSEX).
+    Returns DataFrame with [open, high, low, close, volume] and DateTimeIndex in IST.
+    """
+    ensure_cache_dir()
+    y_symbol = MAPPINGS.get(name)
+    if not y_symbol:
+        raise ValueError(f"Unknown instrument: {name}")
 
-            if age.total_seconds() < max_age:
-                try:
-                    df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-                    return self._process_data(df, timeframe)
-                except Exception as e:
-                    logger.warning(f"Corrupt cache for {symbol}: {e}")
+    cache_file = os.path.join(CACHE_DIR, f"{name}.csv")
 
-        # 3. Download from Yahoo
-        logger.info(f"Fetching fresh data for {symbol} {timeframe}")
-        df = DataSources.get_yahoo_data(symbol, timeframe)
+    # Check if cache exists and is fresh (e.g. < 24h old)
+    is_stale = True
+    if os.path.exists(cache_file):
+        mtime = os.path.getmtime(cache_file)
+        if (datetime.now().timestamp() - mtime) < 86400: # 24 hours
+            is_stale = False
 
-        if not df.empty:
-            # Save to cache
-            df.to_csv(cache_file)
-            return self._process_data(df, timeframe)
+    if force_refresh or is_stale:
+        logger.info("Downloading data", instrument=name)
+        # Download last 10 years
+        end = int(datetime.now().timestamp())
+        start = int((datetime.now() - timedelta(days=365*10)).timestamp())
 
-        logger.error(f"Failed to load data for {symbol} {timeframe}")
-        return pd.DataFrame()
+        csv_text = fetch_yahoo_data(y_symbol, start, end)
+        if csv_text:
+            with open(cache_file, "w") as f:
+                f.write(csv_text)
+        else:
+            logger.warning("Using stale data if available")
 
-    def _process_data(self, df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-        """Standardize data format and timezone"""
-        if df.empty:
-            return df
+    if not os.path.exists(cache_file):
+        raise FileNotFoundError(f"No data found for {name}")
 
-        # Ensure UTC then convert to IST
-        if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
+    df = pd.read_csv(cache_file)
 
-        df.index = df.index.tz_convert(IST)
+    # Clean and standardize
+    df.columns = [c.lower() for c in df.columns]
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df.set_index('date', inplace=True)
 
-        # Filter for market hours (09:15 - 15:30)
-        # Assuming index is DatetimeIndex
+    # Standard columns
+    cols = ['open', 'high', 'low', 'close', 'volume']
+    df = df[cols].copy()
 
-        if timeframe in ["5m", "15m"]:
-            # Simple filter: keeping only 09:15 to 15:30 range
-            # 09:15 is the start. 15:25 is close.
-            # We'll be permissive and keep 09:15 to 15:30
-            # Time components
-            mask = (
-                (df.index.time >= datetime.strptime("09:15", "%H:%M").time()) &
-                (df.index.time <= datetime.strptime("15:30", "%H:%M").time())
-            )
-            df = df[mask]
+    # Fill NAs
+    df.ffill(inplace=True)
 
-        return df.sort_index()
+    # Set timezone
+    # Yahoo data is typically local time without tz. For NSE, it's IST.
+    # We will localize.
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("Asia/Kolkata")
+    else:
+        df.index = df.index.tz_convert("Asia/Kolkata")
 
+    return df

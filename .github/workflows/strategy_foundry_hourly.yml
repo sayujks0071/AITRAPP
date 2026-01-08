@@ -1,8 +1,7 @@
 name: Strategy Foundry Hourly
-
 on:
   schedule:
-    - cron: "0 * * * *"  # Hourly
+    - cron: "0 * * * *"
   workflow_dispatch:
   pull_request:
     paths:
@@ -11,10 +10,6 @@ on:
 jobs:
   run-foundry:
     runs-on: ubuntu-latest
-    env:
-      FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
-      PYTHONPATH: .
-
     steps:
       - uses: actions/checkout@v3
 
@@ -25,17 +20,18 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy structlog pyyaml requests tabulate
-          # Add any other core deps needed, but keep it light
+          pip install pandas numpy requests structlog tabulate
+          # Add any other deps from requirements.txt if needed
+          # But for this module we kept it light.
 
-      - name: Run Hourly Job
-        run: |
-          python -m packages.strategy_foundry.run_hourly
+      - name: Run Strategy Foundry
+        env:
+          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          PYTHONPATH: .
+        run: python packages/strategy_foundry/run_hourly.py
 
-      - name: Upload Artifacts
-        if: always()
+      - name: Upload Results
         uses: actions/upload-artifact@v3
         with:
           name: foundry-results
           path: packages/strategy_foundry/results/
-          if-no-files-found: warn

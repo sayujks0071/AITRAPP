@@ -1,192 +1,336 @@
 """
-Backtest Engine
-Executes strategies on historical data.
-Vectorized signal generation + Event-driven execution loop.
+Backtest Engine.
+Runs daily backtest for a strategy candidate.
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple
-from packages.strategy_foundry.factory.grammar import StrategyConfig
-from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicators
-from packages.strategy_foundry.adapters.core_costs import DEFAULT_COSTS
+from typing import Dict, Any, List
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.factory.generator import StrategyInterpreter
+from packages.strategy_foundry.adapters.core_costs import DEFAULT_COST_MODEL, CostModel
+from packages.strategy_foundry.adapters import core_indicators as ind
 
 class BacktestEngine:
-    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0):
-        self.data = data.copy()
-        self.initial_capital = initial_capital
-        # Precompute common indicators if not already there
-        self.data = VectorizedIndicators.add_all(self.data)
+    def __init__(self, cost_model: CostModel = DEFAULT_COST_MODEL):
+        self.cost_model = cost_model
 
-    def run(self, strategy: StrategyConfig) -> Tuple[pd.DataFrame, pd.Series]:
+    def run(self, df: pd.DataFrame, candidate: StrategyCandidate, initial_capital: float = 100000.0) -> Dict[str, Any]:
         """
-        Run the strategy.
-        Returns: (trades_df, equity_curve_series)
+        Run backtest.
+        Returns metrics and curves.
         """
-        df = self.data
+        interpreter = StrategyInterpreter(candidate)
 
-        # 1. Generate Entry/Exit Signals (Vectorized)
-        entries = self._generate_entries(df, strategy)
+        # 1. Generate Raw Signals
+        raw_signals = interpreter.generate_positions(df)
+        risk_params = interpreter.get_risk_params()
 
-        # 2. Execute Loop (Event-driven for correct risk/management)
-        trades = []
-        equity = [self.initial_capital]
-        current_capital = self.initial_capital
-        position = 0 # 0, 1 (Long), -1 (Short)
+        # 2. Loop for execution (needed for path-dependent stops)
+        # We'll use a fast loop (numba not allowed, but simple python loop over array is okay for daily data)
+        # Daily data ~ 2500 rows for 10 years. Fast enough.
+
+        closes = df["close"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        dates = df.index
+
+        # Pre-calculate ATR for stops if needed
+        atr_series = None
+        if risk_params.get("type") == "ATR_STOP":
+            p = risk_params["params"]
+            atr_series = ind.atr(df, period=p["period"]).values
+
+        position = 0 # Current position: 1, -1, 0
         entry_price = 0.0
-        entry_time = None
-        stop_loss = 0.0
-        take_profit = 0.0
+        equity = initial_capital
+        cash = initial_capital
 
-        equity_curve = pd.Series(index=df.index, dtype=float)
-        equity_curve.iloc[0] = self.initial_capital
+        trades = []
+        equity_curve = []
+
+        current_stop = None
 
         for i in range(1, len(df)):
-            curr_time = df.index[i]
-            curr_open = df['open'].iloc[i]
-            curr_high = df['high'].iloc[i]
-            curr_low = df['low'].iloc[i]
-            curr_close = df['close'].iloc[i]
+            # Market Data
+            date = dates[i]
+            open_p = df["open"].values[i] # Execution at Open of next bar
+            close_p = closes[i]
+            high_p = highs[i]
+            low_p = lows[i]
 
-            # prev_bar for signals (avoid lookahead)
-            prev_close = df['close'].iloc[i-1]
+            # Previous Bar Signal (generated at close of i-1)
+            signal = raw_signals.iloc[i-1]
 
-            # Check Exits if in position
+            # Check Exits first (Stops)
+            exit_price = None
+            exit_reason = None
+
             if position != 0:
-                exit_price = None
-                reason = ""
+                # Check Stop Loss
+                if position == 1:
+                    if low_p < current_stop:
+                        exit_price = min(open_p, current_stop) # Gap handling: exit at open if gap down below stop
+                        # Ideally, if open < stop, we exit at open. If open > stop, we exit at stop.
+                        # Wait, if Low < Stop, we hit it.
+                        # If Open < Stop, we gapped over it -> execute at Open.
+                        # If Open > Stop, we executed at Stop.
+                        if open_p < current_stop:
+                            exit_price = open_p
+                        else:
+                            exit_price = current_stop
+                        exit_reason = "STOP"
+                elif position == -1:
+                    if high_p > current_stop:
+                        if open_p > current_stop:
+                            exit_price = open_p
+                        else:
+                            exit_price = current_stop
+                        exit_reason = "STOP"
 
-                # Check Stop Loss / Take Profit (intra-bar assumption: Worst case)
-                # If Long
-                if position > 0:
-                    if curr_low <= stop_loss:
-                        exit_price = min(curr_open, stop_loss) # Gap handling: exit at open if below SL
-                        reason = "SL"
-                    elif curr_high >= take_profit:
-                        exit_price = max(curr_open, take_profit)
-                        reason = "TP"
-
-                # Check End of Day Exit (15:25) - Higher Priority than Time Exit
-                # Simplification: if time is >= 15:25
-                if exit_price is None:
-                    # In test environment, the timezone might not be properly set on curr_time index,
-                    # but usually it is. We check hour/minute.
-                    # Note: We exit at Open of the bar that starts at 15:25, which is 15:25.
-                    if (curr_time.hour == 15 and curr_time.minute >= 25) or (curr_time.hour > 15):
-                        exit_price = curr_open # Exit on next bar open? Or close of this bar?
-                        # If this bar is 15:25, we exit at open of 15:25? No, usually exit before close.
-                        # If we are strictly backtesting "Open" execution, then 15:25 bar open is 15:25.
-                        exit_price = curr_close # Force close at end of this bar
-                        reason = "EOD"
-
-                # Check Time Exit
-                if exit_price is None and strategy.exit_block == "exit_time":
-                    max_bars = strategy.exit_params['max_bars']
-                    bars_held = i - df.index.get_loc(entry_time)
-                    if bars_held >= max_bars:
-                        exit_price = curr_open
-                        reason = "Time"
-
-                # Check RSI exit if applicable
-                if exit_price is None and strategy.entry_block == "entry_mean_rev_rsi":
-                    exit_rsi_thresh = strategy.entry_params['exit_rsi']
-                    prev_rsi = df['rsi_14'].iloc[i-1]
-                    if position > 0 and prev_rsi > exit_rsi_thresh:
-                        exit_price = curr_open
-                        reason = "RSI_Exit"
+                # Check Signal Reversal
+                if exit_price is None and signal != 0 and signal != position:
+                    exit_price = open_p
+                    exit_reason = "SIGNAL"
 
                 # Execute Exit
                 if exit_price is not None:
-                    pnl = (exit_price - entry_price) * position * (current_capital / entry_price) # Simplistic sizing
+                    # Calculate PnL
+                    qty = abs(position) # Assume size 1 unit or full capital?
+                    # Let's use fixed capital allocation for simplicity or 1 unit.
+                    # Requirement: "equity curve series".
+                    # Let's simulate fully invested 100% equity for simplicity to get CAGR/Drawdown.
+                    # Or simpler: calculate % returns.
 
-                    # Apply costs
-                    notional = current_capital
-                    costs = (notional * (DEFAULT_COSTS.slippage_bps + DEFAULT_COSTS.commission_bps) / 10000) * 2 # Entry + Exit
+                    # Implementation: Track value of holdings.
+                    # On Entry: shares = cash / open_p
+                    # On Exit: cash = shares * exit_price - costs
 
-                    net_pnl = pnl - costs
-                    current_capital += net_pnl
-                    position = 0
+                    # We need to track `shares`.
+                    pass # Handled below in integrated logic
+
+            # Integrated Logic
+            # 1. Update Portfolio Value (Mark to Market)
+            # If we hold position, value = shares * close_p
+            # We record equity at End of Day.
+
+            # Logic:
+            # - Check Stop Hit during day i (using high/low)
+            # - Check Signal from i-1 (executed at Open of i)
+
+            # Current State
+            prev_equity = equity_curve[-1] if equity_curve else initial_capital
+
+            # Check Stop (Intraday)
+            stop_hit = False
+            if position != 0 and current_stop is not None:
+                if position == 1 and low_p <= current_stop:
+                    # Exited
+                    exit_p = open_p if open_p < current_stop else current_stop
+                    cost = self.cost_model.estimate_cost(exit_p, 1, "SELL") # per unit cost?
+                    # We need to track 'holding_qty'.
+
+                    # Let's use % return logic for simplicity and speed, then scale to equity.
+                    # Trade Return = (Exit - Entry) / Entry * Side
+                    # Cost deduct.
+
+                    pct_change = (exit_p - entry_price) / entry_price
+                    # Deduct costs (approximate as bps of price)
+                    # cost_bps = slippage + brokerage + tax
+                    # We'll use the cost model to get a value, convert to %
+
+                    # Re-implement using Cash/Qty
+                    # Sell
+                    proceeds = holding_qty * exit_p
+                    c = self.cost_model.estimate_cost(exit_p, holding_qty, "SELL")
+                    cash = proceeds - c
+                    equity = cash
 
                     trades.append({
-                        "entry_time": entry_time,
-                        "exit_time": curr_time,
+                        "entry_date": entry_date,
+                        "exit_date": date,
                         "entry_price": entry_price,
-                        "exit_price": exit_price,
-                        "pnl": net_pnl,
-                        "reason": reason
+                        "exit_price": exit_p,
+                        "side": "LONG",
+                        "pnl": equity - capital_at_entry,
+                        "return": (equity - capital_at_entry)/capital_at_entry,
+                        "reason": "STOP"
                     })
 
-            # Check Entries if flat
-            if position == 0:
-                # Intraday constraint: Don't enter after 15:00
-                if not (curr_time.hour == 15 and curr_time.minute >= 0):
-                     if entries.iloc[i-1]: # Signal from previous close
-                        position = 1 # Long only for now
-                        entry_price = curr_open
-                        entry_time = curr_time
+                    position = 0
+                    holding_qty = 0
+                    stop_hit = True
 
-                        # Set SL/TP
-                        atr_val = df['atr_14'].iloc[i-1]
+                elif position == -1 and high_p >= current_stop:
+                     # Short Stop
+                     # Shorting: Borrow shares, sell, buy back.
+                     # Entry: Cash + Short Proceeds. Liability = Qty * Price.
+                     # Equity = Cash - Liability.
 
-                        # Calculate Risk Params
-                        if strategy.risk_block == "risk_atr":
-                            sl_dist = atr_val * strategy.risk_params['multiplier']
-                            stop_loss = entry_price - sl_dist
+                     # Simplified: Inverse ETF logic.
+                     # Exit
+                     exit_p = open_p if open_p > current_stop else current_stop
 
-                        if strategy.exit_block == "exit_rr":
-                            rr = strategy.exit_params['risk_reward']
-                            take_profit = entry_price + (entry_price - stop_loss) * rr
+                     # Buy to cover
+                     cost_to_buy = holding_qty * exit_p
+                     c = self.cost_model.estimate_cost(exit_p, holding_qty, "BUY")
+                     cash = cash - cost_to_buy - c # Cash was holding the short proceeds + initial
+
+                     equity = cash
+
+                     trades.append({
+                        "entry_date": entry_date,
+                        "exit_date": date,
+                        "entry_price": entry_price,
+                        "exit_price": exit_p,
+                        "side": "SHORT",
+                        "pnl": equity - capital_at_entry,
+                        "return": (equity - capital_at_entry)/capital_at_entry,
+                        "reason": "STOP"
+                     })
+
+                     position = 0
+                     holding_qty = 0
+                     stop_hit = True
+
+            # Process Entry/Reversal if no stop hit today
+            # Signal from i-1 means we trade at Open of i.
+            # Only trade if position matches signal?
+            # If position is 0 and signal != 0 -> Entry
+            # If position != 0 and signal != position -> Reversal (Exit + Entry)
+            # If position != 0 and signal == position -> Hold
+
+            if not stop_hit:
+                if signal != 0 and signal != position:
+                    # Exit existing
+                    if position != 0:
+                        # Close current
+                        if position == 1:
+                            proceeds = holding_qty * open_p
+                            c = self.cost_model.estimate_cost(open_p, holding_qty, "SELL")
+                            cash = proceeds - c
+                            side = "LONG"
                         else:
-                            take_profit = float('inf')
+                            cost_to_buy = holding_qty * open_p
+                            c = self.cost_model.estimate_cost(open_p, holding_qty, "BUY")
+                            cash = cash - cost_to_buy - c
+                            side = "SHORT"
 
-            equity_curve.iloc[i] = current_capital
+                        equity = cash
+                        trades.append({
+                            "entry_date": entry_date,
+                            "exit_date": date,
+                            "entry_price": entry_price,
+                            "exit_price": open_p,
+                            "side": side,
+                            "pnl": equity - capital_at_entry,
+                            "return": (equity - capital_at_entry)/capital_at_entry,
+                            "reason": "SIGNAL"
+                        })
+                        position = 0
+                        holding_qty = 0
 
-        return pd.DataFrame(trades), equity_curve
+                    # Enter new
+                    if signal == 1: # Long
+                        # Buy max shares
+                        # Cost estimate?
+                        # cash = qty * open_p + cost(qty)
+                        # approx qty = cash / open_p
+                        qty = int(cash / open_p)
+                        if qty > 0:
+                            c = self.cost_model.estimate_cost(open_p, qty, "BUY")
+                            cost_basis = qty * open_p + c
+                            if cost_basis <= cash:
+                                cash -= cost_basis # For long, cash becomes 0 (all in assets)
+                                # Wait, cash is just cash balance.
+                                # Equity = Cash + Asset Value.
+                                # We spent cash to buy assets.
+                                # Asset Value = qty * current_price.
+                                # Remaining Cash = Cash - Cost Basis.
+                                holding_qty = qty
+                                position = 1
+                                entry_price = open_p
+                                entry_date = date
+                                capital_at_entry = equity # snapshot
 
-    def _generate_entries(self, df: pd.DataFrame, strategy: StrategyConfig) -> pd.Series:
-        """Vectorized entry signal generation"""
-        signals = pd.Series(False, index=df.index)
+                                # Set Stop
+                                if risk_params.get("type") == "ATR_STOP":
+                                    mult = risk_params["params"]["multiplier"]
+                                    # Use ATR from i-1 (known at open)
+                                    val_atr = atr_series[i-1] if not np.isnan(atr_series[i-1]) else 0
+                                    current_stop = open_p - (val_atr * mult)
+                                elif risk_params.get("type") == "TRAILING_STOP":
+                                    pct = risk_params["params"]["pct"]
+                                    current_stop = open_p * (1 - pct/100)
+                                else:
+                                    current_stop = 0 # Safety
 
-        if strategy.entry_block == "entry_trend_ema_cross":
-            fast = df.ewm(span=strategy.entry_params['fast_period'], adjust=False).mean()
-            slow = df.ewm(span=strategy.entry_params['slow_period'], adjust=False).mean()
-            # Crossover logic: Fast crosses above Slow
-            # Fast > Slow AND PrevFast <= PrevSlow
-            # Actually, we just need the condition. The engine loop checks signal[i-1] so "True" means "Buy Next Open"
+                    elif signal == -1: # Short
+                        # Assume we can short with full capital (1x leverage)
+                        # Margin required = Value.
+                        # We keep cash. We add proceeds? No, retail short usually requires margin.
+                        # Simple model:
+                        # We 'sell' qty. We have cash = initial + sell_proceeds.
+                        # Liability = qty * price.
+                        # Equity = Cash - Liability.
 
-            cond = (fast['close'] > slow['close']) & (fast['close'].shift(1) <= slow['close'].shift(1))
+                        qty = int(cash / open_p)
+                        if qty > 0:
+                            c = self.cost_model.estimate_cost(open_p, qty, "SELL")
+                            # Short entry cost
+                            cash = cash - c # Pay cost
+                            # We are short `qty`.
+                            # Cash balance remains `cash` (plus notionally the short proceeds, but usually margin locks it).
+                            # Let's track:
+                            # Cash Balance (Virtual) = Old Cash + (Qty * Open P)
+                            # To Close: Pay (Qty * Close P)
+                            # Equity = Virtual Cash - (Qty * Close P)
 
-            if strategy.entry_params.get('adx_filter'):
-                cond = cond & (df['adx_14'] > strategy.entry_params['adx_threshold'])
+                            short_proceeds = qty * open_p
+                            cash = cash + short_proceeds
 
-            signals = cond
+                            holding_qty = qty
+                            position = -1
+                            entry_price = open_p
+                            entry_date = date
+                            capital_at_entry = equity
 
-        elif strategy.entry_block == "entry_breakout_donchian":
-            period = strategy.entry_params['period']
-            # We need to recompute donchian with dynamic period if not standard 20
-            # Optimization: don't recompute if period is 20
-            if period == 20 and 'donchian_upper' in df.columns:
-                upper = df['donchian_upper']
+                            # Set Stop
+                            if risk_params.get("type") == "ATR_STOP":
+                                mult = risk_params["params"]["multiplier"]
+                                val_atr = atr_series[i-1] if not np.isnan(atr_series[i-1]) else 0
+                                current_stop = open_p + (val_atr * mult)
+                            elif risk_params.get("type") == "TRAILING_STOP":
+                                pct = risk_params["params"]["pct"]
+                                current_stop = open_p * (1 + pct/100)
+                            else:
+                                current_stop = float('inf')
+
+            # Update Trailing Stop if needed (End of Day)
+            if position == 1 and risk_params.get("type") == "TRAILING_STOP":
+                pct = risk_params["params"]["pct"]
+                new_stop = close_p * (1 - pct/100)
+                if new_stop > current_stop:
+                    current_stop = new_stop
+            elif position == -1 and risk_params.get("type") == "TRAILING_STOP":
+                pct = risk_params["params"]["pct"]
+                new_stop = close_p * (1 + pct/100)
+                if new_stop < current_stop:
+                    current_stop = new_stop
+
+            # Mark to Market Equity
+            if position == 1:
+                mv = holding_qty * close_p
+                equity = cash + mv # Cash is remaining cash after buy
+            elif position == -1:
+                liability = holding_qty * close_p
+                equity = cash - liability
             else:
-                 upper = df['high'].rolling(window=period).max()
+                equity = cash
 
-            cond = df['close'] > upper.shift(1) # Breakout of previous high
+            equity_curve.append({"date": date, "equity": equity})
 
-            if strategy.entry_params['filter_ma']:
-                 ma_period = strategy.entry_params['ma_period']
-                 sma = df['close'].rolling(window=ma_period).mean()
-                 cond = cond & (df['close'] > sma)
-
-            signals = cond
-
-        elif strategy.entry_block == "entry_mean_rev_rsi":
-            rsi = df['rsi_14']
-            # If dynamic RSI period needed, recompute. Assuming 14 for speed or implementing dynamic later.
-            # Using standard 14 for now as strict optimization.
-            # To support dynamic period:
-            if strategy.entry_params['rsi_period'] != 14:
-                 rsi = VectorizedIndicators.rsi(df['close'], strategy.entry_params['rsi_period'])
-
-            cond = rsi < strategy.entry_params['oversold']
-            signals = cond
-
-        return signals
+        return {
+            "trades": pd.DataFrame(trades),
+            "equity_curve": pd.DataFrame(equity_curve).set_index("date") if equity_curve else pd.DataFrame(),
+            "final_equity": equity
+        }

@@ -1,26 +1,20 @@
-"""
-Tests for Strategy Foundry Metrics
-"""
+
 import pytest
 import pandas as pd
-from packages.strategy_foundry.backtest.metrics import BacktestMetrics
+import numpy as np
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
-class TestMetrics:
-    def test_metrics_calculation(self):
-        trades = pd.DataFrame([
-            {'pnl': 100},
-            {'pnl': -50},
-            {'pnl': 100}
-        ])
+def test_metrics():
+    # Mock Curve
+    dates = pd.date_range("2023-01-01", periods=252)
+    # 10% return linear
+    equity = pd.Series(np.linspace(100000, 110000, 252), index=dates)
 
-        # Equity curve: 100 -> 200 -> 150 -> 250
-        dates = pd.date_range('2023-01-01', periods=4)
-        equity = pd.Series([100000, 100100, 100050, 100150], index=dates)
+    m = calculate_metrics(equity, pd.DataFrame())
 
-        metrics = BacktestMetrics.calculate(trades, equity)
+    assert m["cagr"] > 0
+    assert m["sharpe"] > 0 # No vol? Wait, linspace has vol?
+    # Linspace diff is constant. Returns (diff/prev) decreases slightly.
+    # Std dev > 0.
 
-        assert metrics['total_trades'] == 3
-        assert metrics['net_profit'] == 150
-        assert metrics['win_rate'] == 2/3
-        assert metrics['profit_factor'] == 200/50 # 4.0
-        assert metrics['max_drawdown'] > 0
+    assert m["max_dd"] == 0.0 # No drawdown

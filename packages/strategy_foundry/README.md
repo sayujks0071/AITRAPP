@@ -1,44 +1,35 @@
-# Aggressive Intraday Strategy Foundry
+# Strategy Foundry
 
-Automated research lab that generates, backtests, and selects intraday trading strategies for Indian markets.
+Self-generating strategy lab. Automates the research, backtesting, and selection of trading strategies.
 
 ## Overview
-
-The foundry runs hourly (during market hours) to:
-1.  **Generate** random strategies based on a grammar of valid trading components.
-2.  **Backtest** these strategies on 5m and 15m timeframes using Walk-Forward Optimization.
-3.  **Rank** them based on risk-adjusted returns, stability, and robustness.
-4.  **Promote** a "Champion" strategy if it beats the incumbent.
-5.  **Publish** a live signal artifact (`live_signal.json`) if the champion signals an entry.
+- **Hybrid Architecture**: Reuses `packages/core` for indicators/market hours but implements independent research stack.
+- **Hourly Runner**: Generates, backtests, and ranks strategies every hour.
+- **Walk-Forward Analysis**: Uses rigorous out-of-sample testing to prevent overfitting.
+- **Live Signal**: Publishes `live_signal.json` for consumption by execution systems (no direct ordering).
 
 ## Architecture
+- `data/`: Data loaders (Yahoo Finance) and caching.
+- `factory/`: Strategy grammar and random generator.
+- `backtest/`: Vectorized backtest engine and metrics.
+- `selection/`: Ranking logic and Champion Store.
+- `live/`: Signal publishing.
 
--   `adapters/`: Bridges to Core system (Indicators, Market Hours).
--   `data/`: Manages data loading and caching (Yahoo Finance).
--   `factory/`: Strategy grammar and random generation.
--   `backtest/`: Vectorized + Event-driven hybrid engine.
--   `selection/`: Ranking and promotion logic.
--   `live/`: Signal publication.
+## Running Locally
+1. Install dependencies:
+   ```bash
+   pip install pandas numpy requests structlog
+   ```
+2. Run hourly job:
+   ```bash
+   python packages/strategy_foundry/run_hourly.py --fast
+   ```
 
-## Usage
+## CI/CD
+Runs hourly via GitHub Actions.
+- PRs run in FAST_MODE (fewer candidates, fewer folds).
+- Scheduled runs perform full analysis.
 
-### Run Manually
-
-```bash
-# Full mode
-python packages/strategy_foundry/run_hourly.py
-
-# Fast mode (fewer candidates, fewer folds)
-FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
-```
-
-### Outputs
-
--   **Run Artifacts**: `results/runs/<timestamp>/` (candidates, metrics, leaderboard).
--   **Live Signal**: `results/live_signal.json`.
--   **Champion**: `results/champions/current.json`.
-
-## Configuration
-
--   `configs/foundry.yaml`: Foundry settings (thresholds, weights).
--   `configs/instrument_map.yaml`: Symbol mapping (Research -> Paper -> Live).
+## Live Trading
+By default, this module ONLY outputs JSON signals.
+To enable live execution, `packages/core` must be configured to read `results/live_signal.json` AND `approvals/ALLOW_LIVE.txt` must exist.
