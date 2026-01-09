@@ -1,38 +1,49 @@
-"""
-Champion Store
-Manages persistence of champion strategies.
-"""
-import json
 import os
-from pathlib import Path
-from datetime import datetime
-from packages.strategy_foundry.factory.grammar import StrategyConfig
+import json
+import structlog
+from typing import Optional
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
 
-CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+logger = structlog.get_logger(__name__)
 
-class ChampionStore:
-    def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+CHAMPION_DIR = "packages/strategy_foundry/results/champions"
+CURRENT_CHAMPION_FILE = os.path.join(CHAMPION_DIR, "current.json")
 
-    def load_current(self) -> dict:
-        path = CHAMPION_DIR / "current.json"
-        if path.exists():
-            with open(path, 'r') as f:
-                return json.load(f)
-        return {}
+def load_champion() -> Optional[StrategyCandidate]:
+    if not os.path.exists(CURRENT_CHAMPION_FILE):
+        return None
 
-    def save_new_champion(self, strategy: dict, metrics: dict, timeframe: str, run_ts: str):
-        # Save historical version
-        version_file = CHAMPION_DIR / f"{run_ts}_{strategy['id']}.json"
-        data = {
-            "strategy": strategy,
-            "metrics": metrics,
-            "timeframe": timeframe,
-            "promoted_at": run_ts
-        }
-        with open(version_file, 'w') as f:
-            json.dump(data, f, indent=2)
+    try:
+        with open(CURRENT_CHAMPION_FILE, "r") as f:
+            data = json.load(f)
+            return StrategyCandidate(
+                id=data["id"],
+                grammar=data["grammar"],
+                params=data["params"],
+                metrics=data.get("metrics", {})
+            )
+    except Exception as e:
+        logger.error("Failed to load champion", error=str(e))
+        return None
 
-        # Update current
-        with open(CHAMPION_DIR / "current.json", 'w') as f:
-            json.dump(data, f, indent=2)
+def save_champion(candidate: StrategyCandidate, timestamp: str):
+    os.makedirs(CHAMPION_DIR, exist_ok=True)
+
+    data = {
+        "id": candidate.id,
+        "grammar": candidate.grammar,
+        "params": candidate.params,
+        "metrics": candidate.metrics,
+        "promoted_at": timestamp
+    }
+
+    # Save current
+    with open(CURRENT_CHAMPION_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+    # Save versioned
+    version_file = os.path.join(CHAMPION_DIR, f"{timestamp}_{candidate.id}.json")
+    with open(version_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+    logger.info("Champion promoted", id=candidate.id)

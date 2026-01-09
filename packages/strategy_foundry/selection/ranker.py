@@ -1,46 +1,32 @@
-"""
-Ranker
-Ranks strategies based on metrics.
-"""
-from typing import List, Dict, Any
-import pandas as pd
+from typing import Dict, Any, List
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
 
-class Ranker:
-    @staticmethod
-    def calculate_score(metrics: Dict[str, Any], weights: Dict[str, float]) -> float:
-        """
-        Calculate weighted score.
-        Normalizing inputs is hard without population context,
-        so we use thresholds and raw values with reasonable scaling.
-        """
-        score = 0.0
+def rank_candidates(candidates: List[StrategyCandidate]) -> List[StrategyCandidate]:
+    """
+    Rank candidates based on composite score.
+    Score = 0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - 0.1*TurnoverPenalty
+    """
+    scored = []
 
-        # Sharpe (Target ~2.0) -> 2.0 * 25 = 50 pts
-        score += min(metrics['sharpe'], 3.0) * weights['sharpe'] * 20
+    for c in candidates:
+        m = c.metrics
+        if not m: continue
 
-        # Calmar (Target ~3.0) -> 3.0 * 25 = 75 pts
-        score += min(metrics['calmar'], 5.0) * weights['calmar'] * 15
+        # Normalize/Clamp metrics for scoring
+        sharpe = max(0, min(3, m.get("avg_sharpe", 0)))
+        calmar = max(0, min(5, m.get("avg_cagr", 0) / abs(m.get("avg_max_dd", -0.01))))
+        cagr = max(0, min(1.0, m.get("avg_cagr", 0)))
+        stability = max(0, min(1, m.get("stability", 0)))
 
-        # Return (CAGR) -> 0.5 (50%) * 20 = 10 pts
-        score += min(metrics['cagr'], 2.0) * weights['return'] * 100
+        score = (0.30 * sharpe) + \
+                (0.25 * calmar) + \
+                (0.20 * cagr) + \
+                (0.15 * stability)
 
-        # Drawdown Penalty
-        # If DD > 20%, penalize heavily
-        if metrics['max_drawdown'] > 0.2:
-            score -= (metrics['max_drawdown'] - 0.2) * 200
+        # Add score to metrics for reference
+        c.metrics["score"] = score
+        scored.append(c)
 
-        return score
-
-    @staticmethod
-    def rank(results: List[Dict[str, Any]]) -> pd.DataFrame:
-        """
-        Rank results.
-        results: List of dicts with 'metrics', 'config', 'id'
-        """
-        df = pd.DataFrame(results)
-        if df.empty:
-            return df
-
-        # Sort by score descending
-        df = df.sort_values('score', ascending=False)
-        return df
+    # Sort descending
+    scored.sort(key=lambda x: x.metrics["score"], reverse=True)
+    return scored
