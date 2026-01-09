@@ -1,80 +1,51 @@
-"""
-Core Indicators Adapter
-Implements vectorized versions of technical indicators for backtesting.
-Reuses packages/core/indicators where applicable, but optimized for Series operations.
-"""
 import numpy as np
 import pandas as pd
-from packages.core.indicators import IndicatorCalculator
+from typing import Optional, Tuple
 
-class VectorizedIndicators:
-    """Vectorized indicator calculations for entire DataFrames"""
-
-    @staticmethod
-    def add_all(df: pd.DataFrame) -> pd.DataFrame:
-        """Add all supported indicators to the dataframe"""
-        # Ensure we have required columns
-        required = ['open', 'high', 'low', 'close', 'volume']
-        if not all(col in df.columns for col in required):
-            return df
-
-        df = df.copy()
-
-        # Trend
-        df['ema_20'] = VectorizedIndicators.ema(df['close'], 20)
-        df['ema_50'] = VectorizedIndicators.ema(df['close'], 50)
-        df['ema_200'] = VectorizedIndicators.ema(df['close'], 200)
-        df['sma_20'] = df['close'].rolling(window=20).mean()
-
-        # Volatility
-        df['atr_14'] = VectorizedIndicators.atr(df, 14)
-        df['bb_upper'], df['bb_mid'], df['bb_lower'] = VectorizedIndicators.bollinger_bands(df['close'])
-
-        # Momentum
-        df['rsi_14'] = VectorizedIndicators.rsi(df['close'], 14)
-        df['adx_14'] = VectorizedIndicators.adx(df, 14)
-
-        # Channels
-        df['donchian_upper'], df['donchian_lower'] = VectorizedIndicators.donchian(df, 20)
-
-        return df
+class FoundryIndicators:
+    """
+    Vectorized indicator calculations for Strategy Foundry backtesting.
+    Returns full Series/Arrays instead of just the latest value.
+    Reuses logic from core where possible/appropriate.
+    """
 
     @staticmethod
-    def ema(series: pd.Series, period: int) -> pd.Series:
-        return series.ewm(span=period, adjust=False).mean()
+    def calculate_tr(df: pd.DataFrame) -> np.ndarray:
+        """True Range"""
+        high = df["high"].values
+        low = df["low"].values
+        close = df["close"].values
 
-    @staticmethod
-    def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0))
-        loss = (-delta.where(delta < 0, 0))
+        tr1 = high - low
+        prev_close = np.roll(close, 1)
+        prev_close[0] = close[0] # Handle first element
 
-        # Wilder's Smoothing
-        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+        tr2 = np.abs(high - prev_close)
+        tr3 = np.abs(low - prev_close)
 
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
+        return np.maximum(tr1, np.maximum(tr2, tr3))
 
     @staticmethod
     def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high = df['high']
-        low = df['low']
-        close = df['close']
+        """Average True Range"""
+        tr = FoundryIndicators.calculate_tr(df)
+        return pd.Series(tr, index=df.index).rolling(window=period).mean()
 
-        tr1 = high - low
-        tr2 = abs(high - close.shift())
-        tr3 = abs(low - close.shift())
+    @staticmethod
+    def rsi(series: pd.Series, period: int = 14) -> pd.Series:
+        """Relative Strength Index"""
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
 
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        # Wilder's Smoothing for ATR
-        return tr.ewm(alpha=1/period, adjust=False).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
 
     @staticmethod
     def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high = df['high']
-        low = df['low']
-        close = df['close']
+        """Average Directional Index"""
+        high = df["high"]
+        low = df["low"]
 
         up_move = high - high.shift()
         down_move = low.shift() - low
@@ -82,29 +53,104 @@ class VectorizedIndicators:
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-        plus_dm_series = pd.Series(plus_dm, index=df.index)
-        minus_dm_series = pd.Series(minus_dm, index=df.index)
+        tr = FoundryIndicators.calculate_tr(df)
+        atr = pd.Series(tr, index=df.index).ewm(alpha=1/period, adjust=False).mean()
 
-        tr = VectorizedIndicators.atr(df, 1) # True Range
-
-        # Smooth
-        atr_smooth = tr.ewm(alpha=1/period, adjust=False).mean()
-        plus_di = 100 * plus_dm_series.ewm(alpha=1/period, adjust=False).mean() / atr_smooth
-        minus_di = 100 * minus_dm_series.ewm(alpha=1/period, adjust=False).mean() / atr_smooth
+        plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean() / atr
+        minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean() / atr
 
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
         return dx.ewm(alpha=1/period, adjust=False).mean()
 
     @staticmethod
-    def bollinger_bands(series: pd.Series, period: int = 20, std: float = 2.0):
-        mid = series.rolling(window=period).mean()
-        sigma = series.rolling(window=period).std()
-        upper = mid + (std * sigma)
-        lower = mid - (std * sigma)
-        return upper, mid, lower
+    def ema(series: pd.Series, period: int) -> pd.Series:
+        """Exponential Moving Average"""
+        return series.ewm(span=period, adjust=False).mean()
 
     @staticmethod
-    def donchian(df: pd.DataFrame, period: int = 20):
-        upper = df['high'].rolling(window=period).max()
-        lower = df['low'].rolling(window=period).min()
+    def sma(series: pd.Series, period: int) -> pd.Series:
+        """Simple Moving Average"""
+        return series.rolling(window=period).mean()
+
+    @staticmethod
+    def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> Tuple[pd.Series, pd.Series]:
+        """
+        Supertrend
+        Returns: (supertrend_line, direction)
+        direction: 1 (uptrend), -1 (downtrend)
+        """
+        high = df["high"]
+        low = df["low"]
+        close = df["close"]
+
+        tr = FoundryIndicators.calculate_tr(df)
+        atr = pd.Series(tr, index=df.index).rolling(window=period).mean()
+
+        hl2 = (high + low) / 2
+        basic_ub = hl2 + (multiplier * atr)
+        basic_lb = hl2 - (multiplier * atr)
+
+        n = len(df)
+        final_ub = np.zeros(n)
+        final_lb = np.zeros(n)
+        supertrend = np.zeros(n)
+        direction = np.zeros(n)
+
+        # Simple iterative implementation for correctness
+        # (Vectorizing Supertrend fully is hard due to recursive dependency)
+        close_vals = close.values
+        bub = basic_ub.values
+        blb = basic_lb.values
+
+        # Init
+        final_ub[0] = bub[0]
+        final_lb[0] = blb[0]
+        direction[0] = 1
+        supertrend[0] = final_lb[0]
+
+        for i in range(1, n):
+            # Final UB
+            if bub[i] < final_ub[i-1] or close_vals[i-1] > final_ub[i-1]:
+                final_ub[i] = bub[i]
+            else:
+                final_ub[i] = final_ub[i-1]
+
+            # Final LB
+            if blb[i] > final_lb[i-1] or close_vals[i-1] < final_lb[i-1]:
+                final_lb[i] = blb[i]
+            else:
+                final_lb[i] = final_lb[i-1]
+
+            # Trend
+            if direction[i-1] == 1:
+                if close_vals[i] < final_lb[i]:
+                    direction[i] = -1
+                    supertrend[i] = final_ub[i]
+                else:
+                    direction[i] = 1
+                    supertrend[i] = final_lb[i]
+            else:
+                if close_vals[i] > final_ub[i]:
+                    direction[i] = 1
+                    supertrend[i] = final_lb[i]
+                else:
+                    direction[i] = -1
+                    supertrend[i] = final_ub[i]
+
+        return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
+
+    @staticmethod
+    def bollinger_bands(series: pd.Series, period: int = 20, std_dev: float = 2.0) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """Bollinger Bands: Upper, Middle, Lower"""
+        middle = series.rolling(window=period).mean()
+        std = series.rolling(window=period).std()
+        upper = middle + (std * std_dev)
+        lower = middle - (std * std_dev)
+        return upper, middle, lower
+
+    @staticmethod
+    def donchian(df: pd.DataFrame, period: int = 20) -> Tuple[pd.Series, pd.Series]:
+        """Donchian Channel: Upper, Lower"""
+        upper = df["high"].rolling(window=period).max()
+        lower = df["low"].rolling(window=period).min()
         return upper, lower
