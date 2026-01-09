@@ -4,6 +4,10 @@ from typing import Optional
 from kiteconnect import KiteConnect
 import dotenv
 
+# Kite Daily Auth Module
+# Handles manual login flow, token exchange, and persistence.
+# Validates session validity against Kite Connect API.
+
 logger = logging.getLogger(__name__)
 
 class KiteAuth:

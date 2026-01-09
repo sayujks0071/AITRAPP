@@ -8,6 +8,9 @@ Runs daily at 8:00 AM IST.
    - Prints login URL.
    - Wait for manual login via callback (if API server is running).
    - Or if CI, fails/notifies.
+
+Usage:
+    python scripts/kite_auth_bootstrap.py [--check-only] [--port PORT]
 """
 
 import os

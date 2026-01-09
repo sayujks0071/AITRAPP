@@ -12,6 +12,12 @@ Due to Zerodha's policy and security best practices, the login process requires 
 
 ### 1. Automated Check
 A daily cron job (or GitHub Action) runs `scripts/kite_auth_bootstrap.py`.
+
+Example cron entry (server/VPS):
+```bash
+0 8 * * * TRADING_MODE=paper python scripts/kite_auth_bootstrap.py
+```
+
 - It checks if the current session (stored in `.env` or secrets) is valid.
 - If valid, no action is taken.
 - If invalid, it flags that authentication is required.
