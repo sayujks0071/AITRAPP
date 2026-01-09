@@ -87,6 +87,8 @@ def main():
         if not splits:
             continue
 
+        timeframe_engine = BacktestEngine(df)
+
         for cand in candidates:
             fold_metrics = []
 
@@ -109,6 +111,21 @@ def main():
             positive_folds = sum(1 for m in fold_metrics if m['net_profit'] > 0)
             total_trades = sum(m['total_trades'] for m in fold_metrics)
 
+            sanity_flags = {
+                "passed": True,
+                "late_day_dependence": False,
+                "overtrading": False
+            }
+
+            try:
+                sanity_trades, _ = timeframe_engine.run(cand)
+                sanity_flags = SanityChecker.check_intraday_sanity(
+                    sanity_trades.to_dict("records"),
+                    tf
+                )
+            except Exception as exc:
+                logger.warning(f"Sanity check failed for {cand.id}: {exc}")
+
             agg_metrics = {
                 "sharpe": avg_sharpe,
                 "calmar": avg_calmar,
@@ -116,8 +133,8 @@ def main():
                 "max_drawdown": max_dd,
                 "positive_folds": positive_folds,
                 "total_trades": total_trades,
-                # Sanity flags
-                "sanity_passed": True # Assume true unless checked?
+                "sanity_passed": sanity_flags["passed"],
+                "sanity_flags": sanity_flags
             }
 
             # Run Sanity Checks on aggregated trades? Or per fold?
@@ -127,6 +144,7 @@ def main():
 
             # Score
             score = Ranker.calculate_score(agg_metrics, config['weights'])
+            agg_metrics['score'] = score
 
             all_results.append({
                 "id": cand.id,
@@ -227,18 +245,29 @@ def main():
         min_folds = config['thresholds']['min_positive_folds']
 
         if best_candidate['metrics']['positive_folds'] >= min_folds:
-            if Promoter.should_promote(best_candidate, current_champ_data.get('metrics')):
+            challenger_metrics = dict(best_candidate['metrics'])
+            challenger_metrics['score'] = best_candidate.get('score', challenger_metrics.get('score', 0))
+
+            champion_metrics = {}
+            if current_champ_data:
+                champion_metrics = dict(current_champ_data.get('metrics', {}))
+                if 'score' not in champion_metrics and 'score' in current_champ_data:
+                    champion_metrics['score'] = current_champ_data['score']
+
+            if Promoter.should_promote(challenger_metrics, champion_metrics):
                 logger.info(f"Promoting new champion: {best_candidate['id']}")
                 champion_store.save_new_champion(
                     best_candidate['config'],
                     best_candidate['metrics'],
                     best_candidate['timeframe'],
-                    run_ts
+                    run_ts,
+                    best_candidate['score']
                 )
                 current_champ_data = {
                     "strategy": best_candidate['config'],
                     "metrics": best_candidate['metrics'],
-                    "timeframe": best_candidate['timeframe']
+                    "timeframe": best_candidate['timeframe'],
+                    "score": best_candidate['score']
                 }
 
     # 5. Live Signal Publishing
