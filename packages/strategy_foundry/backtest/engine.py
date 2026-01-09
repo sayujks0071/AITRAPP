@@ -11,9 +11,10 @@ from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicat
 from packages.strategy_foundry.adapters.core_costs import DEFAULT_COSTS
 
 class BacktestEngine:
-    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0):
+    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0, spread_guard_bps: float = 0.0):
         self.data = data.copy()
         self.initial_capital = initial_capital
+        self.spread_guard_bps = spread_guard_bps
         # Precompute common indicators if not already there
         self.data = VectorizedIndicators.add_all(self.data)
 
@@ -23,6 +24,8 @@ class BacktestEngine:
         Returns: (trades_df, equity_curve_series)
         """
         df = self.data
+        if df.empty:
+            return pd.DataFrame(), pd.Series()
 
         # 1. Generate Entry/Exit Signals (Vectorized)
         entries = self._generate_entries(df, strategy)
@@ -48,7 +51,7 @@ class BacktestEngine:
             curr_close = df['close'].iloc[i]
 
             # prev_bar for signals (avoid lookahead)
-            prev_close = df['close'].iloc[i-1]
+            # prev_close = df['close'].iloc[i-1]
 
             # Check Exits if in position
             if position != 0:
@@ -59,23 +62,18 @@ class BacktestEngine:
                 # If Long
                 if position > 0:
                     if curr_low <= stop_loss:
-                        exit_price = min(curr_open, stop_loss) # Gap handling: exit at open if below SL
+                        exit_price = min(curr_open, stop_loss) # Gap handling
                         reason = "SL"
                     elif curr_high >= take_profit:
                         exit_price = max(curr_open, take_profit)
                         reason = "TP"
 
                 # Check End of Day Exit (15:25) - Higher Priority than Time Exit
-                # Simplification: if time is >= 15:25
                 if exit_price is None:
-                    # In test environment, the timezone might not be properly set on curr_time index,
-                    # but usually it is. We check hour/minute.
-                    # Note: We exit at Open of the bar that starts at 15:25, which is 15:25.
+                    # Check for 15:25 or later.
                     if (curr_time.hour == 15 and curr_time.minute >= 25) or (curr_time.hour > 15):
-                        exit_price = curr_open # Exit on next bar open? Or close of this bar?
-                        # If this bar is 15:25, we exit at open of 15:25? No, usually exit before close.
-                        # If we are strictly backtesting "Open" execution, then 15:25 bar open is 15:25.
-                        exit_price = curr_close # Force close at end of this bar
+                        # Force close
+                        exit_price = curr_close # Close at end of bar
                         reason = "EOD"
 
                 # Check Time Exit
@@ -96,13 +94,17 @@ class BacktestEngine:
 
                 # Execute Exit
                 if exit_price is not None:
-                    pnl = (exit_price - entry_price) * position * (current_capital / entry_price) # Simplistic sizing
+                    # Gross PnL
+                    gross_pnl = (exit_price - entry_price) * position * (current_capital / entry_price)
 
-                    # Apply costs
+                    # Apply costs: Slippage + Comm + Spread Guard
                     notional = current_capital
-                    costs = (notional * (DEFAULT_COSTS.slippage_bps + DEFAULT_COSTS.commission_bps) / 10000) * 2 # Entry + Exit
+                    total_bps = DEFAULT_COSTS.slippage_bps + DEFAULT_COSTS.commission_bps + self.spread_guard_bps
 
-                    net_pnl = pnl - costs
+                    costs = (notional * total_bps / 10000) * 2 # Entry + Exit costs applied at exit for simplicity
+                    costs += (DEFAULT_COSTS.flat_fee * 2) # Flat fee per order (entry+exit)
+
+                    net_pnl = gross_pnl - costs
                     current_capital += net_pnl
                     position = 0
 
@@ -118,7 +120,7 @@ class BacktestEngine:
             # Check Entries if flat
             if position == 0:
                 # Intraday constraint: Don't enter after 15:00
-                if not (curr_time.hour == 15 and curr_time.minute >= 0):
+                if not (curr_time.hour == 15 and curr_time.minute >= 0) and not (curr_time.hour > 15):
                      if entries.iloc[i-1]: # Signal from previous close
                         position = 1 # Long only for now
                         entry_price = curr_open
@@ -140,6 +142,9 @@ class BacktestEngine:
 
             equity_curve.iloc[i] = current_capital
 
+        # Fill NaNs in equity curve (from gaps)
+        equity_curve = equity_curve.ffill()
+
         return pd.DataFrame(trades), equity_curve
 
     def _generate_entries(self, df: pd.DataFrame, strategy: StrategyConfig) -> pd.Series:
@@ -147,13 +152,17 @@ class BacktestEngine:
         signals = pd.Series(False, index=df.index)
 
         if strategy.entry_block == "entry_trend_ema_cross":
-            fast = df.ewm(span=strategy.entry_params['fast_period'], adjust=False).mean()
-            slow = df.ewm(span=strategy.entry_params['slow_period'], adjust=False).mean()
-            # Crossover logic: Fast crosses above Slow
-            # Fast > Slow AND PrevFast <= PrevSlow
-            # Actually, we just need the condition. The engine loop checks signal[i-1] so "True" means "Buy Next Open"
+            # Recompute specific EMAs if not pre-calculated or standard
+            # We precalculated ema_20, ema_50, ema_200.
+            # If params match, reuse. Else recompute.
+            p_fast = strategy.entry_params['fast_period']
+            p_slow = strategy.entry_params['slow_period']
 
-            cond = (fast['close'] > slow['close']) & (fast['close'].shift(1) <= slow['close'].shift(1))
+            fast = VectorizedIndicators.ema(df['close'], p_fast)
+            slow = VectorizedIndicators.ema(df['close'], p_slow)
+
+            # Crossover logic: Fast crosses above Slow
+            cond = (fast > slow) & (fast.shift(1) <= slow.shift(1))
 
             if strategy.entry_params.get('adx_filter'):
                 cond = cond & (df['adx_14'] > strategy.entry_params['adx_threshold'])
@@ -162,8 +171,6 @@ class BacktestEngine:
 
         elif strategy.entry_block == "entry_breakout_donchian":
             period = strategy.entry_params['period']
-            # We need to recompute donchian with dynamic period if not standard 20
-            # Optimization: don't recompute if period is 20
             if period == 20 and 'donchian_upper' in df.columns:
                 upper = df['donchian_upper']
             else:
@@ -180,9 +187,6 @@ class BacktestEngine:
 
         elif strategy.entry_block == "entry_mean_rev_rsi":
             rsi = df['rsi_14']
-            # If dynamic RSI period needed, recompute. Assuming 14 for speed or implementing dynamic later.
-            # Using standard 14 for now as strict optimization.
-            # To support dynamic period:
             if strategy.entry_params['rsi_period'] != 14:
                  rsi = VectorizedIndicators.rsi(df['close'], strategy.entry_params['rsi_period'])
 

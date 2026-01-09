@@ -1,6 +1,3 @@
-# Instrument Mapping
-# Maps research symbols to paper and live proxy symbols
-
 research:
   NIFTY: "^NSEI"
   SENSEX: "^BSESN"
@@ -10,5 +7,5 @@ paper_proxy:
   SENSEX: "SENSEXBEES"
 
 live_proxy:
-  NIFTY: "NIFTY 50"  # Broker symbol or template
-  SENSEX: "SENSEX"
+  NIFTY: "NIFTYBEES"
+  SENSEX: "SENSEXBEES"

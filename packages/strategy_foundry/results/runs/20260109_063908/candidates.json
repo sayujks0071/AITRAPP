@@ -1,0 +1,293 @@
+[
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 8,
+      "oversold": 40,
+      "exit_rsi": 80
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": true
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 24
+    },
+    "id": "5545f7fb1fd7830194d51e4288a6f444"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 40,
+      "slow_period": 140,
+      "adx_filter": false,
+      "adx_threshold": 15
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 2.5
+    },
+    "id": "796b3023a9823939310ffe78ac0ca59e"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 2,
+      "oversold": 30,
+      "exit_rsi": 65
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": false
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 24
+    },
+    "id": "f308e21b03a4e06d6eb9fd86c7725006"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 8,
+      "oversold": 40,
+      "exit_rsi": 60
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 3.0
+    },
+    "id": "603c3eef9dadaf45d9a51d9de874526f"
+  },
+  {
+    "entry_block": "entry_breakout_donchian",
+    "entry_params": {
+      "period": 60,
+      "filter_ma": true,
+      "ma_period": 50
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": true
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 48
+    },
+    "id": "510b6b1484d39cfd36cb3d44efca05da"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 25,
+      "slow_period": 110,
+      "adx_filter": false,
+      "adx_threshold": 20
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.0,
+      "trailing": true
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 2.5
+    },
+    "id": "8e908088d51ae4f479da16912914cff0"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 10,
+      "oversold": 20,
+      "exit_rsi": 50
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 4.0
+    },
+    "id": "eff6d202387d40f0e1f2191a6029a679"
+  },
+  {
+    "entry_block": "entry_breakout_donchian",
+    "entry_params": {
+      "period": 45,
+      "filter_ma": false,
+      "ma_period": 150
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.5,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 3.0
+    },
+    "id": "93c89cbc16021520c4e396e9212eec26"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 5,
+      "slow_period": 50,
+      "adx_filter": true,
+      "adx_threshold": 15
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 4.0
+    },
+    "id": "2c2b7ef0b6e7ff9248a96dc832bd63f6"
+  },
+  {
+    "entry_block": "entry_breakout_donchian",
+    "entry_params": {
+      "period": 15,
+      "filter_ma": false,
+      "ma_period": 150
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 1.0,
+      "trailing": true
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 4.0
+    },
+    "id": "c5fb04ffe7fd6f3fcf7d6c6ca8c8f19d"
+  },
+  {
+    "entry_block": "entry_breakout_donchian",
+    "entry_params": {
+      "period": 10,
+      "filter_ma": false,
+      "ma_period": 100
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.0,
+      "trailing": true
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 2.5
+    },
+    "id": "cf1acced1883f2d30d530556e50455c4"
+  },
+  {
+    "entry_block": "entry_breakout_donchian",
+    "entry_params": {
+      "period": 10,
+      "filter_ma": false,
+      "ma_period": 100
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": false
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 84
+    },
+    "id": "e1d9a984034742397c3869d15dc9d197"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 50,
+      "slow_period": 40,
+      "adx_filter": false,
+      "adx_threshold": 25
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.0,
+      "trailing": true
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 3.5
+    },
+    "id": "32b321264b728124476154422c94634f"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 15,
+      "slow_period": 100,
+      "adx_filter": true,
+      "adx_threshold": 20
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": true
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 96
+    },
+    "id": "0d4157b23c92beb698ebab66f229b008"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 35,
+      "slow_period": 50,
+      "adx_filter": true,
+      "adx_threshold": 15
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 3.5
+    },
+    "id": "995c2a9f8953706bb741bad733049cc8"
+  }
+]

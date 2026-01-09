@@ -62,7 +62,7 @@ BLOCKS = {
         name="ATR Stop",
         type="risk",
         params={
-            "atr_period": Parameter("atr_period", "int", 14, 14, 0, default=14),
+            "atr_period": Parameter("atr_period", "int", 14, 14, 1, default=14), # step cannot be 0
             "multiplier": Parameter("multiplier", "float", 1.0, 4.0, 0.5, default=2.0),
             "trailing": Parameter("trailing", "bool", default=False)
         },

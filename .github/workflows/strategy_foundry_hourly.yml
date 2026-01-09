@@ -2,7 +2,7 @@ name: Strategy Foundry Hourly
 
 on:
   schedule:
-    - cron: "0 * * * *"  # Hourly
+    - cron: "0 * * * *"
   workflow_dispatch:
   pull_request:
     paths:
@@ -11,31 +11,38 @@ on:
 jobs:
   run-foundry:
     runs-on: ubuntu-latest
-    env:
-      FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
-      PYTHONPATH: .
-
     steps:
       - uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy structlog pyyaml requests tabulate
-          # Add any other core deps needed, but keep it light
+          python -m pip install --upgrade pip
+          pip install pandas numpy requests pyyaml structlog tabulate matplotlib pytz
 
-      - name: Run Hourly Job
+      - name: Run Strategy Foundry (Fast Mode for PRs)
+        env:
+          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
+          PYTHONPATH: .
         run: |
           python -m packages.strategy_foundry.run_hourly
 
-      - name: Upload Artifacts
+      - name: Upload Results
         if: always()
         uses: actions/upload-artifact@v3
         with:
           name: foundry-results
           path: packages/strategy_foundry/results/
-          if-no-files-found: warn
+
+      - name: Commit Leaderboard (Optional)
+        if: github.event_name != 'pull_request' && env.COMMIT_RESULTS == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add packages/strategy_foundry/results/leaderboard.md
+          git commit -m "Update Strategy Foundry Leaderboard" || exit 0
+          git push

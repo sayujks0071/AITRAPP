@@ -1,44 +1,37 @@
 # Aggressive Intraday Strategy Foundry
 
-Automated research lab that generates, backtests, and selects intraday trading strategies for Indian markets.
+Automated lab for generating, backtesting, and ranking intraday trading strategies on 5m and 15m timeframes.
 
-## Overview
+## Structure
 
-The foundry runs hourly (during market hours) to:
-1.  **Generate** random strategies based on a grammar of valid trading components.
-2.  **Backtest** these strategies on 5m and 15m timeframes using Walk-Forward Optimization.
-3.  **Rank** them based on risk-adjusted returns, stability, and robustness.
-4.  **Promote** a "Champion" strategy if it beats the incumbent.
-5.  **Publish** a live signal artifact (`live_signal.json`) if the champion signals an entry.
-
-## Architecture
-
--   `adapters/`: Bridges to Core system (Indicators, Market Hours).
--   `data/`: Manages data loading and caching (Yahoo Finance).
--   `factory/`: Strategy grammar and random generation.
--   `backtest/`: Vectorized + Event-driven hybrid engine.
--   `selection/`: Ranking and promotion logic.
--   `live/`: Signal publication.
+*   `configs/`: Configuration files (weights, instruments, thresholds).
+*   `data/`: Data loading and caching (Yahoo Finance fallback).
+*   `factory/`: Strategy grammar and generation logic.
+*   `backtest/`: Vectorized backtest engine and metrics.
+*   `selection/`: Ranking, promotion, and champion storage.
+*   `live/`: Signal publishing (JSON artifacts only).
 
 ## Usage
 
-### Run Manually
+### Run Locally
 
 ```bash
-# Full mode
-python packages/strategy_foundry/run_hourly.py
+# Full Run
+python -m packages.strategy_foundry.run_hourly
 
-# Fast mode (fewer candidates, fewer folds)
-FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+# Fast Mode (fewer candidates, fewer folds)
+FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
 ```
 
 ### Outputs
 
--   **Run Artifacts**: `results/runs/<timestamp>/` (candidates, metrics, leaderboard).
--   **Live Signal**: `results/live_signal.json`.
--   **Champion**: `results/champions/current.json`.
+Results are stored in `packages/strategy_foundry/results/`:
 
-## Configuration
+*   `runs/<timestamp>/`: Per-run artifacts (candidates, metrics, leaderboard).
+*   `champions/`: Historical champions and `current.json`.
+*   `live_signal.json`: Current live signal (generated only during market hours).
 
--   `configs/foundry.yaml`: Foundry settings (thresholds, weights).
--   `configs/instrument_map.yaml`: Symbol mapping (Research -> Paper -> Live).
+## Live Trading
+
+Live trading is **OFF** by default. The system only publishes `live_signal.json`.
+To enable execution, a separate bridge must be run with `ENABLE_LIVE=true` and explicit approvals.

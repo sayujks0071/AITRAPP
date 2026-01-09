@@ -4,17 +4,26 @@ Decides if a candidate should replace the current champion.
 """
 class Promoter:
     @staticmethod
-    def should_promote(challenger_metrics: dict, champion_metrics: dict) -> bool:
+    def should_promote(challenger_metrics: dict, champion_metrics: dict | None) -> bool:
+        challenger_score = challenger_metrics.get('score', 0.0)
+
         if not champion_metrics:
             return True
 
+        champion_score = champion_metrics.get('score', 0.0)
+
         # Rule: Beat score by >= 10%
-        if challenger_metrics['score'] >= champion_metrics['score'] * 1.1:
+        if champion_score == 0 or challenger_score >= champion_score * 1.1:
             return True
 
+        champ_dd = champion_metrics.get('max_drawdown', 1.0)
+        challenger_dd = challenger_metrics.get('max_drawdown', 1.0)
+        champ_sharpe = champion_metrics.get('sharpe', 0.0)
+        challenger_sharpe = challenger_metrics.get('sharpe', 0.0)
+
         # Rule: Reduce MaxDD by >= 5% absolute, without degrading Sharpe
-        if (champion_metrics['max_drawdown'] - challenger_metrics['max_drawdown'] >= 0.05) and \
-           (challenger_metrics['sharpe'] >= champion_metrics['sharpe'] * 0.9):
+        if (champ_dd - challenger_dd >= 0.05) and \
+           (challenger_sharpe >= champ_sharpe * 0.9):
             return True
 
         return False
