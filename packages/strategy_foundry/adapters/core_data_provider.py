@@ -1,14 +1,14 @@
 """
-Core Data Provider Adapter
+Core Data Provider Stub
+This module would interface with `packages.core` data providers if they exist.
+For now, it returns None to force fallback to Yahoo.
 """
-# Placeholder if core has a unified data provider.
-# Currently strategy foundry uses its own loader/source logic but this is here for future linkage.
-from typing import Optional
 import pandas as pd
+from typing import Optional
 
 class CoreDataProvider:
     @staticmethod
-    def get_ohlcv(symbol: str, timeframe: str, start=None, end=None) -> Optional[pd.DataFrame]:
-        # Implement call to packages.core.historical_data if it supports what we need
-        # For now, return None to trigger fallback to Yahoo downloader
+    def get_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
+        # Implementation would call packages.core.market_data.get_historical(...)
+        # Returning None forces Loader to use YahooDownloader
         return None

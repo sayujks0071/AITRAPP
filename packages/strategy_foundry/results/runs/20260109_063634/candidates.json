@@ -1,0 +1,292 @@
+[
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 14,
+      "oversold": 20,
+      "exit_rsi": 80
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 1.5,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 3.0
+    },
+    "id": "addcb557b485140363bb29d1658a329f"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 50,
+      "slow_period": 200,
+      "adx_filter": true,
+      "adx_threshold": 30
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": false
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 48
+    },
+    "id": "d0573afc82b2e37e075d5eb1bd73023f"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 10,
+      "oversold": 20,
+      "exit_rsi": 55
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 2.0
+    },
+    "id": "204ef5b5c885891fe4adbf070d4fa46e"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 2,
+      "oversold": 10,
+      "exit_rsi": 50
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": true
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 1.5
+    },
+    "id": "b163f979848493e34a10a43bffc5d72b"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 8,
+      "oversold": 35,
+      "exit_rsi": 50
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 1.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 2.5
+    },
+    "id": "2ccc3f29a741454f3c752620f36b45a9"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 30,
+      "slow_period": 150,
+      "adx_filter": true,
+      "adx_threshold": 20
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.5,
+      "trailing": true
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 48
+    },
+    "id": "90ed4fa7959c5dbfb789df13674b48b4"
+  },
+  {
+    "entry_block": "entry_breakout_donchian",
+    "entry_params": {
+      "period": 40,
+      "filter_ma": true,
+      "ma_period": 50
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 1.5,
+      "trailing": false
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 48
+    },
+    "id": "2f8bbf21b446588c0910a8764b6384ac"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 10,
+      "oversold": 40,
+      "exit_rsi": 80
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": false
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 48
+    },
+    "id": "c0580e7a6b25d7b41d68f01633b67f37"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 20,
+      "slow_period": 140,
+      "adx_filter": true,
+      "adx_threshold": 30
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 1.5
+    },
+    "id": "7e72fbc9c88d7b2fdc21ef0281eb5ab5"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 45,
+      "slow_period": 110,
+      "adx_filter": true,
+      "adx_threshold": 15
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 2.0,
+      "trailing": true
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 84
+    },
+    "id": "a45d8f62c7a287cf14433022638c3832"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 2,
+      "oversold": 25,
+      "exit_rsi": 55
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.5,
+      "trailing": false
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 3.0
+    },
+    "id": "d4308167c02ee24cf7b603e70604894a"
+  },
+  {
+    "entry_block": "entry_breakout_donchian",
+    "entry_params": {
+      "period": 30,
+      "filter_ma": true,
+      "ma_period": 150
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.5,
+      "trailing": true
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 2.5
+    },
+    "id": "2280c65a6f9b42e256ff6ff8ddf927f9"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 6,
+      "oversold": 30,
+      "exit_rsi": 50
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 1.5,
+      "trailing": true
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 72
+    },
+    "id": "ec8d4187488f2352d4224ff1c6e42131"
+  },
+  {
+    "entry_block": "entry_trend_ema_cross",
+    "entry_params": {
+      "fast_period": 30,
+      "slow_period": 30,
+      "adx_filter": false,
+      "adx_threshold": 20
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 4.0,
+      "trailing": true
+    },
+    "exit_block": "exit_rr",
+    "exit_params": {
+      "risk_reward": 1.5
+    },
+    "id": "13953600e9f7fd2d30956870224dd10d"
+  },
+  {
+    "entry_block": "entry_mean_rev_rsi",
+    "entry_params": {
+      "rsi_period": 6,
+      "oversold": 35,
+      "exit_rsi": 60
+    },
+    "risk_block": "risk_atr",
+    "risk_params": {
+      "atr_period": 14,
+      "multiplier": 3.0,
+      "trailing": false
+    },
+    "exit_block": "exit_time",
+    "exit_params": {
+      "max_bars": 24
+    },
+    "id": "0fa001be7c61e2153282319416dd7bdb"
+  }
+]

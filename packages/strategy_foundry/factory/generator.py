@@ -14,7 +14,8 @@ class StrategyGenerator:
         elif param.type == "float":
             # Avoid floating point weirdness
             steps = int((param.max - param.min) / param.step)
-            return round(param.min + (random.randint(0, steps) * param.step), 2)
+            val = param.min + (random.randint(0, steps) * param.step)
+            return round(val, 2)
         elif param.type == "bool":
             return random.choice([True, False])
         elif param.type == "choice":
