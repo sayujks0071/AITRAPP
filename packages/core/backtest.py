@@ -1,4 +1,5 @@
 """Backtesting engine using historical data"""
+import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -8,7 +9,7 @@ import structlog
 from packages.core.config import app_config
 from packages.core.execution import ExecutionEngine, OrderResult
 from packages.core.historical_data import HistoricalDataLoader
-from packages.core.models import Position, PositionStatus, Signal, SignalSide
+from packages.core.models import Position, PositionStatus, Signal, SignalSide, Tick
 from packages.core.paper_simulator import PaperSimulator
 from packages.core.risk import PortfolioRisk, RiskManager
 from packages.core.strategies import Strategy
@@ -157,60 +158,58 @@ class BacktestEngine:
         
         # Process each strike
         for strike in strikes:
-            # Get CE and PE data
-            ce_data = chain[(chain['Strike Price'] == strike) & (chain['Option type'] == 'CE')]
-            pe_data = chain[(chain['Strike Price'] == strike) & (chain['Option type'] == 'PE')]
-            
-            if ce_data.empty and pe_data.empty:
-                continue
-            
-            # Convert to bars (for strategies that need OHLC)
-            if not ce_data.empty:
-                ce_bars = self.data_loader.convert_to_bars(ce_data, symbol, strike, 'CE')
-                ce_tick = self.data_loader.convert_to_ticks(ce_data, symbol, strike, 'CE')
+            # Process both CE and PE
+            for option_type in ['CE', 'PE']:
+                option_data = chain[(chain['Strike Price'] == strike) & (chain['Option type'] == option_type)]
                 
-                # Generate signals for CE
+                if option_data.empty:
+                    continue
+
+                # Convert to bars
+                bars = self.data_loader.convert_to_bars(option_data, symbol, strike, option_type)
+                
+                # Sort bars by timestamp to enable sequential processing
+                bars.sort(key=lambda b: b.timestamp)
+
+                # Generate signals
                 for strategy in strategies:
                     if not strategy.enabled:
                         continue
                     
-                    signals = self._generate_signals(
-                        strategy,
-                        symbol,
-                        strike,
-                        'CE',
-                        date,
-                        ce_bars,
-                        ce_tick[0] if ce_tick else None,
-                        underlying_value
-                    )
-                    
-                    # Execute signals
-                    for signal in signals:
-                        self._execute_signal(signal, date)
-            
-            # Same for PE
-            if not pe_data.empty:
-                pe_bars = self.data_loader.convert_to_bars(pe_data, symbol, strike, 'PE')
-                pe_tick = self.data_loader.convert_to_ticks(pe_data, symbol, strike, 'PE')
-                
-                for strategy in strategies:
-                    if not strategy.enabled:
-                        continue
-                    
-                    signals = self._generate_signals(
-                        strategy,
-                        symbol,
-                        strike,
-                        'PE',
-                        date,
-                        pe_bars,
-                        pe_tick[0] if pe_tick else None,
-                        underlying_value
-                    )
-                    
-                    for signal in signals:
-                        self._execute_signal(signal, date)
+                    # Iterate through bars to simulate intraday flow
+                    for i in range(len(bars)):
+                        bar = bars[i]
+                        # Create tick from bar for strategy context
+                        current_tick = Tick(
+                            token=bar.token,
+                            timestamp=bar.timestamp,
+                            last_price=bar.close,
+                            last_quantity=bar.volume,
+                            volume=bar.volume,
+                            bid=0.0, ask=0.0, bid_quantity=0, ask_quantity=0,
+                            open=bar.open, high=bar.high, low=bar.low, close=bar.close,
+                            oi=bar.oi or 0, oi_day_high=0, oi_day_low=0
+                        )
+
+                        # Pass history up to this point
+                        # Optimization: Pass full history or just enough window
+                        # We pass slice up to current bar (inclusive)
+                        history_bars = bars[:i+1]
+
+                        signals = self._generate_signals(
+                            strategy,
+                            symbol,
+                            strike,
+                            option_type,
+                            bar.timestamp,
+                            history_bars,
+                            current_tick,
+                            underlying_value
+                        )
+
+                        # Execute signals
+                        for signal in signals:
+                            self._execute_signal(signal, bar.timestamp)
         
         # Update existing positions
         self._update_positions(date, chain)
@@ -238,8 +237,21 @@ class BacktestEngine:
         
         inst_type = InstrumentType.CE if option_type == 'CE' else InstrumentType.PE
         
+        # Stable deterministic token generation
+        token_str = f"{symbol}_{strike}_{option_type}"
+        # Use MD5 to get consistent hash across runs/platforms
+        token_hash = hashlib.md5(token_str.encode()).hexdigest()
+        token = int(token_hash[:8], 16)  # Take first 8 chars (32 bits)
+
+        # Ensure bar tokens match instrument token
+        for b in bars:
+            b.token = token
+
+        if tick:
+            tick.token = token
+
         instrument = Instrument(
-            token=hash(f"{symbol}_{strike}_{option_type}") % 1000000,
+            token=token,
             symbol=symbol,
             tradingsymbol=f"{symbol}{int(strike)}{option_type}",
             exchange="NFO",
@@ -476,4 +488,3 @@ class BacktestEngine:
             "signals_generated": len(self.signals_generated),
             "daily_pnl": self.daily_pnl
         }
-
