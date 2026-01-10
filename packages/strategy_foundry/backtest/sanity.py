@@ -1,27 +1,23 @@
-"""
-Sanity Checks
-Sanity checks for strategies to prevent overfitting and ensure robustness.
-"""
-from typing import Dict, Any, List
+"""Backtest Sanity Checks"""
+from typing import Dict, List
 
-class SanityChecker:
-    @staticmethod
-    def check_intraday_sanity(trades: List[Dict[str, Any]], timeframe: str) -> Dict[str, bool]:
-        """
-        Check for intraday specific issues.
-        1. Late day dependence: If > 50% profit comes from last 30 mins
-        2. Overtrading: too many trades per day
-        """
-        # Placeholder
-        return {"passed": True}
+def check_sanity(metrics: Dict, min_trades=30, max_dd_pct=35.0) -> bool:
+    """
+    Reject strategies that don't meet basic criteria.
+    """
+    if not metrics:
+        return False
 
-    @staticmethod
-    def check_daily_sanity(daily_metrics: Dict[str, Any]) -> bool:
-        """
-        Check if daily performance is catastrophically bad.
-        """
-        if daily_metrics['sharpe'] < -0.2:
-            return False
-        if daily_metrics['max_drawdown'] > 0.45:
-            return False
-        return True
+    trades = metrics.get("total_trades", 0)
+    dd = metrics.get("max_dd", -1.0) # usually negative e.g. -0.20
+
+    # 1. Trade Count
+    if trades < min_trades:
+        return False
+
+    # 2. Max Drawdown (dd is negative, so abs(dd) > 0.35 is bad)
+    # If dd is -0.40, abs(-0.40)*100 = 40 > 35 -> Fail
+    if abs(dd) * 100 > max_dd_pct:
+        return False
+
+    return True

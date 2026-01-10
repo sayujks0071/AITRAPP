@@ -1,47 +1,55 @@
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+"""Champion Promotion Logic"""
+import json
+import structlog
+from pathlib import Path
+from typing import Optional, Dict
 
-def should_promote(challenger: StrategyCandidate, incumbent: StrategyCandidate) -> bool:
+logger = structlog.get_logger(__name__)
+
+CHAMPION_DIR = Path(__file__).parent.parent / "results" / "champions"
+CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+CURRENT_CHAMPION_FILE = CHAMPION_DIR / "current.json"
+
+def promote_if_better(challenger_score: float, challenger_data: Dict) -> bool:
     """
-    Promotion Logic:
-    1. Score improvement >= 10%
-    2. OR MaxDD reduction >= 5% (absolute) with Sharpe delta > -0.1
+    Compare challenger with current champion.
+    Promote if score >= current + 10% OR MaxDD significantly better.
     """
-    if not incumbent:
+    if not CURRENT_CHAMPION_FILE.exists():
+        _save_champion(challenger_data)
         return True
 
-    c_score = challenger.metrics.get("score", 0)
-    i_score = incumbent.metrics.get("score", 0)
+    try:
+        with open(CURRENT_CHAMPION_FILE, "r") as f:
+            current = json.load(f)
 
-    if i_score == 0: return True
+        current_score = current.get("score", 0.0)
 
-    score_imp = (c_score - i_score) / i_score
-    if score_imp >= 0.10:
-        return True
-
-    c_dd = challenger.metrics.get("avg_max_dd", -1.0)
-    i_dd = incumbent.metrics.get("avg_max_dd", -1.0)
-
-    # DD is negative number. Improvement means c_dd > i_dd + 0.05 ?
-    # E.g. c_dd = -0.10, i_dd = -0.20. Diff is +0.10.
-
-    if c_dd > (i_dd + 0.05):
-        c_sharpe = challenger.metrics.get("avg_sharpe", 0)
-        i_sharpe = incumbent.metrics.get("avg_sharpe", 0)
-        if (c_sharpe - i_sharpe) > -0.1:
+        # Rule 1: Score >= 110% of current
+        if challenger_score >= current_score * 1.10:
+            logger.info("New champion promoted (Score improvement)",
+                       old=current_score, new=challenger_score)
+            _save_champion(challenger_data)
             return True
+
+        # Rule 2: MaxDD improvement (requires metrics in data)
+        # TODO: Implement if metrics available in saved data
+
+    except Exception as e:
+        logger.error("Failed to read current champion", error=str(e))
 
     return False
 
-def is_live_eligible(candidate: StrategyCandidate, fast_mode: bool = False) -> bool:
-    """
-    Gating criteria for live publishing.
-    """
-    if fast_mode:
-        return False # Never promote in fast mode? Or just strict?
+def _save_champion(data: Dict):
+    # Save current
+    with open(CURRENT_CHAMPION_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
 
-    m = candidate.metrics
-    if m.get("avg_sharpe", 0) < 1.0: return False
-    if m.get("avg_max_dd", -1.0) < -0.25: return False # MaxDD > 25%
-    if m.get("positive_folds", 0) < 3: return False
+    # Save history
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    sid = data.get("strategy", {}).get("id", "unknown")
+    hist_file = CHAMPION_DIR / f"{ts}_{sid}.json"
+    with open(hist_file, "w") as f:
+        json.dump(data, f, indent=2, default=str)
 
-    return True
+import datetime

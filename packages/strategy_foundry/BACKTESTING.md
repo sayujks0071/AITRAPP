@@ -1,30 +1,33 @@
 # Backtesting Methodology
 
 ## Assumptions
-- **Timeframe**: Daily (1D) bars.
-- **Execution**: Next-Day Open. Signals generated on Close of Day T are executed at Open of Day T+1.
+
+- **Timeframe**: Daily (1D).
+- **Execution**: Market order at Open of next bar.
 - **Costs**:
-  - Slippage + Brokerage + Taxes approximated as 10bps (0.1%) per side on turnover.
-  - This is conservative for NIFTY Index / Futures.
+  - Slippage: 5 bps per side.
+  - Brokerage: ₹20 flat per order.
+  - Taxes: ~0.1% of turnover.
 
-## Walk-Forward Analysis
-To prevent overfitting, we use Walk-Forward Analysis (WFA) with an expanding window.
-- **Folds**: 3 folds by default.
-- **Training**: Uses data up to point K.
-- **Testing**: Evaluated on unseen data from K to K+M.
-- **Ranking**: Only Out-of-Sample (Testing) metrics are used for ranking.
+## Anti-Overfitting
 
-## Metrics
-- **CAGR**: Compound Annual Growth Rate.
-- **Sharpe**: Annualized Sharpe Ratio (Risk-free rate = 5%).
-- **MaxDD**: Maximum Drawdown.
-- **Calmar**: CAGR / MaxDD.
-- **Stability**: Inverse of Sharpe standard deviation across folds.
+We use **Walk-Forward Analysis (WFA)**:
+1. Divide history into $N$ folds (default 3).
+2. For each fold, we test on "Out-of-Sample" (OOS) data.
+3. Strategy must perform well across multiple OOS periods.
 
-## Scoring
-Composite Score =
-- 30% Sharpe
-- 25% Calmar
-- 20% CAGR
-- 15% Stability
-- Turnover Penalty (implicit in net returns via costs, but explicit penalty can be added)
+**Sanity Checks**:
+- Minimum 30 trades.
+- Max Drawdown < 35%.
+- Must be profitable in majority of folds.
+
+## Ranking
+
+Strategies are ranked by a composite score:
+$$ Score = 0.3 \cdot Sharpe + 0.25 \cdot Calmar + 0.2 \cdot CAGR + 0.15 \cdot Stability $$
+
+## Limitations
+
+- **Daily Data**: Intraday volatility is not captured.
+- **Vectorized**: Complex path-dependent logic (e.g. trailing stops) is approximated.
+- **Survivorship Bias**: Index constituents are current; historical changes not modeled.

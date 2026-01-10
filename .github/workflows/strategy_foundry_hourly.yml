@@ -6,34 +6,36 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "packages/strategy_foundry/**"
+      - 'packages/strategy_foundry/**'
 
 jobs:
-  run-foundry:
+  hourly-run:
     runs-on: ubuntu-latest
+    env:
+      FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+      PYTHONPATH: .
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy requests structlog pytz tabulate
+          pip install pandas numpy requests structlog pytz
+          # Install core deps if needed, but we try to be minimal
+          # If adapter imports core, we need core deps.
+          # We can just install from requirements.txt to be safe
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run Strategy Foundry
-        env:
-          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
-          PYTHONPATH: .
-        run: |
-          python packages/strategy_foundry/run_hourly.py
+        run: python -m packages.strategy_foundry.run_hourly
 
-      - name: Upload Artifacts
-        if: always()
-        uses: actions/upload-artifact@v3
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
         with:
           name: strategy-foundry-results
           path: packages/strategy_foundry/results/

@@ -1,92 +1,45 @@
+"""Live Signal Publisher"""
 import json
-import os
-from datetime import datetime
+import datetime
 import structlog
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
-from packages.strategy_foundry.factory.generator import GeneratedStrategy
-from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.adapters.core_market_hours import FoundryMarketHours
+from pathlib import Path
+from ..adapters.core_market_hours import MarketHoursAdapter
 
 logger = structlog.get_logger(__name__)
 
-SIGNAL_FILE = "packages/strategy_foundry/results/live_signal.json"
+RESULTS_DIR = Path(__file__).parent.parent / "results"
+LIVE_SIGNAL_FILE = RESULTS_DIR / "live_signal.json"
 
-def publish_signal(champion: StrategyCandidate, symbol: str = "NIFTY"):
-    """
-    Generate and publish live signal JSON.
-    """
-    os.makedirs(os.path.dirname(SIGNAL_FILE), exist_ok=True)
+def publish_signal(champion: dict, signal_val: int, instrument: str, reason: str):
+    """Publish the live signal JSON"""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    mh = FoundryMarketHours()
-    timestamp = datetime.now()
+    mh = MarketHoursAdapter()
+    is_open = mh.is_market_open()
 
-    # 1. Market Hours Check
-    if not mh.is_market_open(timestamp):
-        _write_signal({
-            "timestamp_ist": str(timestamp),
-            "status": "SKIPPED",
-            "reason": "Market Closed"
-        })
-        return
+    # Gate: Must be market open AND eligible
+    status = "OK"
 
-    # 2. Load Data (Latest)
-    loader = DataLoader()
-    try:
-        # Force refresh for live signal
-        df = loader.load_data(symbol, force_refresh=True)
-    except Exception as e:
-        _write_signal({
-            "timestamp_ist": str(timestamp),
-            "status": "SKIPPED",
-            "reason": f"Data Load Error: {str(e)}"
-        })
-        return
+    # If reason contains "Ineligible", we mark as skipped
+    if "Ineligible" in reason:
+        status = "SKIPPED"
+        # reason is already set
+    elif not is_open:
+        status = "SKIPPED"
+        reason = f"Market Closed. {reason}"
 
-    # 3. Generate Signal
-    try:
-        strategy = GeneratedStrategy(champion)
-        # We need to run on full history to get correct indicators
-        # Positions are shifted by 1 in backtest (Open of next day).
-        # For LIVE signal (intraday or end of day):
-        # If we run on data including TODAY'S CLOSE (or current candle),
-        # generate_positions() returns target position for TOMORROW OPEN (if Daily).
+    payload = {
+        "timestamp_ist": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30))).isoformat(),
+        "champion_id": champion.get("strategy", {}).get("id"),
+        "instrument": instrument,
+        "signal": signal_val, # -1, 0, 1
+        "rule_summary": reason,
+        "risk": champion.get("strategy", {}).get("risk", []),
+        "status": status,
+        "reason": reason
+    }
 
-        # HOWEVER, if we are running HOURLY, and using Daily bars:
-        # We only have data up to YESTERDAY close (usually).
-        # Yahoo data might have today's live bar.
+    with open(LIVE_SIGNAL_FILE, "w") as f:
+        json.dump(payload, f, indent=2)
 
-        # Assumption: We use Daily bars.
-        # If today is trading, we might have partial bar.
-        # If partial bar is reliable, we use it to predict signal for NOW.
-
-        positions = strategy.generate_positions(df)
-
-        # Latest target position
-        last_signal = int(positions.iloc[-1])
-
-        _write_signal({
-            "timestamp_ist": str(timestamp),
-            "champion_id": champion.id,
-            "instrument": symbol,
-            "signal": last_signal,
-            "rule_summary": champion.rule_summary,
-            "risk": {
-                "stop_type": champion.grammar.get("stop_type"),
-                "params": champion.params
-            },
-            "status": "OK",
-            "reason": "Signal Generated"
-        })
-
-    except Exception as e:
-        logger.error("Signal generation failed", error=str(e))
-        _write_signal({
-            "timestamp_ist": str(timestamp),
-            "status": "SKIPPED",
-            "reason": f"Strategy Error: {str(e)}"
-        })
-
-def _write_signal(data: dict):
-    with open(SIGNAL_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-    logger.info("Signal published", status=data["status"])
+    logger.info("Published live signal", file=str(LIVE_SIGNAL_FILE), status=status)
