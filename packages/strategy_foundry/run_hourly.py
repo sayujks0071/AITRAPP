@@ -1,174 +1,172 @@
+"""
+Strategy Foundry Hourly Runner.
+"""
 import os
 import sys
-import argparse
-import structlog
-from datetime import datetime
+import yaml
+import time
 import pandas as pd
+import structlog
+from pathlib import Path
+from datetime import datetime
+import pytz
 
-# Ensure pythonpath
+# Add repo root to path for imports
 sys.path.append(os.getcwd())
 
 from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.factory.grammar import StrategyGrammar
-from packages.strategy_foundry.factory.generator import GeneratedStrategy
-from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
+from packages.strategy_foundry.factory.grammar import Grammar
+from packages.strategy_foundry.backtest.walkforward import WalkForwardAnalyst
+from packages.strategy_foundry.backtest.sanity import SanityCheck
 from packages.strategy_foundry.selection.ranker import rank_candidates
-from packages.strategy_foundry.selection.champion_store import load_champion, save_champion
-from packages.strategy_foundry.selection.promote import should_promote, is_live_eligible
-from packages.strategy_foundry.live.signal_publisher import publish_signal
+from packages.strategy_foundry.selection.promote import Promoter
+from packages.strategy_foundry.live.signal_publisher import SignalPublisher
 
 logger = structlog.get_logger(__name__)
 
-def run_for_symbol(symbol: str, is_fast: bool, timestamp: str, run_dir: str, loader: DataLoader):
-    logger.info("Starting run for symbol", symbol=symbol)
-
-    try:
-        df = loader.load_data(symbol)
-    except Exception as e:
-        logger.error("Data load failed", symbol=symbol, error=str(e))
-        return []
-
-    # 2. Generate Candidates
-    n_candidates = 10 if is_fast else 50
-    candidates = []
-    seen_ids = set()
-
-    logger.info("Generating candidates", symbol=symbol, count=n_candidates)
-    while len(candidates) < n_candidates:
-        cand = StrategyGrammar.generate_random()
-        if cand.id not in seen_ids:
-            seen_ids.add(cand.id)
-            candidates.append(cand)
-
-    # 3. Walk-Forward Evaluation
-    n_folds = 2 if is_fast else 3
-    wfa = WalkForwardEvaluator(n_folds=n_folds)
-
-    processed = []
-    logger.info("Starting WFA", symbol=symbol)
-
-    for i, cand in enumerate(candidates):
-        try:
-            strategy = GeneratedStrategy(cand)
-            metrics = wfa.evaluate(strategy, df)
-
-            # Sanity Check
-            min_trades = 1 if is_fast else 30
-            total_oos_trades = sum([r["total_trades"] for r in metrics["fold_results"]])
-
-            if total_oos_trades < min_trades:
-                logger.debug("Rejected: too few trades", symbol=symbol, id=cand.id, trades=total_oos_trades)
-                continue
-            if metrics["avg_max_dd"] < -0.35: # > 35% DD
-                logger.debug("Rejected: max dd", symbol=symbol, id=cand.id, dd=metrics["avg_max_dd"])
-                continue
-            if metrics["positive_folds"] < (1 if is_fast else 2):
-                logger.debug("Rejected: positive folds", symbol=symbol, id=cand.id, folds=metrics["positive_folds"])
-                continue
-
-            cand.metrics = metrics
-            processed.append(cand)
-        except Exception as e:
-            logger.error("Candidate failed", symbol=symbol, id=cand.id, error=str(e))
-
-    # 4. Rank
-    ranked = rank_candidates(processed)
-
-    if not ranked:
-        logger.warning("No viable candidates found", symbol=symbol)
-        return []
-
-    top_candidate = ranked[0]
-    logger.info("Run Winner", symbol=symbol, id=top_candidate.id, score=top_candidate.metrics.get("score"))
-
-    # 5. Champion Promotion (Per Symbol logic omitted for simplicity - global champion store usually implies one per symbol or one global)
-    # The current champion_store implementation assumes a SINGLE global champion ("current.json").
-    # For multi-instrument, we should really have per-instrument champions.
-    # However, to keep it simple and consistent with the previous logic:
-    # We will skip per-symbol promotion logic update in champion_store (complexity) and just focus on Leaderboard.
-    # BUT, the prompt requirement 6 says: "Output leaderboards: ... top 20 for NIFTY and SENSEX"
-    # And requirement 7: "Signal publisher: ... write packages/strategy_foundry/results/live_signal.json"
-    # The signal JSON has "instrument" field.
-
-    # Let's assume we can only promote ONE champion active for the signal publisher.
-    # OR we publish signal for the best one.
-    # Let's just run promotion logic for each symbol but use a qualified ID or just last one wins?
-    # NO, that's bad.
-
-    # We will just return the ranked candidates and let the main loop aggregation handle CSV.
-    # We will NOT call save_champion here.
-    # We will call publish_signal for the WINNER of this run if eligible.
-
-    champion = top_candidate
-    if is_live_eligible(champion, fast_mode=is_fast):
-        publish_signal(champion, symbol)
-    else:
-        logger.info("No eligible champion for live signal", symbol=symbol)
-
-    # Return data for leaderboard
-    results = []
-    for c in ranked:
-        row = {
-            "instrument": symbol,
-            "id": c.id,
-            "score": c.metrics.get("score"),
-            "metrics": c.metrics,
-            "grammar": c.grammar,
-            "params": c.params
-        }
-        results.append(row)
-
-    return results
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--fast", action="store_true", help="Fast mode (fewer candidates)")
-    args = parser.parse_args()
+    # 1. Configuration
+    config_path = "packages/strategy_foundry/configs/foundry.yaml"
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
 
-    # Check env
-    is_fast = args.fast or os.environ.get("FAST_MODE", "0") == "1"
+    fast_mode = os.getenv("FAST_MODE", "0") == "1"
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = f"packages/strategy_foundry/results/runs/{timestamp}"
-    os.makedirs(run_dir, exist_ok=True)
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(f"packages/strategy_foundry/results/runs/{run_ts}")
+    run_dir.mkdir(parents=True, exist_ok=True)
 
+    structlog.configure(
+        processors=[
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer()
+        ]
+    )
+
+    logger.info("Starting Foundry Run", fast_mode=fast_mode, timestamp=run_ts)
+
+    # 2. Data Loading
     loader = DataLoader()
+    timeframes = config["defaults"]["timeframes"]
+    symbols = config["defaults"]["symbols"]
 
-    all_results = []
+    data_store = {}
 
-    for symbol in ["NIFTY", "SENSEX"]:
-        results = run_for_symbol(symbol, is_fast, timestamp, run_dir, loader)
-        all_results.extend(results)
+    for sym in symbols:
+        for tf in timeframes:
+            try:
+                # Force refresh if market is open?
+                # Yes, we need latest data for signal.
+                # But if we just ran an hour ago? Yahoo might not have new bars for 1D.
+                # For intraday, we definitely need refresh.
+                force = True
+                df = loader.get_data(sym, tf, force_refresh=force)
+                data_store[(sym, tf)] = df
+            except Exception as e:
+                logger.error("Failed to load data", symbol=sym, tf=tf, error=str(e))
 
-    if not all_results:
-        logger.warning("No results generated")
-        return
+    # 3. Strategy Generation & Backtest
+    grammar = Grammar()
+    sanity = SanityCheck(config["defaults"])
 
-    # Save Candidates
-    df_results = pd.DataFrame(all_results)
-    df_results.to_csv(f"{run_dir}/candidates.csv", index=False)
+    n_candidates = config["defaults"]["candidates_per_run_fast"] if fast_mode else config["defaults"]["candidates_per_run"]
 
-    # 6. Leaderboard
-    leaderboard_file = "packages/strategy_foundry/results/leaderboard.csv"
-    df_results["run_id"] = timestamp
+    candidates = []
 
-    if os.path.exists(leaderboard_file):
-        old_lb = pd.read_csv(leaderboard_file)
-        full_lb = pd.concat([old_lb, df_results])
+    for sym in symbols:
+        for tf in timeframes:
+            df = data_store.get((sym, tf))
+            if df is None or df.empty: continue
+
+            # Walk-Forward Analyst
+            analyst = WalkForwardAnalyst(df, n_folds=config["defaults"]["folds_fast"] if fast_mode else config["defaults"]["folds"])
+
+            for _ in range(n_candidates):
+                strategy = grammar.generate(tf)
+
+                # Check for duplicates? Hash check?
+                # Grammar gen is random, collision low with parameter space.
+
+                # Run WFA
+                try:
+                    results = analyst.run(strategy)
+                    if not results: continue
+
+                    metrics = results["overall"]
+
+                    # Sanity Check
+                    passed, reasons = sanity.check_intraday(metrics, results)
+
+                    if passed:
+                        candidates.append({
+                            "id": strategy.id,
+                            "symbol": sym,
+                            "timeframe": tf,
+                            "metrics": metrics,
+                            "wf_metrics": results,
+                            "strategy": strategy, # Object
+                            "score": 0 # Calculated later
+                        })
+                except Exception as e:
+                    logger.warning("Backtest failed", strategy_id=strategy.id, error=str(e))
+
+    # 4. Ranking
+    ranked_df = rank_candidates(candidates)
+
+    if not ranked_df.empty:
+        # Save results
+        ranked_df.to_csv(run_dir / "leaderboard.csv", index=False)
+
+        # Markdown summary
+        md_lines = ["# Strategy Foundry Leaderboard", "", f"Run: {run_ts}", ""]
+        md_lines.append(ranked_df.head(10).to_markdown())
+        with open(run_dir / "leaderboard.md", "w") as f:
+            f.write("\n".join(md_lines))
+
+        logger.info("Ranking complete", top_score=ranked_df.iloc[0]["score"])
+
+        # 5. Promotion (Full Mode Only)
+        if not fast_mode:
+            promoter = Promoter()
+            # Get top 1 across all symbols/TF?
+            # Or per symbol?
+            # Let's take global top 1 for now.
+            top_candidate = candidates[ranked_df.index[0]] # Get original dict from list using index
+            # Wait, ranked_df index might be shuffled.
+            # rank_candidates returns new DF. We need to match back to candidate dict.
+
+            # Better: rank_candidates returns DF with 'strategy' column containing the object.
+            # We can reconstruct the dict.
+            top_row = ranked_df.iloc[0]
+            top_dict = {
+                "id": top_row["id"],
+                "score": top_row["score"],
+                "metrics": {
+                    "sharpe": top_row["sharpe"],
+                    "calmar": top_row["calmar"],
+                    "cagr": top_row["cagr"],
+                    "max_dd": top_row["max_dd"],
+                    "trades": top_row["trades"]
+                    # ... add others if needed
+                },
+                "sharpe": top_row["sharpe"], # For promote check
+                "max_dd": top_row["max_dd"],
+                "strategy": top_row["strategy"] # Object
+            }
+
+            promoted = promoter.try_promote(top_dict, run_ts)
+
+            if promoted:
+                # 6. Publish Signal
+                publisher = SignalPublisher()
+                # Reload champion from disk to ensure we publish exactly what's stored
+                champ = promoter.get_current_champion()
+                if champ:
+                    publisher.publish(champ)
+        else:
+            logger.info("Fast mode: Skipping promotion and signaling")
     else:
-        full_lb = df_results
-
-    full_lb.to_csv(leaderboard_file, index=False)
-
-    # Markdown (Top 20 per instrument or global? "top 20 for NIFTY and SENSEX")
-    # Let's do top 20 overall or grouped?
-    # Prompt: "top 20 for NIFTY and SENSEX" -> implies top 20 combined or separate lists?
-    # Let's do one table with Instrument column.
-
-    top_20 = full_lb.sort_values("score", ascending=False).head(20)
-    with open("packages/strategy_foundry/results/leaderboard.md", "w") as f:
-        f.write("# Strategy Leaderboard\n\n")
-        f.write(top_20.to_markdown(index=False))
+        logger.warning("No viable candidates found")
 
 if __name__ == "__main__":
     main()
