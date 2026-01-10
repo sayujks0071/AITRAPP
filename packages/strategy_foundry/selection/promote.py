@@ -1,47 +1,89 @@
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+"""
+Promotion logic for champions.
+"""
+import json
+import os
+from pathlib import Path
+from typing import Dict, Any, Optional
+import structlog
 
-def should_promote(challenger: StrategyCandidate, incumbent: StrategyCandidate) -> bool:
-    """
-    Promotion Logic:
-    1. Score improvement >= 10%
-    2. OR MaxDD reduction >= 5% (absolute) with Sharpe delta > -0.1
-    """
-    if not incumbent:
-        return True
+logger = structlog.get_logger(__name__)
 
-    c_score = challenger.metrics.get("score", 0)
-    i_score = incumbent.metrics.get("score", 0)
+class Promoter:
+    def __init__(self):
+        self.champions_dir = Path("packages/strategy_foundry/results/champions")
+        self.champions_dir.mkdir(parents=True, exist_ok=True)
+        self.current_champ_file = self.champions_dir / "current.json"
 
-    if i_score == 0: return True
+    def get_current_champion(self) -> Optional[Dict[str, Any]]:
+        if self.current_champ_file.exists():
+            try:
+                with open(self.current_champ_file, "r") as f:
+                    return json.load(f)
+            except:
+                return None
+        return None
 
-    score_imp = (c_score - i_score) / i_score
-    if score_imp >= 0.10:
-        return True
+    def try_promote(self, challenger: Dict[str, Any], timestamp: str) -> bool:
+        """
+        Check if challenger beats current champion.
+        challenger: dict with keys [id, score, metrics, strategy]
+        """
+        current = self.get_current_champion()
 
-    c_dd = challenger.metrics.get("avg_max_dd", -1.0)
-    i_dd = incumbent.metrics.get("avg_max_dd", -1.0)
+        should_promote = False
+        reason = ""
 
-    # DD is negative number. Improvement means c_dd > i_dd + 0.05 ?
-    # E.g. c_dd = -0.10, i_dd = -0.20. Diff is +0.10.
+        if current is None:
+            should_promote = True
+            reason = "No incumbent"
+        else:
+            # Promotion rules
+            # Beat score by 10% OR reduce MaxDD by 5% absolute (while keeping Sharpe)
 
-    if c_dd > (i_dd + 0.05):
-        c_sharpe = challenger.metrics.get("avg_sharpe", 0)
-        i_sharpe = incumbent.metrics.get("avg_sharpe", 0)
-        if (c_sharpe - i_sharpe) > -0.1:
+            score_diff_pct = (challenger["score"] - current["score"]) / current["score"] if current["score"] > 0 else 0
+            dd_improvement = current["max_dd"] - challenger["max_dd"]
+
+            if score_diff_pct >= 0.10:
+                should_promote = True
+                reason = f"Score improved by {score_diff_pct:.1%}"
+            elif dd_improvement >= 0.05 and challenger["sharpe"] >= current["sharpe"] * 0.9:
+                should_promote = True
+                reason = f"MaxDD improved by {dd_improvement:.1%} with similar Sharpe"
+
+        if should_promote:
+            logger.info("Promoting new champion", id=challenger["id"], reason=reason)
+            self._save_champion(challenger, timestamp)
             return True
 
-    return False
+        return False
 
-def is_live_eligible(candidate: StrategyCandidate, fast_mode: bool = False) -> bool:
-    """
-    Gating criteria for live publishing.
-    """
-    if fast_mode:
-        return False # Never promote in fast mode? Or just strict?
+    def _save_champion(self, champ: Dict[str, Any], timestamp: str):
+        # Save versioned
+        filename = f"{timestamp}_{champ['id']}.json"
+        with open(self.champions_dir / filename, "w") as f:
+            # Helper to convert strategy obj to dict if needed
+            if hasattr(champ["strategy"], "to_json"):
+                # Strategy is an object, convert it
+                 # Use asdict? But we stored 'strategy_obj' in ranker which is the object.
+                 # Actually ranker stored 'strategy_obj' in 'strategy' column?
+                 # Let's fix that in ranker usage or here.
+                 pass
 
-    m = candidate.metrics
-    if m.get("avg_sharpe", 0) < 1.0: return False
-    if m.get("avg_max_dd", -1.0) < -0.25: return False # MaxDD > 25%
-    if m.get("positive_folds", 0) < 3: return False
+            # Serialize
+            # If strategy is object, need to serialize it
+            out = champ.copy()
+            if hasattr(out.get("strategy"), "to_json"):
+                 # It's already an object, assume we can dump it or it was stored as dict?
+                 # Ranker stores "strategy" as the object.
+                 # We need to extract the spec.
+                 out["strategy_spec"] = json.loads(out["strategy"].to_json())
+                 del out["strategy"]
+            elif "strategy" in out and not isinstance(out["strategy"], dict):
+                del out["strategy"] # Cannot serialize object
 
-    return True
+            json.dump(out, f, indent=2)
+
+        # Save current
+        with open(self.current_champ_file, "w") as f:
+            json.dump(out, f, indent=2)

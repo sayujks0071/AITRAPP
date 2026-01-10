@@ -1,34 +1,29 @@
 # Strategy Foundry
 
-Self-generating strategy lab that runs hourly to discover, backtest, and select trading strategies for NIFTY/SENSEX.
-
-## Architecture
-
-- **Data**: Downloads daily OHLCV from Yahoo Finance (cached).
-- **Factory**: Generates strategies using a grammar (Trend, Mean Reversion, Filters).
-- **Backtest**: Vectorized engine for fast evaluation. Uses Walk-Forward Analysis.
-- **Selection**: Ranks by composite score (Sharpe, Calmar, CAGR, Stability).
-- **Live**: Publishes `live_signal.json` if market is open and champion is eligible.
+## Overview
+Autonomous intraday strategy research and signal generation lab.
+Generates, backtests, ranks, and promotes trading strategies for NIFTY/SENSEX indices.
+Produces live trading signals as JSON artifacts.
 
 ## Usage
 
-### Local Run
+### Run Manually
 ```bash
-# Fast mode (fewer candidates)
-python packages/strategy_foundry/run_hourly.py --fast
+# Fast mode (fewer candidates, no promotion)
+export FAST_MODE=1
+python packages/strategy_foundry/run_hourly.py
 
 # Full mode
+export FAST_MODE=0
 python packages/strategy_foundry/run_hourly.py
 ```
 
 ### Outputs
-Artifacts are stored in `packages/strategy_foundry/results/`.
-- `runs/<timestamp>/candidates.csv`: All candidates from the run.
-- `champions/current.json`: The current champion strategy.
-- `live_signal.json`: The latest trading signal (if market open).
-- `leaderboard.md`: Top strategies.
+Results are stored in `packages/strategy_foundry/results/`:
+- `runs/<timestamp>/`: Individual run artifacts (leaderboards, metrics)
+- `champions/`: Promoted strategy configurations
+- `live_signal.json`: Current live trading signal (if eligible)
 
-## Deployment
-
-The system runs hourly via GitHub Actions.
-To enable live consumption of signals, set `ENABLE_LIVE=true` in the core system and ensure `approvals/ALLOW_LIVE.txt` exists.
+## Configuration
+- `configs/foundry.yaml`: Runtime settings (timeframes, folding, etc.)
+- `configs/instrument_map.yaml`: Symbol mappings (Research -> Live)

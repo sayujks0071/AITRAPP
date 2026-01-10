@@ -1,82 +1,94 @@
+"""
+Walk-forward analysis logic.
+"""
 import pandas as pd
-from typing import List, Tuple, Dict, Any
-from datetime import timedelta
-from packages.strategy_foundry.backtest.engine import FastBacktestEngine
-from packages.strategy_foundry.factory.generator import GeneratedStrategy
-import numpy as np
+import structlog
+from typing import List, Dict, Any, Tuple
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
+from packages.strategy_foundry.factory.grammar import StrategySpec
 
-class WalkForwardEvaluator:
-    """
-    Implements Walk-Forward Analysis (Expanding Window).
-    Train on past, Test on future.
-    """
+logger = structlog.get_logger(__name__)
 
-    def __init__(self, n_folds: int = 3, train_ratio: float = 0.7):
+class WalkForwardAnalyst:
+    def __init__(self, data: pd.DataFrame, n_folds: int = 4):
+        self.data = data
         self.n_folds = n_folds
-        self.train_ratio = train_ratio
 
-    def split_data(self, df: pd.DataFrame) -> List[Tuple[pd.DataFrame, pd.DataFrame]]:
+    def run(self, strategy: StrategySpec) -> Dict[str, Any]:
         """
-        Splits data into (In-Sample, Out-of-Sample) folds.
-        Expanding window approach.
+        Run walk-forward analysis.
+        Splits data into K folds (Expanding Window or Rolling).
+
+        Since we have limited intraday data (e.g. 60 days), 4 folds means ~15 days each.
+        We use expanding window training?
+        Or just OOS testing?
+
+        Standard WF:
+        Train 1 -> Test 1
+        Train 1+Test 1 -> Test 2
+        ...
+
+        Given the limited data and "Aggressive" nature, maybe we treat chunks as OOS?
+        Or simply split into 4 equal chunks and run backtest on each to check consistency?
+        The prompt says: "Walk-forward OOS evaluation... Require OOS evaluation for ranking".
+
+        Let's implement equal splits.
+        Fold 1: Days 0-25%
+        Fold 2: Days 25-50%
+        ...
+
+        We run the strategy on each fold independently.
+        Ideally we "optimize" on train and test on OOS.
+        But here we generated a STATIC strategy candidate.
+        So we just validate its performance across different time periods (OOS validation).
+
+        This effectively tests "robustness over time".
         """
-        n = len(df)
-        fold_size = n // (self.n_folds + 1)
+        if self.data.empty:
+            return {}
 
-        folds = []
-        for i in range(1, self.n_folds + 1):
-            train_end = fold_size * (i + 1) # Increasing training size
-            # Or fixed window? Expanding is safer for stability check.
-            # User says: "Walk-Forward Analysis ... Expanding window for training"
+        # Split data by time
+        total_rows = len(self.data)
+        fold_size = total_rows // self.n_folds
 
-            # Simple expanding window:
-            # Fold 1: Train [0..K], Test [K..K+M]
-            # Fold 2: Train [0..K+M], Test [K+M..K+2M]
+        folds_metrics = []
+        equity_curves = []
+        all_trades = []
 
-            # Let's divide total data into N+1 chunks.
-            # Train starts with 1 chunk, tests on next. Then Train 2 chunks, test on next.
+        consistency_score = 0
 
-            train_idx = int(n * (i / (self.n_folds + 1)))
-            test_idx = int(n * ((i + 1) / (self.n_folds + 1)))
+        for i in range(self.n_folds):
+            start_idx = i * fold_size
+            end_idx = (i + 1) * fold_size if i < self.n_folds - 1 else total_rows
 
-            train_data = df.iloc[:train_idx]
-            test_data = df.iloc[train_idx:test_idx]
+            fold_data = self.data.iloc[start_idx:end_idx].copy()
 
-            folds.append((train_data, test_data))
+            engine = BacktestEngine(fold_data)
+            results = engine.run(strategy)
 
-        return folds
+            metrics = calculate_metrics(results["trades"], results["equity_curve"])
+            folds_metrics.append(metrics)
 
-    def evaluate(self, strategy: GeneratedStrategy, df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Run WFA on strategy.
-        Returns aggregated OOS metrics.
-        """
-        folds = self.split_data(df)
-        oos_results = []
+            # Consistency check (profit factor > 1)
+            if metrics["profit_factor"] > 1.05 and metrics["trades"] > 5:
+                consistency_score += 1
 
-        for train_df, test_df in folds:
-            # We don't "optimize" here (that's grid search), we just Validate.
-            # The "Strategy Self-Generation" creates random candidates.
-            # We check if they hold up OOS.
+            equity_curves.append(results["equity_curve"])
+            all_trades.append(results["trades"])
 
-            engine = FastBacktestEngine(test_df)
-            res = engine.run(strategy)
-            oos_results.append(res)
+        # Aggregate metrics (OOS weighted?)
+        # Just average them or sum them?
+        # A concatenated backtest is better for overall stats.
 
-        # Aggregate Results
-        avg_sharpe = np.mean([r["metrics"]["sharpe"] for r in oos_results])
-        avg_cagr = np.mean([r["metrics"]["cagr"] for r in oos_results])
-        avg_dd = np.mean([r["metrics"]["max_dd"] for r in oos_results])
+        combined_trades = pd.concat(all_trades, ignore_index=True) if all_trades else pd.DataFrame()
+        combined_equity = pd.concat(equity_curves) # Index might overlap if not careful, but here we sliced linearly
 
-        positive_folds = sum([1 for r in oos_results if r["metrics"]["sharpe"] > 0])
-
-        stability_score = 1.0 - np.std([r["metrics"]["sharpe"] for r in oos_results])
+        overall_metrics = calculate_metrics(combined_trades, combined_equity)
 
         return {
-            "avg_sharpe": float(avg_sharpe),
-            "avg_cagr": float(avg_cagr),
-            "avg_max_dd": float(avg_dd),
-            "positive_folds": int(positive_folds),
-            "stability": float(stability_score),
-            "fold_results": [r["metrics"] for r in oos_results]
+            "overall": overall_metrics,
+            "folds": folds_metrics,
+            "consistency": consistency_score, # e.g., 3/4
+            "n_folds": self.n_folds
         }
