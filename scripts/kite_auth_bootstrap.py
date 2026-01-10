@@ -28,7 +28,8 @@ def main():
 
     # Safety Rail: TRADING_MODE default to PAPER
     # This script doesn't trade, but good practice to enforce context
-    if os.getenv("TRADING_MODE", "PAPER").upper() == "LIVE":
+    mode = os.getenv("TRADING_MODE") or os.getenv("APP_MODE") or "PAPER"
+    if mode.upper() == "LIVE":
         logger.warning("Running in LIVE mode context.")
     else:
         logger.info("Running in PAPER mode context.")

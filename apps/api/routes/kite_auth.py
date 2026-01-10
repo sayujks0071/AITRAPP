@@ -17,7 +17,9 @@ async def kite_callback(request: Request):
     status = params.get("status")
 
     if status != "success":
-        logger.error(f"Kite login failed: {params}")
+        # Sanitize params for logging
+        safe_params = {k: v for k, v in params.items() if k not in ["request_token", "access_token"]}
+        logger.error(f"Kite login failed: {safe_params}")
         return HTMLResponse(content="<h1>Auth Failed</h1><p>Status was not success.</p>", status_code=400)
 
     if not request_token:
