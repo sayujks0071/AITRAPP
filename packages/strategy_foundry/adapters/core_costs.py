@@ -1,39 +1,38 @@
-from typing import Optional
+"""Adapter for Core Costs"""
+from typing import NamedTuple
 
-class FoundryCosts:
+class CostModel(NamedTuple):
+    slippage_bps: float
+    brokerage_per_order: float
+    tax_pct: float
+
+# Default simplified costs
+DEFAULT_COSTS = CostModel(
+    slippage_bps=5.0,        # 5 bps slippage
+    brokerage_per_order=20.0, # Rs 20 flat
+    tax_pct=0.1              # ~0.1% taxes/charges rough estimate
+)
+
+def estimate_total_transaction_cost(price: float, quantity: int, side: str = "BUY") -> float:
     """
-    Cost estimation adapter.
-    Defaults to simple bps model if core not available or for backtesting simplicity.
+    Simple all-in cost estimator for backtesting.
+
+    Args:
+        price: Execution price
+        quantity: Number of shares/lots
+        side: BUY or SELL
+
+    Returns:
+        Total cost in currency units
     """
+    # 1. Slippage
+    slippage = (price * quantity) * (DEFAULT_COSTS.slippage_bps / 10000)
 
-    def __init__(self, slippage_bps: float = 5.0, brokerage_per_order: float = 20.0, taxes_bps: float = 3.0):
-        self.slippage_bps = slippage_bps
-        self.brokerage = brokerage_per_order
-        self.taxes_bps = taxes_bps
+    # 2. Brokerage (Flat)
+    brokerage = DEFAULT_COSTS.brokerage_per_order
 
-    def estimate_transaction_cost(self, price: float, quantity: int, side: str = "BUY") -> float:
-        """
-        Estimate total cost for one leg (entry or exit).
-        Returns absolute cost value in currency.
-        """
-        value = price * quantity
+    # 3. Taxes/Charges (Percent of turnover)
+    turnover = price * quantity
+    taxes = turnover * (DEFAULT_COSTS.tax_pct / 100)
 
-        # Slippage cost
-        slippage_cost = value * (self.slippage_bps / 10000.0)
-
-        # Brokerage (Flat fee usually)
-        brokerage_cost = self.brokerage
-
-        # Taxes (STT, etc approximated as bps of turnover)
-        tax_cost = value * (self.taxes_bps / 10000.0)
-
-        return slippage_cost + brokerage_cost + tax_cost
-
-    def get_slippage_price(self, price: float, side: str) -> float:
-        """
-        Return the execution price after slippage.
-        """
-        if side.upper() == "BUY":
-            return price * (1 + self.slippage_bps / 10000.0)
-        else:
-            return price * (1 - self.slippage_bps / 10000.0)
+    return slippage + brokerage + taxes

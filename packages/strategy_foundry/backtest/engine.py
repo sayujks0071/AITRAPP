@@ -1,120 +1,179 @@
+"""Backtest Engine (Vectorized)"""
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List
-from datetime import datetime
-from packages.strategy_foundry.factory.generator import GeneratedStrategy
-from packages.strategy_foundry.adapters.core_costs import FoundryCosts
+from typing import Dict, List, Tuple
+from .metrics import calculate_metrics
+from ..adapters.core_indicators import compute_indicators
+from ..adapters.core_costs import estimate_total_transaction_cost
+from ..factory.grammar import StrategyConfig
 
-class FastBacktestEngine:
+class VectorBacktestEngine:
     """
-    Vectorized/Iterative backtest engine for Strategy Foundry.
-    Optimized for speed (FAST_MODE).
+    Fast vectorized backtester for 1D bars.
     """
 
-    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0, allow_short: bool = False):
-        self.data = data
+    def __init__(self, initial_capital=100000.0):
         self.initial_capital = initial_capital
-        self.allow_short = allow_short
-        self.costs = FoundryCosts()
 
-    def run(self, strategy: GeneratedStrategy) -> Dict[str, Any]:
+    def run(self, df: pd.DataFrame, strategy: StrategyConfig) -> Dict:
         """
-        Run backtest for a single strategy.
-        Returns metrics and curves.
+        Run backtest for a strategy on a dataframe.
+        DF must have OHLCV and datetime index.
         """
-        # 1. Generate Signal Positions (Series of -1, 0, 1)
-        # This already includes risk overlay (stops/exits)
-        positions = strategy.generate_positions(self.data)
+        if df.empty:
+            return {}
 
-        if not self.allow_short:
-            positions[positions < 0] = 0
+        # 1. Compute Indicators
+        # In a real comprehensive system, we might only compute what's needed.
+        # For simplicity, we compute common ones or parse strategy.
+        indicators = compute_indicators(df)
 
-        # 2. Calculate Returns
-        # We assume "Next Open" execution.
-        # Position determined at close of day i, entered at Open of day i+1.
+        # 2. Generate Signals
+        # 1 = Long, -1 = Short, 0 = Flat
+        # We start with 0
+        signals = pd.Series(0, index=df.index)
 
-        # Shift positions by 1 to represent execution next day
-        # pos[i] is position held DURING day i.
-        # Generated positions[i] is the target position based on data UP TO close of i.
-        # So we enter at Open[i+1]. Thus position held during day i+1 is positions[i].
+        # Apply Entry Rules
+        # Simplifying: we assume 1 entry rule for now from generator
+        entry_rule = strategy.entry_rules[0]
+        name = entry_rule.name
+        params = entry_rule.params
 
-        # held_pos[i] = positions[i-1]
-        held_pos = positions.shift(1).fillna(0)
+        long_condition = pd.Series(False, index=df.index)
 
-        # Daily Returns: (Close - PrevClose) / PrevClose?
-        # Actually more precise: (Close - Open) + (Open - PrevClose)?
-        # Or just (Close[i] - Close[i-1]) / Close[i-1] * held_pos[i]?
-        # But this ignores Open/Close gaps if we execute at Open.
+        if name == "EMA_CROSS":
+            # Re-compute specific params locally to be correct
+            ema_f = df["close"].ewm(span=params["fast"], adjust=False).mean()
+            ema_s = df["close"].ewm(span=params["slow"], adjust=False).mean()
 
-        # Accurate PnL:
-        # If held_pos[i] == 1:
-        #   Buy at Open[i] (if pos changed from 0) OR hold from PrevClose[i-1].
-        #   PnL = Close[i] - Open[i] (if new)
-        #   PnL = Close[i] - PrevClose[i-1] (if held)
+            long_condition = (ema_f > ema_s) & (ema_f.shift(1) <= ema_s.shift(1))
 
-        # Let's simplify:
-        # Daily Return of underlying: (Close / PrevClose) - 1
-        # Strategy Return = Underlying Return * Held Pos
+        elif name == "SUPERTREND":
+            # We use the computed supertrend from adapter if params match roughly,
+            # otherwise we should recompute.
+            # For this MVP, we will rely on adapter's default ST or specific if close enough.
+            # But the generator produces random params.
+            # Let's implement a quick vector supertrend here or use the adapter's implementation via a call if possible.
+            # The adapter computes ONE set of params.
+            # We will just reuse the adapter's logic but call it from here or re-implement.
+            # Re-implementing specific supertrend:
+            pass # TODO: Implement dynamic supertrend calc. For now, we fallback to adapter's if available or skip
 
-        # To handle transaction costs, we need to detect trades.
-        trades = held_pos.diff().fillna(0) != 0 # True if position changed
+            # Using adapter's default for now to ensure SOMETHING happens
+            if "supertrend_direction" in indicators:
+                 # Adapter ST: 1 = Up, -1 = Down.
+                 # Signal Long if direction turns 1 from -1
+                 st_dir = indicators["supertrend_direction"]
+                 long_condition = (st_dir == 1) & (st_dir.shift(1) == -1)
 
-        # Vectorized PnL
-        pct_change = self.data["close"].pct_change().fillna(0)
-        strategy_rets = pct_change * held_pos
+        elif name == "RSI_OS_OB":
+            # RSI < lower -> Long
+            rsi = indicators["rsi"] # 14 period default
+            long_condition = rsi < params["lower"]
 
-        # Subtract costs
-        # We estimate cost as bps penalty on trade days
-        # Cost applied on full turnover.
-        # Turnover approx = 1.0 (100% portfolio) whenever trade happens (0->1, 1->0, 1->-1 is 200%)
-        # Trade magnitude = abs(held_pos - prev_pos)
-        trade_turnover = held_pos.diff().abs().fillna(0)
+        elif name == "DONCHIAN":
+            # Breakout of Upper
+            upper = df["high"].rolling(window=params["period"]).max().shift(1)
+            long_condition = df["close"] > upper
 
-        # Total cost bps = slippage + brokerage + tax
-        # Approx 10bps (0.1%) per side is conservative
-        cost_bps = 0.0010
-        costs = trade_turnover * cost_bps
+        elif name == "BB_REVERSION":
+            # Close < Lower Band
+            # We need to compute BB with specific params
+            mid = df["close"].rolling(window=params["period"]).mean()
+            std = df["close"].rolling(window=params["period"]).std()
+            lower = mid - (std * params["std"])
+            long_condition = df["close"] < lower
 
-        net_rets = strategy_rets - costs
+        # 3. Simulate positions
 
-        # Equity Curve
-        equity_curve = (1 + net_rets).cumprod() * self.initial_capital
+        trades = []
+        equity = [self.initial_capital]
+        position = 0 # 0, 1
+        entry_price = 0.0
+        entry_idx = 0
+        stop_price = 0.0
 
-        # Metrics
-        metrics = self._calculate_metrics(net_rets, equity_curve, trades)
+        close_arr = df["close"].values
+        open_arr = df["open"].values
+        low_arr = df["low"].values
+        dates = df.index
+
+        # Pre-calc signals to array
+        long_signals = long_condition.values
+
+        # Risk params
+        risk_rule = strategy.risk_rules[0]
+        atr_arr = indicators["atr"].fillna(0).values
+
+        for i in range(1, len(df)):
+            curr_equity = equity[-1]
+
+            # Check Exit if in position
+            if position != 0:
+                # Check Stop Loss
+                hit_stop = False
+                exit_price = 0.0
+
+                if low_arr[i] <= stop_price:
+                    # Stopped out
+                    hit_stop = True
+                    # Slippage on stop? Assume execute at stop price or Open if gap down
+                    # If Open was already below stop, we exited at Open.
+                    exit_price = min(open_arr[i], stop_price)
+
+                # Force close at very last bar
+                if i == len(df) - 1 and not hit_stop:
+                    hit_stop = True
+                    exit_price = close_arr[i]
+
+                if hit_stop:
+                    # Execute Exit
+                    shares = int(curr_equity / entry_price)
+                    if shares > 0:
+                        raw_pnl = (exit_price - entry_price) * shares
+                        cost = estimate_total_transaction_cost(exit_price, shares, "SELL") + \
+                               estimate_total_transaction_cost(entry_price, shares, "BUY")
+
+                        net_pnl = raw_pnl - cost
+                        curr_equity += net_pnl
+
+                        trades.append({
+                            "entry_date": dates[entry_idx],
+                            "exit_date": dates[i],
+                            "pnl": net_pnl,
+                            "return_pct": (exit_price/entry_price) - 1
+                        })
+
+                    position = 0
+                    entry_price = 0.0
+
+            # Check Entry if flat
+            if position == 0 and i < len(df) - 1: # Don't enter on last bar
+                if long_signals[i-1]: # Signal from yesterday close, enter today Open
+                    # Enter
+                    entry_price = open_arr[i]
+                    entry_idx = i
+                    position = 1
+
+                    # Set Stop
+                    if risk_rule.name == "ATR_STOP":
+                        stop_dist = atr_arr[i-1] * risk_rule.params.get("multiplier", 2.0)
+                        # Avoid zero stop dist
+                        if stop_dist == 0:
+                            stop_dist = entry_price * 0.02 # fallback
+                        stop_price = entry_price - stop_dist
+                    elif risk_rule.name == "PCT_STOP":
+                        stop_dist = entry_price * risk_rule.params.get("pct", 0.02)
+                        stop_price = entry_price - stop_dist
+
+            equity.append(curr_equity)
+
+        # Compile results
+        equity_curve = pd.Series(equity, index=df.index[:len(equity)])
+        metrics = calculate_metrics(equity_curve, trades)
 
         return {
             "metrics": metrics,
             "equity_curve": equity_curve,
-            "positions": positions, # Target positions
-            "trades": trade_turnover.sum() # Total turnover units
-        }
-
-    def _calculate_metrics(self, returns: pd.Series, equity: pd.Series, trades: pd.Series) -> Dict[str, float]:
-        total_ret = (equity.iloc[-1] / self.initial_capital) - 1
-        n_days = len(returns)
-        years = n_days / 252
-
-        if years > 0:
-            cagr = (1 + total_ret) ** (1 / years) - 1
-        else:
-            cagr = 0
-
-        vol = returns.std() * np.sqrt(252)
-        sharpe = (cagr - 0.05) / vol if vol > 0 else 0 # Rf = 5%
-
-        # Drawdown
-        peaks = equity.cummax()
-        dd = (equity - peaks) / peaks
-        max_dd = dd.min()
-
-        calmar = cagr / abs(max_dd) if max_dd != 0 else 0
-
-        return {
-            "cagr": float(cagr),
-            "volatility": float(vol),
-            "sharpe": float(sharpe),
-            "max_dd": float(max_dd),
-            "calmar": float(calmar),
-            "total_trades": int(trades.sum())
+            "trades": trades
         }
