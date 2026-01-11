@@ -7,6 +7,10 @@ import dotenv
 logger = logging.getLogger(__name__)
 
 class KiteAuth:
+    """
+    Dedicated Auth module for Zerodha Kite Connect.
+    Handles session validation, login URL generation, and token exchange.
+    """
     def __init__(self):
         # Support both standard naming and the specific env var from instructions
         self.api_key = os.getenv("KITE_API_KEY") or os.getenv("kiteconnect_api_key")

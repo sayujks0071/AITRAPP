@@ -28,6 +28,7 @@ def main():
 
     # Safety Rail: TRADING_MODE default to PAPER
     # This script doesn't trade, but good practice to enforce context
+    # Live trading must remain OFF by default in dev/CI.
     if os.getenv("TRADING_MODE", "PAPER").upper() == "LIVE":
         logger.warning("Running in LIVE mode context.")
     else:
