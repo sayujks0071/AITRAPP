@@ -1,296 +1,260 @@
-"""
-Intraday Backtest Engine.
-"""
+"""Backtest Engine"""
 import pandas as pd
 import numpy as np
+from typing import Dict, List, Any
+from datetime import datetime
 import structlog
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-from packages.strategy_foundry.factory.grammar import StrategySpec
-from packages.strategy_foundry.adapters.core_indicators import Indicators
-from packages.strategy_foundry.adapters.core_costs import CostModel
+
+from packages.strategy_foundry.factory.grammar import StrategyConfig
+from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicators
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
 logger = structlog.get_logger(__name__)
 
-@dataclass
-class Trade:
-    entry_time: pd.Timestamp
-    exit_time: Optional[pd.Timestamp]
-    entry_price: float
-    exit_price: float
-    quantity: int
-    side: int  # 1 for Long, -1 for Short
-    pnl: float = 0.0
-    exit_reason: str = ""
-
 class BacktestEngine:
-    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0):
-        self.raw_data = data
-        self.initial_capital = initial_capital
-        self.indicators = Indicators()
-        self.costs = CostModel()
+    def __init__(self, costs_bps: float = 2.0, spread_bps: float = 1.0):
+        self.costs_pct = (costs_bps + spread_bps) / 10000.0
 
-    def run(self, strategy: StrategySpec) -> Dict[str, Any]:
+    def run(self, df: pd.DataFrame, strategy: StrategyConfig) -> Dict[str, Any]:
         """
-        Run backtest for a single strategy.
+        Run backtest for a single strategy on provided data.
         """
-        # 1. Prepare Data
-        df = self.indicators.add_all(self.raw_data)
+        if df.empty:
+            return {"trades": [], "metrics": {}}
 
-        # 2. Generate Signals Vectorized (as much as possible)
-        signals = self._generate_signals(df, strategy)
+        # 1. Calculate Indicators required by strategy
+        indicators = self._calc_indicators(df, strategy)
 
-        # 3. Simulate Execution (Event loop for accurate fills/stops)
+        # 2. Generate Signals
+        signals = self._generate_signals(df, indicators, strategy)
+
+        # 3. Simulate Execution
         trades, equity_curve = self._simulate(df, signals, strategy)
+
+        # 4. Compute Metrics
+        metrics = calculate_metrics(trades, equity_curve, df)
 
         return {
             "trades": trades,
+            "metrics": metrics,
             "equity_curve": equity_curve
         }
 
-    def _generate_signals(self, df: pd.DataFrame, strategy: StrategySpec) -> pd.Series:
+    def _calc_indicators(self, df: pd.DataFrame, strategy: StrategyConfig) -> Dict[str, np.ndarray]:
+        inds = {}
+        # Always calc ATR for stops
+        inds["atr"] = VectorizedIndicators.atr(df["high"].values, df["low"].values, df["close"].values, 14)
+
+        # Parse rules to see what else we need
+        all_rules = strategy.entry_rules + strategy.exit_rules + strategy.filters
+        for rule in all_rules:
+            if "EMA" in rule.type:
+                p = rule.params.get("period") or rule.params.get("fast")
+                if p: inds[f"ema_{p}"] = VectorizedIndicators.ema(df["close"].values, p)
+                p2 = rule.params.get("slow")
+                if p2: inds[f"ema_{p2}"] = VectorizedIndicators.ema(df["close"].values, p2)
+
+            if "RSI" in rule.type:
+                p = rule.params.get("period", 14)
+                inds[f"rsi_{p}"] = VectorizedIndicators.rsi(df["close"].values, p)
+
+            if "BB" in rule.type:
+                p = rule.params.get("period", 20)
+                std = rule.params.get("std", 2.0)
+                u, m, l = VectorizedIndicators.bollinger_bands(df["close"].values, p, std)
+                inds[f"bb_upper_{p}"] = u
+                inds[f"bb_lower_{p}"] = l
+
+            if "DONCHIAN" in rule.type:
+                p = rule.params.get("period", 20)
+                u, l = VectorizedIndicators.donchian(df["high"].values, df["low"].values, p)
+                inds[f"dc_upper_{p}"] = u
+                inds[f"dc_lower_{p}"] = l
+
+        return inds
+
+    def _generate_signals(self, df: pd.DataFrame, inds: Dict[str, np.ndarray], strategy: StrategyConfig) -> np.ndarray:
         """
         Generate raw entry signals (-1, 0, 1).
+        Execution logic (stops, exits) handles the rest.
         """
-        # Initialize
-        entries = pd.Series(0, index=df.index)
+        closes = df["close"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        opens = df["open"].values
+        times = df.index
 
-        # Unpack strategy logic
-        entry_logic = strategy.entry_logic
-        filters = strategy.filters
+        entries = np.zeros(len(df), dtype=int)
 
-        # 1. Base Logic
-        if entry_logic["type"] == "Breakout":
-            period = entry_logic["period"]
-            # Long breakout: close > max(high, period) shifted
-            # But standard Donchian is high > max(high, period-1)
-            # Let's use close > rolling max high of prev N bars
-            rolling_high = df["High"].rolling(window=period).max().shift(1)
-            long_cond = df["Close"] > rolling_high
-            entries[long_cond] = 1
+        # Apply Filters First
+        trade_allowed = np.ones(len(df), dtype=bool)
 
-        elif entry_logic["type"] == "TrendCross":
-            fast = entry_logic["fast"]
-            slow = entry_logic["slow"]
-            # Use columns generated by adapter if exist, else compute
-            # Adapter names: ema_9, ema_20, etc.
-            # If random params don't match adapter, compute on fly?
-            # For speed, let's assume we pre-computed standard ones,
-            # or just compute ad-hoc here (pandas is fast enough for 60 days)
+        for rule in strategy.filters:
+            if rule.type == "FILTER_TIME_NO_TRADE":
+                # Convert time strings to minutes from midnight for comparison or just use string comp if format matches
+                # Simpler: string comparison on time
+                current_times = times.strftime("%H:%M")
+                start = rule.params["start"]
+                end = rule.params["end"]
+                mask = (current_times >= start) & (current_times <= end)
+                trade_allowed[mask] = False
 
-            ema_fast = df["Close"].ewm(span=fast, adjust=False).mean()
-            ema_slow = df["Close"].ewm(span=slow, adjust=False).mean()
+        # Apply Entry Rules
+        for rule in strategy.entry_rules:
+            signal = np.zeros(len(df), dtype=int)
 
-            crossover = (ema_fast > ema_slow) & (ema_fast.shift(1) <= ema_slow.shift(1))
+            if rule.type == "BREAKOUT_ORB":
+                # This requires daily context which is hard in pure arrays without grouping
+                # Simplified: Assume we have pre-calced ORB levels or calculate on fly?
+                # For vectorization, we can group by date.
+                # Actually, let's skip complex vectorization for ORB and do it in loop or simplified
+                # For now, placeholder for ORB: skip or implement later.
+                # Let's implement EMA Cross as baseline
+                pass
 
-            if entry_logic.get("adx_filter", 0) > 0:
-                # Assuming ADX 14 is standard
-                adx = df.get("adx_14", pd.Series(0, index=df.index))
-                crossover = crossover & (adx > entry_logic["adx_filter"])
+            elif rule.type == "TREND_EMA_CROSS":
+                fast = inds[f"ema_{rule.params['fast']}"]
+                slow = inds[f"ema_{rule.params['slow']}"]
+                # Cross over
+                cross_up = (fast > slow) & (np.roll(fast, 1) <= np.roll(slow, 1))
+                signal[cross_up] = 1
 
-            entries[crossover] = 1
+            elif rule.type == "MEANREV_RSI":
+                rsi = inds[f"rsi_{rule.params['period']}"]
+                # Buy if RSI < lower
+                signal[rsi < rule.params['lower']] = 1
 
-        elif entry_logic["type"] == "RSIReversion":
-            # Buy when RSI crosses below threshold
-            rsi = df.get("rsi_14", pd.Series(50, index=df.index))
-            thresh = entry_logic["buy_threshold"]
+            elif rule.type == "BREAKOUT_DONCHIAN":
+                u = inds[f"dc_upper_{rule.params['period']}"]
+                # Buy if close > upper (shifted by 1 to avoid lookahead? Donchian usually includes current bar, so breakout is > prev max)
+                # Standard Donchian: Upper Band is Max(High, n). Breakout is Close > Upper.
+                # Usually we want Close > Ref(Upper, 1)
+                prev_u = np.roll(u, 1)
+                signal[closes > prev_u] = 1
 
-            cross_under = (rsi < thresh) & (rsi.shift(1) >= thresh)
-            entries[cross_under] = 1
+            # Combine with AND logic if multiple entry rules?
+            # Usually grammar selects ONE entry block.
+            entries = np.where(signal != 0, signal, entries)
 
-        elif entry_logic["type"] == "BollingerReversion":
-            # Buy when close < lower band
-            # We computed standard BB(20, 2) in adapter.
-            # If params differ, recompute.
-            if entry_logic["period"] == 20 and entry_logic["std"] == 2.0:
-                lower = df["bb_lower"]
-            else:
-                 ma = df["Close"].rolling(entry_logic["period"]).mean()
-                 std = df["Close"].rolling(entry_logic["period"]).std()
-                 lower = ma - (std * entry_logic["std"])
-
-            entries[df["Close"] < lower] = 1
-
-        # 2. Apply Filters
-        for f in filters:
-            if f["type"] == "TrendFilter":
-                # Only long if price > EMA(period)
-                ema_filter = df["Close"].ewm(span=f["ema_period"], adjust=False).mean()
-                entries = entries & (df["Close"] > ema_filter)
+        # Apply filters
+        entries[~trade_allowed] = 0
 
         return entries
 
-    def _simulate(self, df: pd.DataFrame, signals: pd.Series, strategy: StrategySpec):
+    def _simulate(self, df: pd.DataFrame, entry_signals: np.ndarray, strategy: StrategyConfig):
         """
-        Simulate trade execution with intraday rules.
+        Event-driven simulation loop over bars.
         """
-        trades: List[Trade] = []
-        equity = self.initial_capital
-        equity_curve = []
+        opens = df["open"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        closes = df["close"].values
+        times = df.index
+        atr = VectorizedIndicators.atr(highs, lows, closes, 14)
 
-        position = 0 # quantity
+        trades = []
+        equity_curve = [1.0] # start at 1.0 (normalized)
+
+        position = 0 # 0, 1 (long), -1 (short - disabled for now)
         entry_price = 0.0
         entry_time = None
         stop_price = 0.0
         target_price = 0.0
-
-        # Parameters
-        sl_mult = strategy.exit_logic.get("sl_mult", 2.0)
-        tp_rr = strategy.exit_logic.get("tp_risk_reward", 2.0)
-        time_stop = strategy.exit_logic.get("time_stop_bars", 0)
         bars_held = 0
 
-        # Pre-calculate data for speed
-        opens = df["Open"].values
-        highs = df["High"].values
-        lows = df["Low"].values
-        closes = df["Close"].values
-        times = df.index
-        atrs = df.get("atr_14", pd.Series(0, index=df.index)).values
-        sig_values = signals.values
+        # Parse exit params
+        stop_atr_mult = 2.0
+        target_rr = 0.0
+        time_limit = 0
 
-        # Hard close time
-        # We need time components. Assuming times are datetime objects.
-        # But iterating numpy array of timestamps is tricky for time comparison.
-        # Pre-compute "is_eod" mask?
-        # Let's say last bar of day is force close.
-        # Or specifically 15:25.
+        for rule in strategy.exit_rules:
+            if rule.type == "STOP_ATR":
+                stop_atr_mult = rule.params["multiplier"]
+            if rule.type == "TARGET_FIXED":
+                target_rr = rule.params["risk_reward"]
+            if rule.type == "STOP_TIME":
+                time_limit = rule.params["bars"]
 
-        # Create 'force_close' mask
-        # If timestamp time >= 15:25
-        # times is DatetimeIndex
+        curr_equity = 1.0
 
-        # Efficient way:
-        close_time = pd.Timestamp("15:25").time()
-        is_late_day = times.time >= close_time
+        for i in range(1, len(df)):
+            # Market Close check (Hard Exit)
+            current_time_str = times[i].strftime("%H:%M")
+            is_market_closing = current_time_str >= "15:20"
 
-        for i in range(len(df)):
-            current_time = times[i]
-            open_p = opens[i]
-            high_p = highs[i]
-            low_p = lows[i]
-            close_p = closes[i]
-            atr = atrs[i]
-
-            # 1. Update Equity (Mark to Market)
-            # Rough daily equity tracking, or bar-by-bar?
-            # Let's track bar-by-bar closed equity + unrealized?
-            # For speed, just track closed equity at end of bar?
-            # Actually standard backtest returns equity curve of closed equity usually,
-            # or total equity. Let's do total.
-
-            unrealized = 0
-            if position != 0:
-                unrealized = (close_p - entry_price) * position
-
-            equity_curve.append(equity + unrealized)
-
-            # 2. Check Exits if in Position
+            # Check Exit if in position
             if position != 0:
                 bars_held += 1
                 exit_price = 0.0
                 reason = ""
 
-                # A. Force Close (Time)
-                if is_late_day[i]:
-                    exit_price = open_p # Exit on Open of this bar?
-                    # If we decide "flat by 15:25", and this bar starts 15:25, we exit Open.
-                    reason = "Session Close"
+                # 1. Market Close
+                if is_market_closing:
+                    exit_price = opens[i] # Exit at open of closing bar (approx) or close?
+                    # "All positions flat by 15:25". If this bar is 15:20-15:25, exit at open.
+                    exit_price = opens[i]
+                    reason = "SESSION"
 
-                # B. Stop Loss / Take Profit
-                # Check High/Low against SL/TP
-                # Assuming Long only for now as per defaults
-                elif low_p <= stop_price:
-                    exit_price = stop_price # Assumes fill at stop (slippage added later)
-                    # Gap check: if open < stop, fill at open
-                    if open_p < stop_price: exit_price = open_p
-                    reason = "Stop Loss"
-                elif high_p >= target_price:
+                # 2. Stop Loss
+                elif lows[i] <= stop_price:
+                    exit_price = stop_price # Assume filled at stop (slippage added later)
+                    reason = "STOP"
+
+                # 3. Target
+                elif target_rr > 0 and highs[i] >= target_price:
                     exit_price = target_price
-                    if open_p > target_price: exit_price = open_p
-                    reason = "Take Profit"
+                    reason = "TARGET"
 
-                # C. Time Stop
-                elif time_stop > 0 and bars_held >= time_stop:
-                    exit_price = close_p
-                    reason = "Time Stop"
+                # 4. Time Stop
+                elif time_limit > 0 and bars_held >= time_limit:
+                    exit_price = opens[i]
+                    reason = "TIME"
 
-                # Execute Exit
                 if exit_price > 0:
-                    pnl = (exit_price - entry_price) * position
+                    # Execute Exit
+                    # Apply slippage/costs
+                    # PnL % = (Exit - Entry) / Entry
+                    raw_ret = (exit_price - entry_price) / entry_price
 
-                    # Apply costs
-                    cost = self.costs.estimate_cost(entry_price, position, "BUY") + \
-                           self.costs.estimate_cost(exit_price, position, "SELL")
+                    # Cost: bps per side.
+                    # total cost = 2 * cost_pct
+                    net_ret = raw_ret - (2 * self.costs_pct)
 
-                    pnl -= cost
-                    equity += pnl
+                    # If stopped out, use worse price (slippage already in costs? No, slippage is extra usually)
+                    # We added slippage to cost_pct in __init__.
 
-                    trades.append(Trade(
-                        entry_time=entry_time,
-                        exit_time=current_time,
-                        entry_price=entry_price,
-                        exit_price=exit_price,
-                        quantity=position,
-                        side=1,
-                        pnl=pnl,
-                        exit_reason=reason
-                    ))
+                    curr_equity *= (1 + net_ret)
+
+                    trades.append({
+                        "entry_time": entry_time,
+                        "exit_time": times[i],
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "return": net_ret,
+                        "reason": reason,
+                        "bars": bars_held
+                    })
 
                     position = 0
                     bars_held = 0
-                    continue # Trade closed, don't enter same bar
 
-            # 3. Check Entries if Flat
-            # Execute on CLOSE of signal bar (so enter NEXT OPEN) - standard
-            # OR execute on this bar if signal was from prev bar?
-            # The signals array we generated:
-            # entries[long_cond] = 1
-            # long_cond used data available AT THAT BAR.
-            # So if signal[i] == 1, it means at close of bar i, we have a signal.
-            # We should enter at OPEN of i+1.
+            # Check Entry (if flat and not closing)
+            if position == 0 and not is_market_closing:
+                # Signal calculated at i-1 close, enter at i open
+                sig = entry_signals[i-1]
+                if sig == 1:
+                    position = 1
+                    entry_price = opens[i]
+                    entry_time = times[i]
 
-            # So here we check signal[i-1] ?
-            # Or we say: check signal[i], set "pending_entry" for next loop?
+                    # Set Stops/Targets
+                    current_atr = atr[i-1] if not np.isnan(atr[i-1]) else (entry_price * 0.01)
+                    stop_dist = current_atr * stop_atr_mult
+                    stop_price = entry_price - stop_dist
 
-            # Simpler: Check signal[i-1]
-            if i > 0 and position == 0 and not is_late_day[i]:
-                 if sig_values[i-1] == 1:
-                     # Enter Long at Open
-                     entry_price = open_p
-                     entry_time = current_time
+                    if target_rr > 0:
+                        target_price = entry_price + (stop_dist * target_rr)
 
-                     # Size: Fixed fractional?
-                     # Risk based sizing
-                     # Risk = ATR * Mult
-                     risk_per_share = atrs[i-1] * sl_mult
-                     if risk_per_share <= 0: risk_per_share = open_p * 0.01 # Fallback
+            equity_curve.append(curr_equity)
 
-                     risk_amt = equity * 0.01 # 1% risk
-                     qty = int(risk_amt / risk_per_share)
-                     if qty < 1: qty = 1
-
-                     position = qty
-                     stop_price = entry_price - risk_per_share
-                     target_price = entry_price + (risk_per_share * tp_rr)
-                     bars_held = 0
-
-        # Close any open position at end of data
-        if position != 0:
-             exit_price = closes[-1]
-             pnl = (exit_price - entry_price) * position
-             trades.append(Trade(
-                 entry_time=entry_time,
-                 exit_time=times[-1],
-                 entry_price=entry_price,
-                 exit_price=exit_price,
-                 quantity=position,
-                 side=1,
-                 pnl=pnl,
-                 exit_reason=reason
-             ))
-
-        trades_df = pd.DataFrame([vars(t) for t in trades])
-        equity_series = pd.Series(equity_curve, index=times)
-
-        return trades_df, equity_series
+        return trades, pd.Series(equity_curve, index=df.index[:len(equity_curve)])

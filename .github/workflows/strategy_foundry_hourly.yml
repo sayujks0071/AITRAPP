@@ -2,11 +2,9 @@ name: Strategy Foundry Hourly
 
 on:
   schedule:
-    - cron: "0 * * * *"  # Hourly
+    - cron: "0 * * * *"
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'packages/strategy_foundry/**'
 
 jobs:
   run-foundry:
@@ -17,22 +15,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install pandas numpy requests structlog pyyaml pytz tabulate
+          pip install pandas numpy requests pyyaml structlog pytz
 
       - name: Run Foundry
         env:
+          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
           PYTHONPATH: .
-          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
-        run: |
-          python packages/strategy_foundry/run_hourly.py
+        run: python packages/strategy_foundry/run_hourly.py
 
       - name: Upload Artifacts
-        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: foundry-results

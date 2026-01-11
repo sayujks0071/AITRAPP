@@ -7,5 +7,5 @@ paper_proxy:
   SENSEX: "SENSEXBEES"
 
 live_proxy:
-  NIFTY: "NIFTY 50"
-  SENSEX: "SENSEX"
+  NIFTY: "NIFTY FUT"
+  SENSEX: "SENSEX FUT"

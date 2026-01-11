@@ -1,12 +1,19 @@
-defaults:
-  timeframes: ["5m", "15m"]
-  symbols: ["NIFTY", "SENSEX"]
-  candidates_per_run: 80
-  candidates_per_run_fast: 15
+foundry:
+  max_candidates: 80
+  fast_mode_candidates: 15
+  timeframes: ["5m", "15m", "1d"]
+  data_days_intraday: 59
+  data_days_daily: 3650
   folds: 4
-  folds_fast: 2
-  intraday_data_days: 60
-  daily_data_days: 1000
-  market_start: "09:15"
-  market_end: "15:30"
-  flat_time: "15:25"
+  fast_mode_folds: 2
+
+execution:
+  slippage_bps: 2.0
+  brokerage_per_order: 20.0
+  spread_guard_bps: 1.0
+
+selection:
+  min_trades_5m: 80
+  min_trades_15m: 40
+  max_drawdown: 0.30
+  min_profit_factor: 1.1

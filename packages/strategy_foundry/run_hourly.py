@@ -1,172 +1,154 @@
-"""
-Strategy Foundry Hourly Runner.
-"""
+"""Strategy Foundry Hourly Runner"""
 import os
 import sys
-import yaml
-import time
+import argparse
 import pandas as pd
 import structlog
-from pathlib import Path
 from datetime import datetime
-import pytz
+import json
+import yaml
+from pathlib import Path
 
-# Add repo root to path for imports
+# Add repo root to path
 sys.path.append(os.getcwd())
 
 from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.factory.grammar import Grammar
-from packages.strategy_foundry.backtest.walkforward import WalkForwardAnalyst
-from packages.strategy_foundry.backtest.sanity import SanityCheck
-from packages.strategy_foundry.selection.ranker import rank_candidates
-from packages.strategy_foundry.selection.promote import Promoter
+from packages.strategy_foundry.factory.generator import StrategyGenerator
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.backtest.walkforward import WalkForward
+from packages.strategy_foundry.backtest.sanity import SanityChecker
+from packages.strategy_foundry.selection.ranker import Ranker
 from packages.strategy_foundry.live.signal_publisher import SignalPublisher
 
 logger = structlog.get_logger(__name__)
 
 def main():
-    # 1. Configuration
-    config_path = "packages/strategy_foundry/configs/foundry.yaml"
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fast", action="store_true", help="Run in fast mode")
+    args = parser.parse_args()
 
-    fast_mode = os.getenv("FAST_MODE", "0") == "1"
+    fast_mode = args.fast or os.environ.get("FAST_MODE") == "1"
 
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(f"packages/strategy_foundry/results/runs/{run_ts}")
+    # Load config
+    with open("packages/strategy_foundry/configs/foundry.yaml") as f:
+        config = yaml.safe_load(f)["foundry"]
+
+    # Setup
+    loader = DataLoader()
+    generator = StrategyGenerator()
+    engine = BacktestEngine()
+    ranker = Ranker()
+    publisher = SignalPublisher()
+
+    # Context
+    symbol = "NIFTY" # Primary
+    yahoo_symbol = "^NSEI"
+
+    # 1. Update Data
+    logger.info("Updating Data")
+    df_5m = loader.get_data(yahoo_symbol, "5m", days=config["data_days_intraday"], force_refresh=True)
+    df_15m = loader.get_data(yahoo_symbol, "15m", days=config["data_days_intraday"])
+    # df_1d = loader.get_data(yahoo_symbol, "1d", days=config["data_days_daily"])
+
+    df_5m = loader.filter_market_hours(df_5m)
+    df_15m = loader.filter_market_hours(df_15m)
+
+    if df_5m.empty:
+        logger.error("No data found")
+        return
+
+    # 2. Generate Candidates
+    count = config["fast_mode_candidates"] if fast_mode else config["max_candidates"]
+    candidates = generator.generate(count)
+    logger.info(f"Generated {len(candidates)} candidates")
+
+    # 3. Backtest & Walkforward
+    results = []
+
+    for cand in candidates:
+        # Run on 5m
+        wf = WalkForward(folds=config["fast_mode_folds"] if fast_mode else config["folds"])
+        splits = wf.split(df_5m)
+
+        fold_metrics = []
+        for train, test in splits:
+            res = engine.run(test, cand) # Evaluate on OOS test fold
+            fold_metrics.append(res["metrics"])
+
+        # Aggregated OOS metrics
+        avg_sharpe = sum(m["sharpe"] for m in fold_metrics) / len(fold_metrics)
+        avg_dd = sum(m["max_dd"] for m in fold_metrics) / len(fold_metrics)
+        total_trades = sum(m["trades"] for m in fold_metrics)
+
+        metrics = fold_metrics[-1] # take last fold as representative? No, average is better for ranking
+        metrics["sharpe"] = avg_sharpe
+        metrics["max_dd"] = avg_dd
+        metrics["trades"] = total_trades
+
+        if SanityChecker.check_intraday(metrics, "5m"):
+            results.append({
+                "id": cand.get_id(),
+                "config": cand,
+                "timeframe": "5m",
+                **metrics
+            })
+
+    # 4. Rank
+    leaderboard = ranker.rank(results)
+
+    # Save Results
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(f"packages/strategy_foundry/results/runs/{ts}")
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    structlog.configure(
-        processors=[
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer()
-        ]
-    )
+    leaderboard.to_csv(run_dir / "leaderboard.csv")
 
-    logger.info("Starting Foundry Run", fast_mode=fast_mode, timestamp=run_ts)
+    # 5. Promote & Publish (Only if not fast mode and we have a winner)
+    if not leaderboard.empty:
+        top_cand = leaderboard.iloc[0]
+        logger.info("Top Candidate", id=top_cand["id"], sharpe=top_cand["sharpe"])
 
-    # 2. Data Loading
-    loader = DataLoader()
-    timeframes = config["defaults"]["timeframes"]
-    symbols = config["defaults"]["symbols"]
+        # Publish Signal
+        # Generate signal on LATEST data (full df)
+        # Using top candidate config
+        res = engine.run(df_5m, top_cand["config"])
+        trades = res["trades"]
 
-    data_store = {}
+        # Determine current position from last trade or logic
+        # My engine simulates trades. I need current status.
+        # Engine run returns trades history. I need to know if we are currently "in" a trade.
+        # Or I can look at the last few signals of the raw signal array.
+        # But engine._simulate returns trades only.
+        # I should expose signal generation separately or infer from equity curve/trades.
 
-    for sym in symbols:
-        for tf in timeframes:
-            try:
-                # Force refresh if market is open?
-                # Yes, we need latest data for signal.
-                # But if we just ran an hour ago? Yahoo might not have new bars for 1D.
-                # For intraday, we definitely need refresh.
-                force = True
-                df = loader.get_data(sym, tf, force_refresh=force)
-                data_store[(sym, tf)] = df
-            except Exception as e:
-                logger.error("Failed to load data", symbol=sym, tf=tf, error=str(e))
+        # Quick fix: check if last trade exit_time is None (open)? My engine closes all at end of day/session.
+        # "All positions flat by 15:25".
+        # So at start of next hour, we are likely flat unless we are IN the session.
+        # The hourly run happens during the day.
+        # If I run at 10:00, I have data until 09:55.
+        # I need to know if the strategy says "Buy" at 10:00.
 
-    # 3. Strategy Generation & Backtest
-    grammar = Grammar()
-    sanity = SanityCheck(config["defaults"])
+        # The engine `run` method takes historical df.
+        # To get *current* signal, I need to feed it data up to NOW.
+        # The loader fetched data up to now.
+        # So I just check the `entry_signals` on the last bar of `df_5m`.
 
-    n_candidates = config["defaults"]["candidates_per_run_fast"] if fast_mode else config["defaults"]["candidates_per_run"]
+        # Need to expose signals from engine
+        # Refactor engine to return signals? Or just re-run parts.
 
-    candidates = []
+        indicators = engine._calc_indicators(df_5m, top_cand["config"])
+        signals = engine._generate_signals(df_5m, indicators, top_cand["config"])
+        last_signal = int(signals[-1])
 
-    for sym in symbols:
-        for tf in timeframes:
-            df = data_store.get((sym, tf))
-            if df is None or df.empty: continue
-
-            # Walk-Forward Analyst
-            analyst = WalkForwardAnalyst(df, n_folds=config["defaults"]["folds_fast"] if fast_mode else config["defaults"]["folds"])
-
-            for _ in range(n_candidates):
-                strategy = grammar.generate(tf)
-
-                # Check for duplicates? Hash check?
-                # Grammar gen is random, collision low with parameter space.
-
-                # Run WFA
-                try:
-                    results = analyst.run(strategy)
-                    if not results: continue
-
-                    metrics = results["overall"]
-
-                    # Sanity Check
-                    passed, reasons = sanity.check_intraday(metrics, results)
-
-                    if passed:
-                        candidates.append({
-                            "id": strategy.id,
-                            "symbol": sym,
-                            "timeframe": tf,
-                            "metrics": metrics,
-                            "wf_metrics": results,
-                            "strategy": strategy, # Object
-                            "score": 0 # Calculated later
-                        })
-                except Exception as e:
-                    logger.warning("Backtest failed", strategy_id=strategy.id, error=str(e))
-
-    # 4. Ranking
-    ranked_df = rank_candidates(candidates)
-
-    if not ranked_df.empty:
-        # Save results
-        ranked_df.to_csv(run_dir / "leaderboard.csv", index=False)
-
-        # Markdown summary
-        md_lines = ["# Strategy Foundry Leaderboard", "", f"Run: {run_ts}", ""]
-        md_lines.append(ranked_df.head(10).to_markdown())
-        with open(run_dir / "leaderboard.md", "w") as f:
-            f.write("\n".join(md_lines))
-
-        logger.info("Ranking complete", top_score=ranked_df.iloc[0]["score"])
-
-        # 5. Promotion (Full Mode Only)
-        if not fast_mode:
-            promoter = Promoter()
-            # Get top 1 across all symbols/TF?
-            # Or per symbol?
-            # Let's take global top 1 for now.
-            top_candidate = candidates[ranked_df.index[0]] # Get original dict from list using index
-            # Wait, ranked_df index might be shuffled.
-            # rank_candidates returns new DF. We need to match back to candidate dict.
-
-            # Better: rank_candidates returns DF with 'strategy' column containing the object.
-            # We can reconstruct the dict.
-            top_row = ranked_df.iloc[0]
-            top_dict = {
-                "id": top_row["id"],
-                "score": top_row["score"],
-                "metrics": {
-                    "sharpe": top_row["sharpe"],
-                    "calmar": top_row["calmar"],
-                    "cagr": top_row["cagr"],
-                    "max_dd": top_row["max_dd"],
-                    "trades": top_row["trades"]
-                    # ... add others if needed
-                },
-                "sharpe": top_row["sharpe"], # For promote check
-                "max_dd": top_row["max_dd"],
-                "strategy": top_row["strategy"] # Object
-            }
-
-            promoted = promoter.try_promote(top_dict, run_ts)
-
-            if promoted:
-                # 6. Publish Signal
-                publisher = SignalPublisher()
-                # Reload champion from disk to ensure we publish exactly what's stored
-                champ = promoter.get_current_champion()
-                if champ:
-                    publisher.publish(champ)
-        else:
-            logger.info("Fast mode: Skipping promotion and signaling")
-    else:
-        logger.warning("No viable candidates found")
+        publisher.publish(
+            {
+                "id": top_cand["id"],
+                "timeframe": top_cand["timeframe"],
+                "rule_summary": top_cand["config"].to_summary()
+            },
+            last_signal,
+            symbol
+        )
 
 if __name__ == "__main__":
     main()

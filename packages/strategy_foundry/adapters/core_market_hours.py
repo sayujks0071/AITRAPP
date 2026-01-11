@@ -1,21 +1,13 @@
-"""
-Adapter for market hours.
-"""
+from packages.core.market_hours import MarketHoursGuard as CoreMarketHoursGuard
 from datetime import datetime
 import pytz
-from packages.core.market_hours import MarketHoursGuard, MARKET_OPEN, MARKET_CLOSE, HARD_CLOSE
 
-class MarketHours:
+class MarketHoursGuard(CoreMarketHoursGuard):
+    """
+    Adapter for Core Market Hours.
+    """
     def __init__(self):
-        self.guard = MarketHoursGuard()
-        self.tz = pytz.timezone("Asia/Kolkata")
+        super().__init__()
 
     def is_market_open(self, dt: datetime = None) -> bool:
-        return self.guard.is_market_open(dt)
-
-    def get_flatten_time(self) -> str:
-        # Return string HH:MM
-        return HARD_CLOSE.strftime("%H:%M")
-
-    def get_entry_end_time(self) -> str:
-        return MARKET_CLOSE.strftime("%H:%M")
+        return super().is_market_open(dt)
