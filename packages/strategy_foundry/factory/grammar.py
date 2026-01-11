@@ -1,58 +1,161 @@
-"""Strategy Grammar for Foundry"""
-from dataclasses import dataclass, field
+import numpy as np
+import pandas as pd
 from typing import List, Dict, Any, Optional
 import hashlib
 import json
+from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicatorCalculator
 
-@dataclass
-class StrategyRule:
-    type: str
-    params: Dict[str, Any]
+class StrategyBlock:
+    def __init__(self, name: str, params: Dict[str, Any]):
+        self.name = name
+        self.params = params
 
-@dataclass
-class StrategyConfig:
-    entry_rules: List[StrategyRule]
-    exit_rules: List[StrategyRule]
-    filters: List[StrategyRule]
+    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
+        raise NotImplementedError
 
-    def get_id(self) -> str:
-        """Stable hash of the strategy configuration"""
-        data = {
-            "entry": [r.__dict__ for r in self.entry_rules],
-            "exit": [r.__dict__ for r in self.exit_rules],
-            "filters": [r.__dict__ for r in self.filters]
+    def __repr__(self):
+        return f"{self.name}({self.params})"
+
+    def to_dict(self):
+        return {"type": self.name, "params": self.params}
+
+class EmaCrossBlock(StrategyBlock):
+    def __init__(self, fast_period: int, slow_period: int):
+        super().__init__("EmaCross", {"fast": fast_period, "slow": slow_period})
+
+    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
+        # Pre-calculated in indicators dict or calculated here?
+        # Better to calculate here or use cache.
+        # We will assume 'indicators' has raw data or calculator
+        calc = VectorizedIndicatorCalculator()
+        close = df["close"]
+        ema_fast = calc.ema(close, self.params["fast"])
+        ema_slow = calc.ema(close, self.params["slow"])
+
+        # Signal: 1 if Fast > Slow (uptrend), -1 if Fast < Slow
+        # We want to catch the crossover.
+        # For trend following: hold 1 while Fast > Slow.
+        signal = pd.Series(0, index=df.index)
+        signal[ema_fast > ema_slow] = 1
+        signal[ema_fast < ema_slow] = -1
+        return signal
+
+class RsiFilterBlock(StrategyBlock):
+    def __init__(self, period: int, threshold: float, mode: str):
+        # mode: "long_if_above" (trend), "long_if_below" (mean rev)
+        super().__init__("RsiFilter", {"period": period, "threshold": threshold, "mode": mode})
+
+    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
+        calc = VectorizedIndicatorCalculator()
+        rsi = calc.rsi(df["close"].values, self.params["period"])
+        rsi_s = pd.Series(rsi, index=df.index)
+
+        signal = pd.Series(0, index=df.index)
+        if self.params["mode"] == "long_if_above":
+            signal[rsi_s > self.params["threshold"]] = 1
+        elif self.params["mode"] == "long_if_below":
+            signal[rsi_s < self.params["threshold"]] = 1
+
+        return signal
+
+class SupertrendBlock(StrategyBlock):
+    def __init__(self, period: int, multiplier: float):
+        super().__init__("Supertrend", {"period": period, "multiplier": multiplier})
+
+    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
+        calc = VectorizedIndicatorCalculator()
+        st, direction = calc.supertrend(
+            df["high"].values, df["low"].values, df["close"].values,
+            self.params["period"], self.params["multiplier"]
+        )
+        # direction is 1 (up) or -1 (down)
+        return pd.Series(direction, index=df.index)
+
+class DonchianBlock(StrategyBlock):
+    def __init__(self, period: int):
+        super().__init__("Donchian", {"period": period})
+
+    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
+        calc = VectorizedIndicatorCalculator()
+        upper, lower = calc.donchian(df["high"], df["low"], self.params["period"])
+        close = df["close"]
+
+        signal = pd.Series(0, index=df.index)
+        signal[close > upper.shift(1)] = 1  # Breakout up
+        signal[close < lower.shift(1)] = -1 # Breakout down
+
+        # Propagate signal? Donchian is usually breakout entry.
+        # For simplicty, this block returns "State" 1 if price > prev_upper
+        # Real Donchian strategy holds until touches lower.
+        # Here we return instantaneous state.
+        return signal
+
+class Strategy:
+    def __init__(self, blocks: List[StrategyBlock], stop_loss_atr: float, take_profit_atr: float):
+        self.blocks = blocks
+        self.stop_loss_atr = stop_loss_atr
+        self.take_profit_atr = take_profit_atr
+        self.id = self._generate_id()
+
+    def _generate_id(self):
+        desc = json.dumps(self.to_dict(), sort_keys=True)
+        return hashlib.md5(desc.encode()).hexdigest()[:12]
+
+    def to_dict(self):
+        return {
+            "blocks": [b.to_dict() for b in self.blocks],
+            "risk": {
+                "stop_loss_atr": self.stop_loss_atr,
+                "take_profit_atr": self.take_profit_atr
+            }
         }
-        s = json.dumps(data, sort_keys=True)
-        return hashlib.sha256(s.encode()).hexdigest()[:12]
 
-    def to_summary(self) -> str:
-        """Human readable summary"""
-        entries = ", ".join([f"{r.type}({r.params})" for r in self.entry_rules])
-        exits = ", ".join([f"{r.type}({r.params})" for r in self.exit_rules])
-        filters = ", ".join([f"{r.type}({r.params})" for r in self.filters]) if self.filters else "None"
-        return f"ENTRY: [{entries}] | EXIT: [{exits}] | FILTER: [{filters}]"
+    @property
+    def rule_summary(self) -> str:
+        rules = " AND ".join([repr(b) for b in self.blocks])
+        return f"Signal({rules}) | Risk(SL={self.stop_loss_atr}ATR, TP={self.take_profit_atr}ATR)"
 
-# --- Parameter Space ---
+    def generate_positions(self, df: pd.DataFrame) -> pd.Series:
+        """
+        Generate target positions (-1, 0, 1).
+        Logic: All blocks must agree on direction (or be 0).
+        For Long Only: All blocks must be >= 0, and at least one is 1.
+        """
+        if df.empty: return pd.Series()
 
-BLOCK_TYPES = {
-    "ENTRY": ["BREAKOUT_ORB", "BREAKOUT_DONCHIAN", "TREND_EMA_CROSS", "MEANREV_RSI", "MEANREV_BB"],
-    "EXIT": ["STOP_ATR", "STOP_TIME", "TARGET_FIXED", "EXIT_SESSION"],
-    "FILTER": ["FILTER_TREND_HTF", "FILTER_VOL_ATR", "FILTER_TIME_NO_TRADE"]
-}
+        combined_signal = pd.Series(0, index=df.index)
 
-PARAM_RANGES = {
-    "BREAKOUT_ORB": {"start_time": ["09:15"], "end_time": ["09:30", "09:45", "10:15"]},
-    "BREAKOUT_DONCHIAN": {"period": [10, 20, 50]},
-    "TREND_EMA_CROSS": {"fast": [9, 13, 20], "slow": [21, 34, 50]},
-    "MEANREV_RSI": {"period": [14], "lower": [20, 30], "upper": [70, 80]},
-    "MEANREV_BB": {"period": [20], "std": [2.0]},
+        # We need to accumulate consensus.
+        # Simple logic: Voting.
+        # Or Strict: All must be 1 to go Long.
 
-    "STOP_ATR": {"period": [14], "multiplier": [1.5, 2.0, 3.0]},
-    "STOP_TIME": {"bars": [6, 12, 24, 72]}, # 30m, 1h, 2h, 6h (for 5m bars)
-    "TARGET_FIXED": {"risk_reward": [1.5, 2.0, 3.0]},
-    "EXIT_SESSION": {"time": ["15:20"]}, # Mandatory
+        # Let's go with "Intersection" (AND) for entry.
+        # If any block says -1, we don't go long.
+        # If all blocks >= 0 and sum > 0 -> Long.
 
-    "FILTER_TREND_HTF": {"period": [50, 200]},
-    "FILTER_VOL_ATR": {"period": [14], "min_percentile": [0, 20], "max_percentile": [80, 100]},
-    "FILTER_TIME_NO_TRADE": {"start": ["09:15"], "end": ["09:45"]} # Avoid first 30m
-}
+        signals = []
+        for block in self.blocks:
+            signals.append(block.compute_signal(df, {}))
+
+        if not signals:
+            return combined_signal
+
+        # Stack signals
+        sig_df = pd.concat(signals, axis=1)
+
+        # Long Logic
+        # All signals must be >= 0 (no explicit sell signals)
+        # At least one signal must be 1 (explicit buy signal)
+        long_condition = (sig_df >= 0).all(axis=1) & (sig_df.sum(axis=1) >= 1)
+
+        # Short Logic (Optional, disabled by default in foundry usually, but here we support signals)
+        short_condition = (sig_df <= 0).all(axis=1) & (sig_df.sum(axis=1) <= -1)
+
+        combined_signal[long_condition] = 1
+        combined_signal[short_condition] = -1
+
+        return combined_signal
+
+    def get_atr_array(self, df: pd.DataFrame):
+        calc = VectorizedIndicatorCalculator()
+        return calc.atr(df["high"].values, df["low"].values, df["close"].values, period=14)

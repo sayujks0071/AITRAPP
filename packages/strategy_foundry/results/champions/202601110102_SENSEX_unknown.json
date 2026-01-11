@@ -1,0 +1,39 @@
+{
+  "symbol": "SENSEX",
+  "strategy": {
+    "blocks": [
+      {
+        "type": "RsiFilter",
+        "params": {
+          "period": 14,
+          "threshold": 70,
+          "mode": "long_if_below"
+        }
+      },
+      {
+        "type": "EmaCross",
+        "params": {
+          "fast": 10,
+          "slow": 50
+        }
+      }
+    ],
+    "risk": {
+      "stop_loss_atr": 1.0,
+      "take_profit_atr": 2.0
+    }
+  },
+  "score": 0.33757974572974525,
+  "metrics": {
+    "total_return": 0.031993698838194806,
+    "cagr": 0.012181660373948633,
+    "sharpe": 0.15572712397517238,
+    "sortino": 0.0,
+    "max_drawdown": 0.14242384462604854,
+    "calmar": 0.08553104577350157,
+    "win_rate": 0.40963855421686746,
+    "profit_factor": 1.0595310281393688,
+    "trades": 83
+  },
+  "timestamp": "2026-01-11 01:02:51.081685"
+}

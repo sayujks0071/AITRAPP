@@ -1,25 +1,19 @@
-"""Sanity Checks"""
 from typing import Dict, Any
 
-class SanityChecker:
-    @staticmethod
-    def check_intraday(metrics: Dict[str, Any], timeframe: str) -> bool:
-        """
-        Rejection thresholds.
-        """
-        if timeframe == "5m":
-            if metrics["trades"] < 40: return False # Lowered for short run safety
-        else:
-            if metrics["trades"] < 20: return False
+def check_sanity(metrics: Dict[str, Any], min_trades: int = 30, max_dd: float = 0.35, min_positive_folds: int = 2) -> bool:
+    if not metrics.get("valid", False):
+        return False
 
-        if metrics["max_dd"] > 0.30: return False
-        if metrics["profit_factor"] < 1.05: return False
+    agg = metrics["metrics"]
+    if agg["trades"] < min_trades:
+        return False
 
-        return True
+    if agg["max_drawdown"] > max_dd:
+        return False
 
-    @staticmethod
-    def check_daily_sanity(metrics: Dict[str, Any]) -> bool:
-        # Catastrophic failure check
-        if metrics["max_dd"] > 0.45: return False
-        if metrics["sharpe"] < -0.2: return False
-        return True
+    # Check folds
+    pos_folds = sum(1 for f in metrics["fold_metrics"] if f["total_return"] > 0)
+    if pos_folds < min_positive_folds:
+        return False
+
+    return True

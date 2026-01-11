@@ -1,49 +1,46 @@
-import os
 import json
 import structlog
-from typing import Optional
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from pathlib import Path
+from typing import Dict, Any, Optional
 
 logger = structlog.get_logger(__name__)
 
-CHAMPION_DIR = "packages/strategy_foundry/results/champions"
-CURRENT_CHAMPION_FILE = os.path.join(CHAMPION_DIR, "current.json")
+CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_champion() -> Optional[StrategyCandidate]:
-    if not os.path.exists(CURRENT_CHAMPION_FILE):
-        return None
+class ChampionStore:
+    def load_current_champion(self, symbol: str) -> Optional[Dict[str, Any]]:
+        path = CHAMPION_DIR / f"current_{symbol}.json"
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error("Failed to load champion", symbol=symbol, error=str(e))
+            return None
 
-    try:
-        with open(CURRENT_CHAMPION_FILE, "r") as f:
-            data = json.load(f)
-            return StrategyCandidate(
-                id=data["id"],
-                grammar=data["grammar"],
-                params=data["params"],
-                metrics=data.get("metrics", {})
-            )
-    except Exception as e:
-        logger.error("Failed to load champion", error=str(e))
-        return None
+    def save_champion(self, symbol: str, strategy_dict: Dict[str, Any], score: float, metrics: Dict[str, Any]):
+        data = {
+            "symbol": symbol,
+            "strategy": strategy_dict,
+            "score": score,
+            "metrics": metrics,
+            "timestamp": str(pd.Timestamp.now())
+        }
 
-def save_champion(candidate: StrategyCandidate, timestamp: str):
-    os.makedirs(CHAMPION_DIR, exist_ok=True)
+        # Save current
+        path = CHAMPION_DIR / f"current_{symbol}.json"
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
 
-    data = {
-        "id": candidate.id,
-        "grammar": candidate.grammar,
-        "params": candidate.params,
-        "metrics": candidate.metrics,
-        "promoted_at": timestamp
-    }
+        # Save versioned
+        vid = strategy_dict.get("id", "unknown")
+        ts = pd.Timestamp.now().strftime("%Y%m%d%H%M")
+        vpath = CHAMPION_DIR / f"{ts}_{symbol}_{vid}.json"
+        with open(vpath, "w") as f:
+            json.dump(data, f, indent=2)
 
-    # Save current
-    with open(CURRENT_CHAMPION_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        logger.info("Champion saved", symbol=symbol, id=vid, score=score)
 
-    # Save versioned
-    version_file = os.path.join(CHAMPION_DIR, f"{timestamp}_{candidate.id}.json")
-    with open(version_file, "w") as f:
-        json.dump(data, f, indent=2)
-
-    logger.info("Champion promoted", id=candidate.id)
+import pandas as pd

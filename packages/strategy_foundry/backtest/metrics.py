@@ -1,63 +1,80 @@
-"""Metrics Calculation"""
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any
+from typing import Dict, Any
 
-def calculate_metrics(trades: List[Dict], equity_curve: pd.Series, df: pd.DataFrame) -> Dict[str, Any]:
-    if not trades:
+def calculate_metrics(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> Dict[str, float]:
+    if trades_df.empty:
         return {
+            "total_return": 0.0,
             "cagr": 0.0,
-            "max_dd": 0.0,
             "sharpe": 0.0,
+            "sortino": 0.0,
+            "max_drawdown": 0.0,
             "calmar": 0.0,
-            "trades": 0,
             "win_rate": 0.0,
-            "profit_factor": 0.0
+            "profit_factor": 0.0,
+            "trades": 0
         }
 
-    trades_df = pd.DataFrame(trades)
+    # Simple Metrics based on trade returns
+    returns = trades_df["return_pct"]
 
-    # CAGR
-    total_ret = equity_curve.iloc[-1] - 1.0
-    days = (equity_curve.index[-1] - equity_curve.index[0]).days
-    if days > 0:
-        cagr = (1 + total_ret) ** (365/days) - 1
-    else:
-        cagr = 0.0
+    total_return = returns.sum() # Simple sum (log returns would be additive, pct returns arithmetic approx)
+    # Compounded: (1+r1)*(1+r2)...
+    total_ret_comp = (1 + returns).prod() - 1
 
-    # Max DD
-    cum_max = equity_curve.cummax()
-    drawdown = (equity_curve - cum_max) / cum_max
-    max_dd = abs(drawdown.min())
+    wins = returns[returns > 0]
+    losses = returns[returns <= 0]
 
-    # Sharpe (Annualized)
-    # Using daily returns of equity curve
-    daily_returns = equity_curve.resample("D").last().dropna().pct_change().dropna()
-    if len(daily_returns) > 1 and daily_returns.std() > 0:
-        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
-    else:
-        sharpe = 0.0
+    win_rate = len(wins) / len(returns) if len(returns) > 0 else 0
 
-    # Calmar
-    calmar = cagr / max_dd if max_dd > 0 else 0.0
+    avg_win = wins.mean() if not wins.empty else 0
+    avg_loss = losses.mean() if not losses.empty else 0
 
-    # Trade Stats
-    wins = trades_df[trades_df["return"] > 0]
-    losses = trades_df[trades_df["return"] <= 0]
+    profit_factor = abs(wins.sum() / losses.sum()) if not losses.empty and losses.sum() != 0 else 999.0
 
-    win_rate = len(wins) / len(trades)
+    # To get Sharpe/Drawdown properly, we need a time series of equity.
+    # Reconstructing rough equity curve from trade exits (sparse)
+    # Ideally backtest engine returns daily equity.
+    # For MVP fast evaluation, trade stats might suffice for Ranker?
+    # No, Ranker wants Sharpe/MaxDD.
 
-    gross_profit = wins["return"].sum()
-    gross_loss = abs(losses["return"].sum())
+    # We will approximate Sharpe from trade returns assuming 1 trade at a time.
+    # Annualized Sharpe = mean(ret) / std(ret) * sqrt(TradesPerYear) ?
+    # Or sqrt(252) if daily.
 
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else 999.0
+    # Let's use the trade exit timestamps to determine duration.
+    start_date = trades_df["entry_time"].min()
+    end_date = trades_df["exit_time"].max()
+    duration_days = (end_date - start_date).days
+    years = max(duration_days / 365.25, 0.01)
+
+    cagr = (1 + total_ret_comp) ** (1 / years) - 1
+
+    # Estimate Drawdown from cumulative returns
+    cum_ret = (1 + returns).cumprod()
+    peak = cum_ret.cummax()
+    dd = (cum_ret - peak) / peak
+    max_dd = dd.min() # Negative value
+
+    # Sharpe (Trade based)
+    # Not strictly time-based Sharpe, but a proxy "Trade Sharpe"
+    # To be comparable to standard Sharpe (daily), we need daily returns.
+    # We will accept Trade Sharpe for now or 0 if single trade.
+
+    std_dev = returns.std()
+    sharpe = (returns.mean() / std_dev) * np.sqrt(len(returns)/years) if std_dev > 0 else 0
+
+    calmar = cagr / abs(max_dd) if max_dd != 0 else 0
 
     return {
+        "total_return": total_ret_comp,
         "cagr": cagr,
-        "max_dd": max_dd,
         "sharpe": sharpe,
+        "sortino": 0.0, # TODO
+        "max_drawdown": abs(max_dd),
         "calmar": calmar,
-        "trades": len(trades),
         "win_rate": win_rate,
-        "profit_factor": profit_factor
+        "profit_factor": profit_factor,
+        "trades": len(trades_df)
     }
