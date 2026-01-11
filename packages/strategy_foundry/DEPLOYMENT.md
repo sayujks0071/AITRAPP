@@ -1,20 +1,18 @@
-# Deployment & Live Signals
+# Deployment Guide
 
-## Signal Artifact
-The system publishes `packages/strategy_foundry/results/live_signal.json` when:
-1. Market is Open (09:15 - 15:30 IST)
-2. A valid Champion exists (Passed strict gates)
-3. Champion logic generates a signal
+## Live Signal Consumption
+
+The Foundry produces `results/live_signal.json`. This is an artifact-only output.
+
+To trade this signal:
+1. Ensure `ENABLE_LIVE=true` in environment.
+2. Ensure `approvals/ALLOW_LIVE.txt` exists.
+3. Use a separate execution script (bridge) to read the JSON and place orders via `packages.core`.
 
 ## Gating
-Live execution is **OFF** by default.
-To consume signals for execution:
-1. Set `ENABLE_LIVE=true` in environment.
-2. Create `approvals/ALLOW_LIVE.txt` file.
-3. Ensure Core kill-switches are inactive.
+The signal is "SKIPPED" if:
+- Market is Closed.
+- No strategy passes the strict OOS criteria (Sharpe > 1.2, DD < 20%).
 
-## Process
-1. GitHub Actions runs hourly.
-2. If new data available, strategy re-evaluated.
-3. If signal generated, JSON is updated.
-4. Downstream execution system (if any) reads JSON and executes.
+## Proxies
+We analyze `^NSEI` (Nifty 50 Index) but the signal JSON includes `proxy_symbol_live` (e.g., `NIFTY FUT`) for execution mapping.

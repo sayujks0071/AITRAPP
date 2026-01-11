@@ -1,107 +1,58 @@
-"""
-Strategy Grammar and Parameter Space.
-"""
-import random
+"""Strategy Grammar for Foundry"""
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional
 import hashlib
 import json
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
 
 @dataclass
-class StrategySpec:
-    id: str
-    entry_logic: Dict[str, Any]
-    exit_logic: Dict[str, Any]
-    filters: List[Dict[str, Any]]
-    timeframe: str
+class StrategyRule:
+    type: str
+    params: Dict[str, Any]
 
-    def to_json(self):
-        return json.dumps(asdict(self), sort_keys=True)
+@dataclass
+class StrategyConfig:
+    entry_rules: List[StrategyRule]
+    exit_rules: List[StrategyRule]
+    filters: List[StrategyRule]
 
-    @property
-    def summary(self) -> str:
-        return f"{self.entry_logic['type']} + {self.exit_logic['stop_type']} stop"
-
-class Grammar:
-    def __init__(self):
-        self.entry_types = ["Breakout", "TrendCross", "RSIReversion", "BollingerReversion"]
-        self.stop_types = ["ATR", "FixedPct"]
-        self.filter_types = ["TrendFilter", "None"]
-
-    def generate(self, timeframe: str) -> StrategySpec:
-        """Generate a random strategy specification."""
-        entry = self._gen_entry()
-        exit_logic = self._gen_exit()
-        filters = self._gen_filters()
-
-        # Create deterministic ID
-        content = {
-            "entry": entry,
-            "exit": exit_logic,
-            "filters": filters,
-            "tf": timeframe
+    def get_id(self) -> str:
+        """Stable hash of the strategy configuration"""
+        data = {
+            "entry": [r.__dict__ for r in self.entry_rules],
+            "exit": [r.__dict__ for r in self.exit_rules],
+            "filters": [r.__dict__ for r in self.filters]
         }
-        spec_str = json.dumps(content, sort_keys=True)
-        spec_id = hashlib.md5(spec_str.encode()).hexdigest()[:12]
+        s = json.dumps(data, sort_keys=True)
+        return hashlib.sha256(s.encode()).hexdigest()[:12]
 
-        return StrategySpec(
-            id=spec_id,
-            entry_logic=entry,
-            exit_logic=exit_logic,
-            filters=filters,
-            timeframe=timeframe
-        )
+    def to_summary(self) -> str:
+        """Human readable summary"""
+        entries = ", ".join([f"{r.type}({r.params})" for r in self.entry_rules])
+        exits = ", ".join([f"{r.type}({r.params})" for r in self.exit_rules])
+        filters = ", ".join([f"{r.type}({r.params})" for r in self.filters]) if self.filters else "None"
+        return f"ENTRY: [{entries}] | EXIT: [{exits}] | FILTER: [{filters}]"
 
-    def _gen_entry(self) -> Dict[str, Any]:
-        etype = random.choice(self.entry_types)
-        if etype == "Breakout":
-            return {
-                "type": "Breakout",
-                "period": random.choice([10, 20, 50]),
-                "confirm_vol": random.choice([True, False])
-            }
-        elif etype == "TrendCross":
-            fast = random.choice([9, 20])
-            slow = random.choice([20, 50, 200])
-            if fast >= slow: slow = fast * 2
-            return {
-                "type": "TrendCross",
-                "fast": fast,
-                "slow": slow,
-                "adx_filter": random.choice([0, 20, 25])
-            }
-        elif etype == "RSIReversion":
-            return {
-                "type": "RSIReversion",
-                "period": 14,
-                "buy_threshold": random.choice([20, 30, 40]),
-                "sell_threshold": random.choice([60, 70, 80])
-            }
-        elif etype == "BollingerReversion":
-            return {
-                "type": "BollingerReversion",
-                "period": 20,
-                "std": random.choice([2.0, 2.5])
-            }
-        return {"type": "Unknown"}
+# --- Parameter Space ---
 
-    def _gen_exit(self) -> Dict[str, Any]:
-        stype = random.choice(self.stop_types)
-        sl_mult = random.choice([1.5, 2.0, 3.0])
-        tp_mult = random.choice([1.5, 2.0, 3.0, 5.0])
+BLOCK_TYPES = {
+    "ENTRY": ["BREAKOUT_ORB", "BREAKOUT_DONCHIAN", "TREND_EMA_CROSS", "MEANREV_RSI", "MEANREV_BB"],
+    "EXIT": ["STOP_ATR", "STOP_TIME", "TARGET_FIXED", "EXIT_SESSION"],
+    "FILTER": ["FILTER_TREND_HTF", "FILTER_VOL_ATR", "FILTER_TIME_NO_TRADE"]
+}
 
-        return {
-            "stop_type": stype,
-            "sl_mult": sl_mult,
-            "tp_risk_reward": tp_mult,
-            "time_stop_bars": random.choice([0, 12, 24, 48]) # 0 means none
-        }
+PARAM_RANGES = {
+    "BREAKOUT_ORB": {"start_time": ["09:15"], "end_time": ["09:30", "09:45", "10:15"]},
+    "BREAKOUT_DONCHIAN": {"period": [10, 20, 50]},
+    "TREND_EMA_CROSS": {"fast": [9, 13, 20], "slow": [21, 34, 50]},
+    "MEANREV_RSI": {"period": [14], "lower": [20, 30], "upper": [70, 80]},
+    "MEANREV_BB": {"period": [20], "std": [2.0]},
 
-    def _gen_filters(self) -> List[Dict[str, Any]]:
-        ftype = random.choice(self.filter_types)
-        if ftype == "TrendFilter":
-            return [{
-                "type": "TrendFilter",
-                "ema_period": random.choice([50, 200])
-            }]
-        return []
+    "STOP_ATR": {"period": [14], "multiplier": [1.5, 2.0, 3.0]},
+    "STOP_TIME": {"bars": [6, 12, 24, 72]}, # 30m, 1h, 2h, 6h (for 5m bars)
+    "TARGET_FIXED": {"risk_reward": [1.5, 2.0, 3.0]},
+    "EXIT_SESSION": {"time": ["15:20"]}, # Mandatory
+
+    "FILTER_TREND_HTF": {"period": [50, 200]},
+    "FILTER_VOL_ATR": {"period": [14], "min_percentile": [0, 20], "max_percentile": [80, 100]},
+    "FILTER_TIME_NO_TRADE": {"start": ["09:15"], "end": ["09:45"]} # Avoid first 30m
+}

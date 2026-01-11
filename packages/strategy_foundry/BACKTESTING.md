@@ -1,23 +1,19 @@
 # Backtesting Methodology
 
 ## Assumptions
-- **Execution**: Signal on close, trade on next open.
-- **Costs**:
-  - Slippage: 5bps
-  - Brokerage: min(20, 0.03%)
-  - Taxes: ~3bps (STT + Exchange + GST)
-- **Intraday**:
-  - Positions must be flat by 15:25 IST.
-  - No carry over.
+- **Slippage**: 2 bps per side
+- **Costs**: Zerodha-like brokerage + Taxes
+- **Execution**: Signal on Close -> Trade on Next Open
 
-## Evaluation
-- **Walk-Forward**: Data is split into 4 folds. Strategies are evaluated on each fold to measure consistency.
-- **Ranking**: Blended score of Sharpe, Calmar, CAGR, Stability, and Turnover.
-- **Sanity Checks**:
-  - Minimum trades per period.
-  - Max drawdown limits.
-  - Daily sanity check (1D timeframe) to ensure robustness against noise.
+## Walk-Forward Analysis
+We use Expanding Window Walk-Forward Analysis to avoid overfitting.
+- 4 Folds
+- Strategy must be profitable in >= 3 folds to be considered.
 
-## Limitations
-- **Data**: Yahoo Finance data is used (via `requests`). Intraday history is limited (~60 days).
-- **Fills**: Assumes perfect fills at Open for entries. Stop losses are checked against High/Low.
+## Intraday Constraints
+- Mandatory Flattening at 15:20 IST.
+- No positions carried overnight.
+- Max 1 trade per direction per day (optional).
+
+## Data
+Data is sourced from Yahoo Finance (`^NSEI`, `^BSESN`). Note that this data may have slight delays or gaps compared to tick-level broker data. We use it for trend/regime detection.

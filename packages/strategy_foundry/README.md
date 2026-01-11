@@ -1,29 +1,32 @@
 # Strategy Foundry
 
+An autonomous lab that self-generates, backtests, ranks, and publishes intraday trading strategies for Indian indices.
+
 ## Overview
-Autonomous intraday strategy research and signal generation lab.
-Generates, backtests, ranks, and promotes trading strategies for NIFTY/SENSEX indices.
-Produces live trading signals as JSON artifacts.
+- **Timeframes**: 5m, 15m
+- **Data**: Yahoo Finance (Proxies for NIFTY/SENSEX)
+- **Engine**: Vectorized + Event-Driven Hybrid
+- **Output**: `live_signal.json` (No auto-execution)
 
 ## Usage
-
-### Run Manually
+Run manually:
 ```bash
-# Fast mode (fewer candidates, no promotion)
-export FAST_MODE=1
-python packages/strategy_foundry/run_hourly.py
-
-# Full mode
-export FAST_MODE=0
 python packages/strategy_foundry/run_hourly.py
 ```
 
-### Outputs
-Results are stored in `packages/strategy_foundry/results/`:
-- `runs/<timestamp>/`: Individual run artifacts (leaderboards, metrics)
-- `champions/`: Promoted strategy configurations
-- `live_signal.json`: Current live trading signal (if eligible)
+Fast mode (for dev):
+```bash
+FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+```
 
-## Configuration
-- `configs/foundry.yaml`: Runtime settings (timeframes, folding, etc.)
-- `configs/instrument_map.yaml`: Symbol mappings (Research -> Live)
+## Structure
+- `factory/`: Strategy grammar and generator
+- `backtest/`: Engine and metrics
+- `data/`: Caching loader
+- `results/`: Run artifacts
+
+## Live Signals
+The system publishes `results/live_signal.json` only when:
+1. Market is Open
+2. A robust champion is found
+3. Live gating criteria are met
