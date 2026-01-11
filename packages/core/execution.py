@@ -150,6 +150,24 @@ class ExecutionEngine:
             if not filled:
                 logger.warning("Entry order not filled within timeout", order_id=entry_order.client_order_id)
                 await self.cancel_order(entry_order.client_order_id)
+
+                # Check for partial fills after cancellation
+                # Refresh order from map as cancellation might have updated status
+                entry_order = self.orders.get(entry_order.order_id)
+
+                if entry_order and entry_order.filled_quantity > 0:
+                    logger.warning(
+                        "Partial fill detected on timeout",
+                        order_id=entry_order.order_id,
+                        filled=entry_order.filled_quantity,
+                        requested=quantity
+                    )
+
+                    # Place exit orders for the FILLED quantity
+                    await self._place_exit_orders(signal, entry_order, entry_order.filled_quantity)
+
+                    return OrderResult.PARTIAL, entry_order
+
                 return OrderResult.TIMEOUT, entry_order
             
             # 3. Place exit orders (stop loss and take profits)
