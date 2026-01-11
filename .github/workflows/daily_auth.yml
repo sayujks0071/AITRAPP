@@ -33,6 +33,7 @@ jobs:
           python scripts/kite_auth_bootstrap.py --check-only || echo "AUTH_NEEDED=true" >> $GITHUB_ENV
 
       - name: Notify / Create Issue if Auth Needed
+        # Triggered if auth check failed (exit code 1)
         if: env.AUTH_NEEDED == 'true'
         uses: actions/github-script@v6
         with:

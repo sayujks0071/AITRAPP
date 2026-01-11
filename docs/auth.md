@@ -44,3 +44,4 @@ It should exit with success (status 0).
 
 -   **Redirect URL Mismatch**: Ensure your Kite Connect app's redirect URL matches your server's address (e.g., `http://localhost:8000/auth/kite/callback`).
 -   **Token Expired**: If you see "Token is invalid" errors in logs, run the bootstrap script to refresh the session.
+-   **Logging**: Tokens are never printed in logs. The login URL contains the public API Key only.
