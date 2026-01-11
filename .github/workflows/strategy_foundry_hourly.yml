@@ -2,15 +2,19 @@ name: Strategy Foundry Hourly
 
 on:
   schedule:
-    - cron: "0 * * * *"  # Hourly
+    - cron: "0 * * * *"
   workflow_dispatch:
   pull_request:
     paths:
-      - 'packages/strategy_foundry/**'
+      - "packages/strategy_foundry/**"
 
 jobs:
-  run-foundry:
+  foundry-run:
     runs-on: ubuntu-latest
+    env:
+      FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+      PYTHONPATH: .
+
     steps:
       - uses: actions/checkout@v3
 
@@ -19,21 +23,18 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install pandas numpy requests structlog pyyaml pytz tabulate
+          pip install pandas numpy httpx structlog pydantic pytz
+          # No heavy deps
 
-      - name: Run Foundry
-        env:
-          PYTHONPATH: .
-          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
-        run: |
-          python packages/strategy_foundry/run_hourly.py
+      - name: Run Strategy Foundry
+        run: python packages/strategy_foundry/run_hourly.py
 
-      - name: Upload Artifacts
+      - name: Archive Results
         if: always()
         uses: actions/upload-artifact@v3
         with:
           name: foundry-results
           path: packages/strategy_foundry/results/
+          retention-days: 7

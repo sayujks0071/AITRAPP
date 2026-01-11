@@ -1,20 +1,14 @@
 # Deployment & Live Signals
 
-## Signal Artifact
-The system publishes `packages/strategy_foundry/results/live_signal.json` when:
-1. Market is Open (09:15 - 15:30 IST)
-2. A valid Champion exists (Passed strict gates)
-3. Champion logic generates a signal
+## Philosophy
+- **Paper First**: Signals are published as JSON artifacts. No automated execution initially.
+- **Safety**: `MarketHoursGuard` ensures signals are only valid during market hours.
+- **Gating**: Live signals are only published if the Champion strategy meets strict criteria (Sharpe > 1, DD < 25%).
 
-## Gating
-Live execution is **OFF** by default.
-To consume signals for execution:
-1. Set `ENABLE_LIVE=true` in environment.
-2. Create `approvals/ALLOW_LIVE.txt` file.
-3. Ensure Core kill-switches are inactive.
-
-## Process
-1. GitHub Actions runs hourly.
-2. If new data available, strategy re-evaluated.
-3. If signal generated, JSON is updated.
-4. Downstream execution system (if any) reads JSON and executes.
+## Consumption
+To consume `live_signal.json`:
+1. Ensure `ENABLE_LIVE=true` in environment.
+2. Verify `approvals/ALLOW_LIVE.txt` exists.
+3. Read JSON, validate `timestamp_ist` is recent (< 5 mins).
+4. Verify `status` is "OK".
+5. Execute manually or via separate bridge.

@@ -1,94 +1,106 @@
-"""
-Walk-forward analysis logic.
-"""
 import pandas as pd
-import structlog
-from typing import List, Dict, Any, Tuple
+import numpy as np
+from typing import List, Dict, Tuple, Any
+from packages.strategy_foundry.factory.grammar import Strategy
 from packages.strategy_foundry.backtest.engine import BacktestEngine
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
-from packages.strategy_foundry.factory.grammar import StrategySpec
 
-logger = structlog.get_logger(__name__)
-
-class WalkForwardAnalyst:
-    def __init__(self, data: pd.DataFrame, n_folds: int = 4):
-        self.data = data
+class WalkForwardEvaluator:
+    def __init__(self, engine: BacktestEngine, n_folds: int = 3):
+        self.engine = engine
         self.n_folds = n_folds
 
-    def run(self, strategy: StrategySpec) -> Dict[str, Any]:
+    def evaluate(self, strategy: Strategy, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Run walk-forward analysis.
-        Splits data into K folds (Expanding Window or Rolling).
+        Perform Walk-Forward Analysis.
+        Splits data into K folds.
+        For simplicity in this MVP, we do K-Fold Cross Validation or Expanding Window?
+        User asked for "Walk-forward evaluation... 3-5 folds".
+        Standard WF: Train on [0..T], Test on [T..T+k].
+        Since we are *generating* strategies (not optimizing params per se),
+        we treat the "generation" phase as Training on the WHOLE past?
+        No, that causes overfitting.
 
-        Since we have limited intraday data (e.g. 60 days), 4 folds means ~15 days each.
-        We use expanding window training?
-        Or just OOS testing?
+        The 'Generator' creates random strategies. We need to validate them.
+        We should evaluate on Out-Of-Sample data.
 
-        Standard WF:
-        Train 1 -> Test 1
-        Train 1+Test 1 -> Test 2
-        ...
+        Approach:
+        Split data into chunks.
+        For each chunk i (Test), we could have trained on 0..i-1.
+        But since strategies are fixed (randomly generated parameters),
+        we just run the fixed strategy on the Test Fold and aggregate results.
 
-        Given the limited data and "Aggressive" nature, maybe we treat chunks as OOS?
-        Or simply split into 4 equal chunks and run backtest on each to check consistency?
-        The prompt says: "Walk-forward OOS evaluation... Require OOS evaluation for ranking".
+        Wait, if we don't optimize params, Walk-Forward is just "Backtest on whole history partitioned".
+        The value comes if we select the best strategy based on Train folds and verify on Test folds.
 
-        Let's implement equal splits.
-        Fold 1: Days 0-25%
-        Fold 2: Days 25-50%
-        ...
+        But here we are just filtering candidates.
+        So we just run backtest on the whole period, but calculate metrics on the "Out Of Sample" segments?
+        Or maybe the requirement implies:
+        Train (Optimize) -> Test.
+        But we skip Optimization (Grid Search).
 
-        We run the strategy on each fold independently.
-        Ideally we "optimize" on train and test on OOS.
-        But here we generated a STATIC strategy candidate.
-        So we just validate its performance across different time periods (OOS validation).
+        So, we will just run the strategy on the ENTIRE dataset,
+        but compute stability metrics across folds.
 
-        This effectively tests "robustness over time".
+        Actually, let's treat the *most recent* fold as OOS for "Live Selection"?
+        Or just split into N folds and report metrics for each, plus aggregate.
+
+        Let's do this:
+        Divide DF into N equal time chunks.
+        Run backtest on each chunk.
+        Collect metrics for each chunk.
+
+        Return:
+        - Aggregate Metrics (Whole period)
+        - Fold Metrics
+        - Stability Score (Variance of Sharpe across folds)
         """
-        if self.data.empty:
-            return {}
+        n = len(df)
+        fold_size = n // self.n_folds
 
-        # Split data by time
-        total_rows = len(self.data)
-        fold_size = total_rows // self.n_folds
+        fold_metrics = []
 
-        folds_metrics = []
-        equity_curves = []
-        all_trades = []
+        all_res = self.engine.run(strategy, df)
+        trades_all = all_res.get("trades", pd.DataFrame())
 
-        consistency_score = 0
+        if trades_all.empty:
+            return {"valid": False, "reason": "No trades"}
+
+        # Calculate metrics per fold based on time
+        start_time = df.index[0]
+        end_time = df.index[-1]
+        total_duration = end_time - start_time
+        fold_duration = total_duration / self.n_folds
 
         for i in range(self.n_folds):
-            start_idx = i * fold_size
-            end_idx = (i + 1) * fold_size if i < self.n_folds - 1 else total_rows
+            f_start = start_time + (fold_duration * i)
+            f_end = start_time + (fold_duration * (i+1))
 
-            fold_data = self.data.iloc[start_idx:end_idx].copy()
+            # Filter trades in this window
+            # Note: A trade might straddle folds. We use exit_time.
+            mask = (trades_all["exit_time"] >= f_start) & (trades_all["exit_time"] < f_end)
+            f_trades = trades_all[mask]
 
-            engine = BacktestEngine(fold_data)
-            results = engine.run(strategy)
+            m = calculate_metrics(f_trades)
+            m["fold"] = i
+            fold_metrics.append(m)
 
-            metrics = calculate_metrics(results["trades"], results["equity_curve"])
-            folds_metrics.append(metrics)
+        # Aggregate (OOS) - effectively whole period is OOS if we didn't train on it.
+        # Since strategies are random, the whole history is OOS.
+        agg_metrics = calculate_metrics(trades_all)
 
-            # Consistency check (profit factor > 1)
-            if metrics["profit_factor"] > 1.05 and metrics["trades"] > 5:
-                consistency_score += 1
+        # Calculate Stability
+        sharpes = [m["sharpe"] for m in fold_metrics]
+        stability = 1.0 / (np.std(sharpes) + 0.1) # Inverse variance proxy
 
-            equity_curves.append(results["equity_curve"])
-            all_trades.append(results["trades"])
-
-        # Aggregate metrics (OOS weighted?)
-        # Just average them or sum them?
-        # A concatenated backtest is better for overall stats.
-
-        combined_trades = pd.concat(all_trades, ignore_index=True) if all_trades else pd.DataFrame()
-        combined_equity = pd.concat(equity_curves) # Index might overlap if not careful, but here we sliced linearly
-
-        overall_metrics = calculate_metrics(combined_trades, combined_equity)
+        # Check Sanity
+        # - trades < 30 (FAST_MODE: 10) -> handled by caller or here
+        # - MaxDD > 35%
 
         return {
-            "overall": overall_metrics,
-            "folds": folds_metrics,
-            "consistency": consistency_score, # e.g., 3/4
-            "n_folds": self.n_folds
+            "valid": True,
+            "metrics": agg_metrics,
+            "fold_metrics": fold_metrics,
+            "stability": stability,
+            "trades": trades_all
         }

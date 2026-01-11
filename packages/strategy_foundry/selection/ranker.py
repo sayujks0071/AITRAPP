@@ -1,54 +1,55 @@
-"""
-Ranking logic for strategies.
-"""
 from typing import List, Dict, Any
 import pandas as pd
 
-def rank_candidates(candidates: List[Dict[str, Any]]) -> pd.DataFrame:
-    """
-    Rank candidates based on score.
-    candidate dict must contain: id, metrics, wf_metrics, etc.
-    """
-    if not candidates:
-        return pd.DataFrame()
+class Ranker:
+    def rank(self, candidates: List[Dict[str, Any]]) -> pd.DataFrame:
+        """
+        Rank candidates based on composite score.
+        Score = 0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - 0.1*Turnover
+        """
+        rows = []
+        for c in candidates:
+            m = c["result"]["metrics"]
+            stab = c["result"]["stability"]
 
-    rows = []
-    for c in candidates:
-        m = c["metrics"]
-        wf = c["wf_metrics"]
+            # Normalize inputs roughly to 0-1 range or just raw?
+            # User provided weights for raw metrics? Usually we standardize.
+            # But let's apply weights to raw first, assuming they are somewhat comparable.
+            # Sharpe ~ 1-3
+            # Calmar ~ 1-5
+            # CAGR ~ 0.2-0.5
+            # Stability ~ ? (Inverse std dev of sharpe). If std is 0.5, stab is 2.
+            # Turnover ~ ? (Need proxy).
 
-        # Calculate Score
-        # 25% Sharpe, 25% Calmar, 20% CAGR, 15% Stability, 10% Low Turnover, 5% Sanity
+            # Turnover proxy: Average trades per day? Or total trades?
+            # "exposure %, turnover proxy"
+            # Let's use trades count / days as turnover proxy.
+            trades_per_year = m["trades"] / 10.0 # Approx 10y
+            turnover_score = trades_per_year / 252.0 # ~ daily turnover freq
 
-        sharpe_score = min(m["sharpe"] / 2.0, 1.0) # Cap at 2.0
-        calmar_score = min(m["calmar"] / 3.0, 1.0) # Cap at 3.0
-        cagr_score = min(m["cagr"] / 0.5, 1.0) # Cap at 50%
+            score = (0.3 * m["sharpe"]) + \
+                    (0.25 * m["calmar"]) + \
+                    (0.2 * m["cagr"] * 100) + \
+                    (0.15 * stab) - \
+                    (0.1 * turnover_score * 100) # Penalty
 
-        # Stability: 1.0 if 4/4 folds positive, 0.75 if 3/4, etc.
-        stability = wf["consistency"] / wf["n_folds"] if wf["n_folds"] > 0 else 0
+            row = {
+                "id": c["strategy"].id,
+                "score": score,
+                "sharpe": m["sharpe"],
+                "calmar": m["calmar"],
+                "cagr": m["cagr"],
+                "max_dd": m["max_drawdown"],
+                "trades": m["trades"],
+                "stability": stab,
+                "rule_summary": c["strategy"].rule_summary,
+                "strategy_obj": c["strategy"]
+            }
+            rows.append(row)
 
-        # Turnover score: Higher trades = lower score? Or higher profit/trade?
-        # Let's use profit factor as proxy for quality per trade
-        pf_score = min((m["profit_factor"] - 1.0) / 1.0, 1.0) # 2.0 PF = max score
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            df.sort_values("score", ascending=False, inplace=True)
+            df.reset_index(drop=True, inplace=True)
 
-        score = (0.25 * sharpe_score) + \
-                (0.25 * calmar_score) + \
-                (0.20 * cagr_score) + \
-                (0.15 * stability) + \
-                (0.15 * pf_score)
-
-        row = {
-            "id": c["id"],
-            "score": score,
-            "sharpe": m["sharpe"],
-            "calmar": m["calmar"],
-            "cagr": m["cagr"],
-            "max_dd": m["max_dd"],
-            "trades": m["trades"],
-            "consistency": f"{wf['consistency']}/{wf['n_folds']}",
-            "strategy": c["strategy_obj"]
-        }
-        rows.append(row)
-
-    df = pd.DataFrame(rows)
-    return df.sort_values("score", ascending=False)
+        return df

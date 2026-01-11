@@ -1,29 +1,37 @@
 # Strategy Foundry
 
+Self-generating strategy lab for daily index strategies (NIFTY/SENSEX).
+
 ## Overview
-Autonomous intraday strategy research and signal generation lab.
-Generates, backtests, ranks, and promotes trading strategies for NIFTY/SENSEX indices.
-Produces live trading signals as JSON artifacts.
+- **Hybrid Architecture**: Reuses `packages/core` for indicators/market hours but maintains isolated research logic.
+- **Hourly Runs**: Generates new strategies, backtests them, and ranks them.
+- **Champion Model**: Promotes strategies that beat the incumbent on OOS metrics.
+- **Live Signals**: Publishes `live_signal.json` (no execution).
 
-## Usage
+## Directory Structure
+- `data/`: Data loading and caching (Yahoo Finance).
+- `adapters/`: Adapters to Core logic.
+- `factory/`: Strategy grammar and generation.
+- `backtest/`: Vectorized backtest engine.
+- `selection/`: Ranking and promotion logic.
+- `live/`: Signal publishing.
 
-### Run Manually
-```bash
-# Fast mode (fewer candidates, no promotion)
-export FAST_MODE=1
-python packages/strategy_foundry/run_hourly.py
+## How to Run
+1. Install dependencies: `pip install -r requirements.txt` (or min: pandas, numpy, httpx, structlog).
+2. Run: `python packages/strategy_foundry/run_hourly.py`
 
-# Full mode
-export FAST_MODE=0
-python packages/strategy_foundry/run_hourly.py
+## Modes
+- **FAST_MODE**: (Default in PRs) Generates 10 candidates, 2 folds.
+- **PRODUCTION**: (Default in Cron) Generates 50 candidates, 3 folds.
+
+## Signal Output
+Located at `packages/strategy_foundry/results/live_signal.json`.
+Format:
+```json
+{
+  "timestamp_ist": "2023-10-27 10:00:00+05:30",
+  "champion_id": "ab123...",
+  "signal": 1,
+  "status": "OK"
+}
 ```
-
-### Outputs
-Results are stored in `packages/strategy_foundry/results/`:
-- `runs/<timestamp>/`: Individual run artifacts (leaderboards, metrics)
-- `champions/`: Promoted strategy configurations
-- `live_signal.json`: Current live trading signal (if eligible)
-
-## Configuration
-- `configs/foundry.yaml`: Runtime settings (timeframes, folding, etc.)
-- `configs/instrument_map.yaml`: Symbol mappings (Research -> Live)
