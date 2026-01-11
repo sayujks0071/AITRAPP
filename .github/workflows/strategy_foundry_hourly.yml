@@ -21,17 +21,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
-          pip install pandas numpy httpx structlog pydantic pytz
-          # No heavy deps
+          pip install pandas numpy requests pyyaml structlog pytz
 
       - name: Run Strategy Foundry
         run: python packages/strategy_foundry/run_hourly.py
 
-      - name: Archive Results
+      - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v3
         with:

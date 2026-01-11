@@ -2,17 +2,22 @@
 
 ## Assumptions
 - **Timeframe**: Daily (1D).
-- **Execution**: Orders executed at Next Open price.
+- **Execution**: Signals on the Close, trades at the next session Open.
 - **Costs**:
-  - Slippage: 5 bps per side.
-  - Brokerage: Flat 20 INR.
-  - Taxes: 0.03% (STT) turnover.
+  - Slippage: 5 bps per side (conservative buffer).
+  - Brokerage: Zerodha-like flat 20 INR structure + statutory taxes (~0.03% turnover).
+
+## Data
+Daily OHLCV is sourced from Yahoo Finance (`^NSEI`, `^BSESN`). This is sufficient for regime detection, but minor gaps/delays versus broker feeds should be expected.
 
 ## Walk-Forward Evaluation
-- **Method**: K-Fold split.
-- **Training**: None (Random Generation).
-- **Validation**: Strategy run on full history, but performance metrics aggregated across folds to ensure stability.
-- **OOS**: Technically the entire history is OOS for the specific random parameter set (we do not fit parameters).
+- **Method**: Expanding-window walk-forward (4 folds).
+- **Validation**: Strategy metrics aggregated per fold; candidates must be profitable in ≥3 folds to proceed.
+- **Training**: There is no traditional fit—parameters come from random grammar sampling, so each configuration is effectively out-of-sample.
+
+## Intraday Constraints
+- Flatten positions by 15:20 IST; no overnight carry.
+- Optional guardrail: max 1 trade per direction per day.
 
 ## Metrics
 - **Sharpe**: Trade-based approximation.
