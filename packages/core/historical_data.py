@@ -240,7 +240,8 @@ class HistoricalDataLoader:
 
         # Extract columns as numpy arrays
         # Note: dates need to be converted to python datetime/timestamp for compatibility
-        dates = df['Date'].dt.to_pydatetime()
+        # Using list comprehension to avoid FutureWarning from .dt.to_pydatetime()
+        dates = np.array([d.to_pydatetime() for d in df['Date']])
         opens = df['Open'].to_numpy()
         highs = df['High'].to_numpy()
         lows = df['Low'].to_numpy()
@@ -300,7 +301,8 @@ class HistoricalDataLoader:
             return []
 
         # Extract columns
-        dates = df['Date'].dt.to_pydatetime()
+        # Using list comprehension to avoid FutureWarning from .dt.to_pydatetime()
+        dates = np.array([d.to_pydatetime() for d in df['Date']])
         opens = df['Open'].to_numpy()
         highs = df['High'].to_numpy()
         lows = df['Low'].to_numpy()
