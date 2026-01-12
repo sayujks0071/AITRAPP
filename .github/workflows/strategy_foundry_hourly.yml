@@ -6,34 +6,44 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "packages/strategy_foundry/**"
+      - 'packages/strategy_foundry/**'
 
 jobs:
-  foundry-run:
+  research:
     runs-on: ubuntu-latest
     env:
       FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
       PYTHONPATH: .
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy requests pyyaml structlog pytz
+          pip install pandas numpy requests structlog pytest tabulate pytz
+          # minimal install
 
-      - name: Run Strategy Foundry
-        run: python packages/strategy_foundry/run_hourly.py
+      - name: Run Hourly Research
+        run: |
+          python packages/strategy_foundry/run_hourly.py
 
       - name: Upload Artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: foundry-results
+          name: strategy-foundry-results
           path: packages/strategy_foundry/results/
-          retention-days: 7
+
+      - name: Commit Leaderboard
+        if: github.event_name == 'schedule' && env.COMMIT_RESULTS == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add packages/strategy_foundry/results/leaderboard.md
+          git commit -m "Update leaderboard" || exit 0
+          git push

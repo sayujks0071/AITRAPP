@@ -1,29 +1,31 @@
 # Backtesting Methodology
 
 ## Assumptions
+
 - **Timeframe**: Daily (1D).
-- **Execution**: Signals on the Close, trades at the next session Open.
+- **Execution**: Market Order at Next Bar Open.
 - **Costs**:
-  - Slippage: 5 bps per side (conservative buffer).
-  - Brokerage: Zerodha-like flat 20 INR structure + statutory taxes (~0.03% turnover).
+  - Slippage: 5 bps per side.
+  - Commission + Tax: 10 bps per side (conservative estimate).
+- **Data**: Yahoo Finance (Close is Adjusted Close? No, using standard Close).
 
-## Data
-Daily OHLCV is sourced from Yahoo Finance (`^NSEI`, `^BSESN`). This is sufficient for regime detection, but minor gaps/delays versus broker feeds should be expected.
+## Walk-Forward Analysis
 
-## Walk-Forward Evaluation
-- **Method**: Expanding-window walk-forward (4 folds).
-- **Validation**: Strategy metrics aggregated per fold; candidates must be profitable in ≥3 folds to proceed.
-- **Training**: There is no traditional fit—parameters come from random grammar sampling, so each configuration is effectively out-of-sample.
-
-## Intraday Constraints
-- Flatten positions by 15:20 IST; no overnight carry.
-- Optional guardrail: max 1 trade per direction per day.
-
-## Metrics
-- **Sharpe**: Trade-based approximation.
-- **Calmar**: CAGR / MaxDD.
-- **Stability**: Inverse of Sharpe variance across folds.
+To prevent overfitting, we use Walk-Forward Validation:
+1. **Train** on expanding window (e.g., 2 years).
+2. **Test** on subsequent rolling window (e.g., 6 months).
+3. **Metrics** are computed strictly on concatenated Test folds (Out-of-Sample).
 
 ## Ranking
+
 Composite Score:
-`0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - 0.1*Turnover`
+- 30% OOS Sharpe
+- 25% OOS Calmar
+- 20% OOS CAGR
+- (Penalties for turnover or instability may apply)
+
+## Sanity Checks
+
+Candidates are rejected if:
+- < 10 Trades (Fast Mode) or < 30 Trades (Prod).
+- Max Drawdown > 35%.
