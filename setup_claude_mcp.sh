@@ -62,6 +62,18 @@ try:
     
     if choice == "1":
         # Local server
+        api_key = os.getenv("KITE_API_KEY")
+        if not api_key:
+            api_key = input("Enter KITE_API_KEY: ").strip()
+
+        api_secret = os.getenv("KITE_API_SECRET")
+        if not api_secret:
+            api_secret = input("Enter KITE_API_SECRET: ").strip()
+
+        if not api_key or not api_secret:
+            print("❌ Error: API Key and Secret are required.")
+            sys.exit(1)
+
         config['mcpServers']['kite'] = {
             "command": "npx",
             "args": [
@@ -70,8 +82,8 @@ try:
                 "--allow-http"
             ],
             "env": {
-                "KITE_API_KEY": "nhe2vo0afks02ojs",
-                "KITE_API_SECRET": "cs82nkkdvin37nrydnyou6cwn2b8zojl"
+                "KITE_API_KEY": api_key,
+                "KITE_API_SECRET": api_secret
             }
         }
         print("✅ Configured for LOCAL server")
@@ -119,4 +131,3 @@ else
     echo "❌ Setup failed. Config backup saved to: $BACKUP_FILE"
     exit 1
 fi
-
