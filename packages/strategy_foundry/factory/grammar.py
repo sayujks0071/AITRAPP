@@ -1,161 +1,121 @@
-import numpy as np
-import pandas as pd
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, List
+import random
 import hashlib
 import json
-from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicatorCalculator
 
-class StrategyBlock:
-    def __init__(self, name: str, params: Dict[str, Any]):
+class StrategyConfig:
+    def __init__(self, name: str, blocks: List[Dict[str, Any]], params: Dict[str, Any]):
         self.name = name
+        self.blocks = blocks
         self.params = params
 
-    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        raise NotImplementedError
-
-    def __repr__(self):
-        return f"{self.name}({self.params})"
-
-    def to_dict(self):
-        return {"type": self.name, "params": self.params}
-
-class EmaCrossBlock(StrategyBlock):
-    def __init__(self, fast_period: int, slow_period: int):
-        super().__init__("EmaCross", {"fast": fast_period, "slow": slow_period})
-
-    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        # Pre-calculated in indicators dict or calculated here?
-        # Better to calculate here or use cache.
-        # We will assume 'indicators' has raw data or calculator
-        calc = VectorizedIndicatorCalculator()
-        close = df["close"]
-        ema_fast = calc.ema(close, self.params["fast"])
-        ema_slow = calc.ema(close, self.params["slow"])
-
-        # Signal: 1 if Fast > Slow (uptrend), -1 if Fast < Slow
-        # We want to catch the crossover.
-        # For trend following: hold 1 while Fast > Slow.
-        signal = pd.Series(0, index=df.index)
-        signal[ema_fast > ema_slow] = 1
-        signal[ema_fast < ema_slow] = -1
-        return signal
-
-class RsiFilterBlock(StrategyBlock):
-    def __init__(self, period: int, threshold: float, mode: str):
-        # mode: "long_if_above" (trend), "long_if_below" (mean rev)
-        super().__init__("RsiFilter", {"period": period, "threshold": threshold, "mode": mode})
-
-    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        calc = VectorizedIndicatorCalculator()
-        rsi = calc.rsi(df["close"].values, self.params["period"])
-        rsi_s = pd.Series(rsi, index=df.index)
-
-        signal = pd.Series(0, index=df.index)
-        if self.params["mode"] == "long_if_above":
-            signal[rsi_s > self.params["threshold"]] = 1
-        elif self.params["mode"] == "long_if_below":
-            signal[rsi_s < self.params["threshold"]] = 1
-
-        return signal
-
-class SupertrendBlock(StrategyBlock):
-    def __init__(self, period: int, multiplier: float):
-        super().__init__("Supertrend", {"period": period, "multiplier": multiplier})
-
-    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        calc = VectorizedIndicatorCalculator()
-        st, direction = calc.supertrend(
-            df["high"].values, df["low"].values, df["close"].values,
-            self.params["period"], self.params["multiplier"]
-        )
-        # direction is 1 (up) or -1 (down)
-        return pd.Series(direction, index=df.index)
-
-class DonchianBlock(StrategyBlock):
-    def __init__(self, period: int):
-        super().__init__("Donchian", {"period": period})
-
-    def compute_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        calc = VectorizedIndicatorCalculator()
-        upper, lower = calc.donchian(df["high"], df["low"], self.params["period"])
-        close = df["close"]
-
-        signal = pd.Series(0, index=df.index)
-        signal[close > upper.shift(1)] = 1  # Breakout up
-        signal[close < lower.shift(1)] = -1 # Breakout down
-
-        # Propagate signal? Donchian is usually breakout entry.
-        # For simplicty, this block returns "State" 1 if price > prev_upper
-        # Real Donchian strategy holds until touches lower.
-        # Here we return instantaneous state.
-        return signal
-
-class Strategy:
-    def __init__(self, blocks: List[StrategyBlock], stop_loss_atr: float, take_profit_atr: float):
-        self.blocks = blocks
-        self.stop_loss_atr = stop_loss_atr
-        self.take_profit_atr = take_profit_atr
-        self.id = self._generate_id()
-
-    def _generate_id(self):
-        desc = json.dumps(self.to_dict(), sort_keys=True)
-        return hashlib.md5(desc.encode()).hexdigest()[:12]
+    def get_id(self) -> str:
+        # Stable ID based on blocks and params
+        s = json.dumps({"blocks": self.blocks, "params": self.params}, sort_keys=True)
+        return hashlib.md5(s.encode()).hexdigest()
 
     def to_dict(self):
         return {
-            "blocks": [b.to_dict() for b in self.blocks],
-            "risk": {
-                "stop_loss_atr": self.stop_loss_atr,
-                "take_profit_atr": self.take_profit_atr
-            }
+            "id": self.get_id(),
+            "name": self.name,
+            "blocks": self.blocks,
+            "params": self.params,
+            "rule_summary": self.describe()
         }
 
-    @property
-    def rule_summary(self) -> str:
-        rules = " AND ".join([repr(b) for b in self.blocks])
-        return f"Signal({rules}) | Risk(SL={self.stop_loss_atr}ATR, TP={self.take_profit_atr}ATR)"
+    def describe(self) -> str:
+        # Human readable summary
+        desc = []
+        for b in self.blocks:
+            desc.append(f"{b['type']}({b.get('subtype', '')})")
+        return " + ".join(desc)
 
-    def generate_positions(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Generate target positions (-1, 0, 1).
-        Logic: All blocks must agree on direction (or be 0).
-        For Long Only: All blocks must be >= 0, and at least one is 1.
-        """
-        if df.empty: return pd.Series()
+class Grammar:
+    # Trend: EMA/SMA cross, ADX filter, Supertrend, Donchian breakout
+    # Mean reversion: RSI reversion, Bollinger mean reversion
+    # Volatility/risk: ATR stop, time stop, trailing stop, max bars in trade
+    # Filters: regime filter, volatility filter, session filter
 
-        combined_signal = pd.Series(0, index=df.index)
+    TREND_BLOCKS = [
+        {"type": "trend", "subtype": "ema_cross", "param_keys": ["ema_fast", "ema_slow"]},
+        {"type": "trend", "subtype": "supertrend", "param_keys": ["st_period", "st_multiplier"]},
+        {"type": "trend", "subtype": "donchian", "param_keys": ["donchian_period"]},
+    ]
 
-        # We need to accumulate consensus.
-        # Simple logic: Voting.
-        # Or Strict: All must be 1 to go Long.
+    MEAN_REV_BLOCKS = [
+        {"type": "mean_rev", "subtype": "rsi", "param_keys": ["rsi_period", "rsi_oversold", "rsi_overbought"]},
+        {"type": "mean_rev", "subtype": "bollinger", "param_keys": ["bb_period", "bb_std"]},
+    ]
 
-        # Let's go with "Intersection" (AND) for entry.
-        # If any block says -1, we don't go long.
-        # If all blocks >= 0 and sum > 0 -> Long.
+    EXIT_BLOCKS = [
+        {"type": "exit", "subtype": "atr_stop", "param_keys": ["atr_period", "stop_atr_mult"]},
+        {"type": "exit", "subtype": "time_stop", "param_keys": ["max_bars"]},
+        {"type": "exit", "subtype": "trailing_stop", "param_keys": ["trail_percent"]},
+    ]
 
-        signals = []
-        for block in self.blocks:
-            signals.append(block.compute_signal(df, {}))
+    FILTERS = [
+        {"type": "filter", "subtype": "adx", "param_keys": ["adx_period", "adx_threshold"]},
+        {"type": "filter", "subtype": "long_only", "param_keys": []} # Global filter often
+    ]
 
-        if not signals:
-            return combined_signal
+    @staticmethod
+    def get_random_strategy() -> StrategyConfig:
+        # Compose 2-4 blocks
+        # Usually 1 Entry (Trend or MeanRev) + 1 Exit + Optional Filter
 
-        # Stack signals
-        sig_df = pd.concat(signals, axis=1)
+        blocks = []
+        params = {}
 
-        # Long Logic
-        # All signals must be >= 0 (no explicit sell signals)
-        # At least one signal must be 1 (explicit buy signal)
-        long_condition = (sig_df >= 0).all(axis=1) & (sig_df.sum(axis=1) >= 1)
+        # Decide Entry Type
+        entry_type = random.choice(["trend", "mean_rev"])
 
-        # Short Logic (Optional, disabled by default in foundry usually, but here we support signals)
-        short_condition = (sig_df <= 0).all(axis=1) & (sig_df.sum(axis=1) <= -1)
+        if entry_type == "trend":
+            b = random.choice(Grammar.TREND_BLOCKS)
+            blocks.append(b)
+            # Add filter sometimes
+            if random.random() < 0.3:
+                f = random.choice(Grammar.FILTERS)
+                blocks.append(f)
+        else:
+            b = random.choice(Grammar.MEAN_REV_BLOCKS)
+            blocks.append(b)
 
-        combined_signal[long_condition] = 1
-        combined_signal[short_condition] = -1
+        # Always add exit
+        e = random.choice(Grammar.EXIT_BLOCKS)
+        blocks.append(e)
 
-        return combined_signal
+        # Generate Params
+        for b in blocks:
+            for k in b["param_keys"]:
+                params[k] = Grammar.sample_param(k)
 
-    def get_atr_array(self, df: pd.DataFrame):
-        calc = VectorizedIndicatorCalculator()
-        return calc.atr(df["high"].values, df["low"].values, df["close"].values, period=14)
+        # Name
+        name = f"Auto_{entry_type}_{len(blocks)}blocks"
+
+        return StrategyConfig(name, blocks, params)
+
+    @staticmethod
+    def sample_param(key: str):
+        # Define ranges
+        ranges = {
+            "ema_fast": [9, 10, 12, 15, 20],
+            "ema_slow": [20, 30, 50, 100, 200],
+            "st_period": [7, 10, 14],
+            "st_multiplier": [1.5, 2.0, 3.0, 4.0],
+            "donchian_period": [10, 20, 40, 55],
+            "rsi_period": [7, 14, 21],
+            "rsi_oversold": [20, 25, 30, 35],
+            "rsi_overbought": [65, 70, 75, 80],
+            "bb_period": [15, 20, 25],
+            "bb_std": [1.5, 2.0, 2.5],
+            "atr_period": [10, 14, 20],
+            "stop_atr_mult": [1.0, 1.5, 2.0, 3.0],
+            "max_bars": [3, 5, 10, 20],
+            "trail_percent": [0.01, 0.02, 0.03, 0.05],
+            "adx_period": [14],
+            "adx_threshold": [20, 25, 30]
+        }
+
+        if key in ranges:
+            return random.choice(ranges[key])
+        return 0
