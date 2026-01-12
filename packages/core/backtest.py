@@ -171,6 +171,31 @@ class BacktestEngine:
                 # Sort bars by timestamp to enable sequential processing
                 bars.sort(key=lambda b: b.timestamp)
 
+                # Pre-calculate instrument and token to avoid overhead in inner loop
+                from packages.core.models import Instrument, InstrumentType
+                inst_type = InstrumentType.CE if option_type == 'CE' else InstrumentType.PE
+
+                # Stable deterministic token generation
+                token_str = f"{symbol}_{strike}_{option_type}"
+                # Use MD5 to get consistent hash across runs/platforms
+                token_hash = hashlib.md5(token_str.encode()).hexdigest()
+                token = int(token_hash[:8], 16)  # Take first 8 chars (32 bits)
+
+                # Ensure bar tokens match instrument token (O(N) operation done once)
+                for b in bars:
+                    b.token = token
+
+                instrument = Instrument(
+                    token=token,
+                    symbol=symbol,
+                    tradingsymbol=f"{symbol}{int(strike)}{option_type}",
+                    exchange="NFO",
+                    instrument_type=inst_type,
+                    strike=strike,
+                    lot_size=50 if symbol == "NIFTY" else 25,
+                    tick_size=0.05
+                )
+
                 # Generate signals
                 for strategy in strategies:
                     if not strategy.enabled:
@@ -198,9 +223,7 @@ class BacktestEngine:
 
                         signals = self._generate_signals(
                             strategy,
-                            symbol,
-                            strike,
-                            option_type,
+                            instrument,
                             bar.timestamp,
                             history_bars,
                             current_tick,
@@ -223,44 +246,13 @@ class BacktestEngine:
     def _generate_signals(
         self,
         strategy: Strategy,
-        symbol: str,
-        strike: float,
-        option_type: str,
+        instrument: 'Instrument',
         date: datetime,
         bars: List,
         tick: Optional,
         underlying_value: float
     ) -> List[Signal]:
         """Generate signals from a strategy"""
-        # Create mock instrument
-        from packages.core.models import Instrument, InstrumentType
-        
-        inst_type = InstrumentType.CE if option_type == 'CE' else InstrumentType.PE
-        
-        # Stable deterministic token generation
-        token_str = f"{symbol}_{strike}_{option_type}"
-        # Use MD5 to get consistent hash across runs/platforms
-        token_hash = hashlib.md5(token_str.encode()).hexdigest()
-        token = int(token_hash[:8], 16)  # Take first 8 chars (32 bits)
-
-        # Ensure bar tokens match instrument token
-        for b in bars:
-            b.token = token
-
-        if tick:
-            tick.token = token
-
-        instrument = Instrument(
-            token=token,
-            symbol=symbol,
-            tradingsymbol=f"{symbol}{int(strike)}{option_type}",
-            exchange="NFO",
-            instrument_type=inst_type,
-            strike=strike,
-            lot_size=50 if symbol == "NIFTY" else 25,
-            tick_size=0.05
-        )
-        
         # Create strategy context
         context = StrategyContext(
             timestamp=date,
