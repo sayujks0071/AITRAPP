@@ -47,4 +47,5 @@ async def kite_callback(request: Request):
         """)
     except Exception as e:
         logger.error(f"Error in kite callback: {e}")
-        return HTMLResponse(content=f"<h1>Auth Error</h1><p>{str(e)}</p>", status_code=500)
+        # SECURITY: Do not leak exception details to the user
+        return HTMLResponse(content="<h1>Auth Error</h1><p>Authentication failed. Please check application logs for details.</p>", status_code=500)
