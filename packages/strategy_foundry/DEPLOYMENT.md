@@ -1,26 +1,28 @@
-# Deployment Guide
+# Deployment & Live Trading
 
-## Philosophy
-- **Paper First**: Foundry only writes JSON artifacts; order execution stays off-box.
-- **Safety Rails**: Market-hour guard plus manual approvals prevent accidental live flips.
-- **Meritocracy**: Only champions beating gating thresholds (Sharpe ≥ 1.0, MaxDD ≤ 25%) may publish actionable signals.
+## Default State
+**Live Trading is OFF by default.**
+The system only publishes signals to `results/live_signal.json`.
 
-## Live Signal Consumption
-The runner writes `packages/strategy_foundry/results/live_signal.json`. To consume it:
-1. Set `ENABLE_LIVE=true` and ensure `approvals/ALLOW_LIVE.txt` exists. Without both, `run_hourly.py` will skip publishing.
-2. Read the JSON, verify `status == "OK"` and `timestamp_ist` is fresh (<5 minutes).
-3. Map the `instrument` to your execution proxy (e.g., `NIFTY` → broker-specific symbol) in the downstream bridge.
-4. Execute manually or via a separate, audited bridge that talks to `packages.core`.
+## Enabling Live Execution (Bridge)
+To enable the execution bridge (if implemented in Core), you must:
+1. Set `ENABLE_LIVE=true` in environment variables.
+2. Create `approvals/ALLOW_LIVE.txt` in the repository root.
 
-## Gating & Failure Modes
-- **Market Closed** → status `SKIPPED`, reason `Market Closed`.
-- **No Champion / Not Eligible** → status `SKIPPED`, explicit reason.
-- **Champion Health** → requires Sharpe ≥ 1.0 and Max Drawdown ≤ 25% (configurable in code).
-- **Approvals Disabled** → status `SKIPPED`, reason `Live Disabled`.
+## Signal Consumption
+External systems or the Core execution engine should poll `results/live_signal.json`.
 
-Downstream systems should treat any non-`OK` status as non-tradable.
+Schema:
+```json
+{
+  "timestamp_ist": "2023-10-27T10:00:00+05:30",
+  "champion_id": "md5_hash",
+  "signal": 1, // 1: Long, 0: Flat, -1: Short
+  "status": "OK"
+}
+```
 
-## Operational Notes
-- Signals are generated off the prior completed daily bar to avoid repaint.
-- Artifacts live under `packages/strategy_foundry/results/` so runners/cron can archive them easily.
-- Keep `approvals/ALLOW_LIVE.txt` under change-control; deleting the file is the fastest kill switch.
+## Safety
+- Signals are only generated during market hours.
+- Signals are skipped if no champion meets the strict promotion criteria.
+- Hard close at 15:25 IST is enforced.

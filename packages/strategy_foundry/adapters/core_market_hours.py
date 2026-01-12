@@ -1,12 +1,18 @@
-from packages.core.market_hours import MarketHoursGuard, MARKET_OPEN, MARKET_CLOSE, IST
-from datetime import datetime
+from packages.core.market_hours import MarketHoursGuard, MARKET_OPEN, MARKET_CLOSE, HARD_CLOSE
+import pytz
+
+IST = pytz.timezone("Asia/Kolkata")
 
 class MarketHoursAdapter:
     def __init__(self):
         self.guard = MarketHoursGuard()
 
-    def is_market_open(self, dt: datetime = None) -> bool:
-        return self.guard.is_market_open(dt)
+    def is_market_open(self):
+        return self.guard.is_market_open()
 
-    def get_timezone(self):
-        return IST
+    def get_market_times(self):
+        return {
+            "open": MARKET_OPEN,
+            "close": MARKET_CLOSE,
+            "hard_close": HARD_CLOSE
+        }

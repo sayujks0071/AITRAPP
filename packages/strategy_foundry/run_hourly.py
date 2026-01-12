@@ -1,211 +1,113 @@
 import os
 import sys
+import yaml
 import structlog
 import pandas as pd
-from datetime import datetime, timedelta
 from pathlib import Path
+from datetime import datetime
 
-# Add repo root to path (needed if running as script from root)
-# But clean way is running as module: python -m packages.strategy_foundry.run_hourly
-if __name__ == "__main__" and __package__ is None:
-    sys.path.append(str(Path(__file__).parent.parent.parent))
-
-from packages.strategy_foundry.data.loader import DataLoader
 from packages.strategy_foundry.factory.generator import StrategyGenerator
-from packages.strategy_foundry.factory.grammar import Strategy, StrategyBlock, EmaCrossBlock, RsiFilterBlock, SupertrendBlock, DonchianBlock
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.adapters.core_costs import CostModel, RiskConfig
-from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
-from packages.strategy_foundry.backtest.sanity import check_sanity
+from packages.strategy_foundry.backtest.walkforward import WalkForward
 from packages.strategy_foundry.selection.ranker import Ranker
-from packages.strategy_foundry.selection.champion_store import ChampionStore
 from packages.strategy_foundry.selection.promote import Promoter
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.adapters.core_costs import get_default_costs
 from packages.strategy_foundry.live.signal_publisher import SignalPublisher
-from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
 
 logger = structlog.get_logger(__name__)
 
-def reconstruct_strategy(data):
-    """Reconstruct Strategy object from dict."""
-    blocks = []
-    for b_data in data["blocks"]:
-        t = b_data["type"]
-        p = b_data["params"]
-        if t == "EmaCross":
-            blocks.append(EmaCrossBlock(p["fast"], p["slow"]))
-        elif t == "RsiFilter":
-            blocks.append(RsiFilterBlock(p["period"], p["threshold"], p["mode"]))
-        elif t == "Supertrend":
-            blocks.append(SupertrendBlock(p["period"], p["multiplier"]))
-        elif t == "Donchian":
-            blocks.append(DonchianBlock(p["period"]))
+# Config Paths
+BASE_DIR = Path(__file__).parent
+CONFIG_PATH = BASE_DIR / "configs/foundry.yaml"
+RESULTS_DIR = BASE_DIR / "results"
 
-    risk = data["risk"]
-    s = Strategy(blocks, risk["stop_loss_atr"], risk["take_profit_atr"])
-    return s
+def load_config():
+    with open(CONFIG_PATH) as f:
+        return yaml.safe_load(f)
 
-def main():
-    logger.info("Starting StrategyFoundry hourly run")
+def run():
+    logger.info("Starting Strategy Foundry Hourly Run")
+    config = load_config()
 
-    # 1. Config
-    FAST_MODE = os.getenv("FAST_MODE", "0") == "1" or os.getenv("CI") == "true"
-    SYMBOLS = ["NIFTY", "SENSEX"]
+    # Mode Detection
+    fast_mode = os.getenv("FAST_MODE", "0") == "1"
 
-    n_candidates = 10 if FAST_MODE else 50
-    n_folds = 2 if FAST_MODE else 3
+    candidates_count = config["defaults"]["candidates_fast_mode"] if fast_mode else config["defaults"]["candidates_per_run"]
+    folds = config["defaults"]["folds_fast"] if fast_mode else config["defaults"]["folds"]
 
+    # 1. Data Loading
     loader = DataLoader()
-    market = MarketHoursAdapter()
-    store = ChampionStore()
-    publisher = SignalPublisher()
+    instruments = ["NIFTY"] # TODO: Iterate SENSEX too
+    timeframes = config["defaults"]["timeframes"] # ["5m", "15m"]
 
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(f"packages/strategy_foundry/results/runs/{run_ts}")
+    run_ts = int(datetime.now().timestamp())
+    run_dir = RESULTS_DIR / "runs" / str(run_ts)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    for symbol in SYMBOLS:
-        logger.info(f"Processing {symbol}")
+    generator = StrategyGenerator()
+    candidates = generator.generate_candidates(n=candidates_count)
 
-        # 2. Load Data (force download if needed handled by loader)
+    # Save candidates
+    with open(run_dir / "candidates.json", "w") as f:
+        f.write(pd.Series([c.to_json() for c in candidates]).to_json()) # Simple list dump
+
+    ranker = Ranker(config)
+    promoter = Promoter(config)
+
+    leaderboards = {}
+
+    for tf in timeframes:
+        logger.info(f"Processing {tf}")
+        # Fetch Data
         try:
-            df = loader.load_data(symbol)
+            df = loader.fetch_data("NIFTY", tf, lookback_days=60 if tf == "5m" else 120)
         except Exception as e:
-            logger.error(f"Failed to load data for {symbol}", error=str(e))
+            logger.error(f"Data fetch failed for {tf}", error=str(e))
             continue
 
-        # 3. Generate Candidates
-        gen = StrategyGenerator()
-        candidates = gen.generate_batch(n_candidates)
+        costs = get_default_costs()
+        engine = BacktestEngine(df, costs)
+        wf = WalkForward(df, engine, folds=folds)
 
-        # 4. Backtest & Evaluate
-        cost_model = CostModel(RiskConfig())
-        engine = BacktestEngine(cost_model)
-        evaluator = WalkForwardEvaluator(engine, n_folds=n_folds)
-
-        passed_candidates = []
-
-        for strat in candidates:
-            # Evaluate
-            res = evaluator.evaluate(strat, df)
-
-            # Sanity Check
-            min_pos_folds = 1 if FAST_MODE else 2
-            min_trades = 10 if FAST_MODE else 30
-
-            if check_sanity(res, min_trades=min_trades, min_positive_folds=min_pos_folds):
-                passed_candidates.append({
-                    "strategy": strat,
-                    "result": res
+        results = []
+        for cand in candidates:
+            # Backtest & Walkforward
+            res = wf.run(cand)
+            if res["status"] == "ok":
+                results.append({
+                    "candidate": cand,
+                    "metrics": res,
+                    "folds": res["folds"]
                 })
 
-        # 5. Rank
-        ranker = Ranker()
-        ranking_df = ranker.rank(passed_candidates)
+        # Rank
+        ranked_df = ranker.rank(results, tf)
+        if not ranked_df.empty:
+            ranked_df.to_csv(run_dir / f"leaderboard_{tf}.csv")
+            leaderboards[tf] = ranked_df
 
-        if not ranking_df.empty:
-            ranking_df.drop(columns=["strategy_obj"], inplace=True)
-            ranking_df.to_csv(run_dir / f"ranking_{symbol}.csv", index=False)
+            # Promote Champion (Top 1)
+            # Only in FULL mode usually, but code allows fast mode too if needed.
+            # But prompt says "DO NOT promote champions in FAST_MODE".
+            if not fast_mode and len(ranked_df) > 0:
+                top = ranked_df.iloc[0]
+                promoter.promote(top, tf)
 
-            # 6. Champion Selection
-            top_id = ranking_df.iloc[0]["id"]
-            challenger = next(c for c in passed_candidates if c["strategy"].id == top_id)
+    # Live Signal Publish
+    # Only if NOT fast mode? Or always?
+    # Usually we want live signals to be generated by the periodic run.
+    # But if fast_mode is on (PR), we shouldn't publish live signals to the artifact that ops uses.
+    # But for testing, we might want to see if it works.
+    # The requirement says "Ship as a PR... publish live signal JSON during market hours".
+    # I will run it, but maybe mark status as TEST if fast_mode.
 
-            # Compare with Incumbent
-            incumbent_data = store.load_current_champion(symbol)
-            promoter = Promoter()
+    if not fast_mode:
+        SignalPublisher().run()
+    else:
+        logger.info("Fast Mode: Skipping Live Signal Publish")
 
-            promote = False
-            if incumbent_data:
-                incumbent_score = incumbent_data["score"]
-                incumbent_metrics = incumbent_data["metrics"]
-                if not FAST_MODE:
-                     if promoter.should_promote(ranking_df.iloc[0]["score"], challenger["result"]["metrics"],
-                                               incumbent_score, incumbent_metrics):
-                         promote = True
-            else:
-                promote = True
-
-            if promote and not FAST_MODE:
-                store.save_champion(symbol, challenger["strategy"].to_dict(),
-                                    float(ranking_df.iloc[0]["score"]),
-                                    challenger["result"]["metrics"])
-                logger.info("New Champion Promoted!", symbol=symbol, id=top_id)
-
-        # 7. Live Signal Logic
-        champ_data = store.load_current_champion(symbol)
-        if not champ_data:
-            publisher.publish(symbol, 0, None, status="SKIPPED", reason="No Champion")
-            continue
-
-        champ_strat = reconstruct_strategy(champ_data["strategy"])
-
-        is_open = market.is_market_open()
-
-        # Live Eligibility Gates
-        metrics = champ_data["metrics"]
-        eligible = metrics["sharpe"] >= 1.0 and metrics["max_drawdown"] <= 0.25
-
-        if is_open and eligible:
-            # We want the signal for TODAY (to position for tomorrow) OR signal from YESTERDAY (to position for today)?
-            # The strategy logic is: Calculate on History, Position for NEXT OPEN.
-            # If we run this during trading hours of Day T, we have history up to T-1 (Yesterday).
-            # The DF might contain T (Today) as incomplete bar if loaded from live source,
-            # BUT our loader (Yahoo) might return Yesterday as last row OR Today as incomplete.
-            # We need to check the timestamp of the last row.
-
-            last_dt = df.index[-1]
-            now_dt = pd.Timestamp.now(tz=market.get_timezone())
-
-            # If last row is today, it's incomplete. We should not use it for "completed bar" signal logic
-            # unless the strategy is intended to run on partial bars (risky, repainting).
-            # Usually daily strategies run on closed bars.
-            # So we take signal generated up to T-1.
-            # That signal determines position for T.
-            # So if we are in T, we want the signal from T-1.
-
-            # However, if DF has T (incomplete), `generate_positions` will output a signal for T based on T-1..T data.
-            # We want the signal at index T-1 (which used data up to T-1).
-            # Wait, `generate_positions` returns `combined_signal` series.
-            # `combined_signal[i]` is based on indicators at `i`.
-            # And `BacktestEngine` executes at `Next Open` (i+1).
-            # So Signal[i] -> Position[i+1].
-            # If we are at Day T, we want Position[T].
-            # Position[T] is determined by Signal[T-1].
-
-            # So we need Signal from the last COMPLETED bar.
-
-            target_date = now_dt.date()
-            last_bar_date = last_dt.date()
-
-            use_idx = -1
-            if last_bar_date == target_date:
-                # Last bar is today (incomplete).
-                # Signal[T] (today) is forming.
-                # Signal[T-1] (yesterday) is fixed.
-                # We want Position[T]. Position[T] comes from Signal[T-1].
-                # So we look at `iloc[-2]`.
-                # BUT, wait. `generate_positions` returns the signal calculated AT `date`.
-                # If we want to trade TODAY, we need the signal generated YESTERDAY.
-                use_idx = -2
-            else:
-                # Last bar is yesterday (or older).
-                # We want Position[T] (Today).
-                # Signal[T-1] (Yesterday) is at `iloc[-1]`.
-                use_idx = -1
-
-            positions = champ_strat.generate_positions(df)
-
-            if abs(use_idx) <= len(positions):
-                last_signal = positions.iloc[use_idx]
-                publisher.publish(symbol, int(last_signal), champ_strat, status="OK")
-            else:
-                publisher.publish(symbol, 0, champ_strat, status="SKIPPED", reason="Insufficient Data")
-
-        else:
-            reason = "Market Closed" if not is_open else "Champion Not Eligible"
-            publisher.publish(symbol, 0, champ_strat, status="SKIPPED", reason=reason)
-
-    logger.info("Run completed", dir=str(run_dir))
+    logger.info("Foundry Run Complete", run_id=run_ts)
 
 if __name__ == "__main__":
-    main()
+    run()

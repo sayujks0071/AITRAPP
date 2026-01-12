@@ -1,41 +1,33 @@
 # Strategy Foundry
 
-An autonomous research lab that generates, backtests, and ranks daily strategies for NIFTY/SENSEX, publishing paper-only signals once strict gates pass.
+Aggressive Intraday StrategyFoundry that self-generates strategies, backtests them on 15m + 5m (primary) and 1D (sanity), ranks them with strong anti-overfit gates, and publishes a live signal JSON during market hours.
 
-## Highlights
-- **Hourly pipeline** re-downloads Yahoo Finance OHLCV, generates random strategies via a grammar of Trend / Mean Reversion / Volatility blocks, and runs walk-forward backtests.
-- **Hybrid engine** reuses `packages/core` adapters for indicators, costs, and market hours while keeping research logic isolated inside `packages/strategy_foundry`.
-- **Champion system** persists the incumbent, compares with fresh challengers, and only promotes when Sharpe / drawdown thresholds are beaten.
-- **Live artifacts** land in `packages/strategy_foundry/results/live_signal.json` (no auto-execution).
+## Directory Structure
 
-## Layout
-- `data/` – cached Yahoo loader with staleness checks.
-- `factory/` – grammar blocks (`EmaCross`, `RsiFilter`, `Supertrend`, `Donchian`) + generator.
-- `backtest/` – vectorized engine, metrics, sanity filters, walk-forward evaluator.
-- `selection/` – ranking + promotion scaffolding.
-- `live/` – signal publisher and market-hours guard.
+- `configs/`: Configuration files (`foundry.yaml`, `instrument_map.yaml`)
+- `data/`: Data loading and caching
+- `adapters/`: Adapters to Core components
+- `factory/`: Strategy generation grammar
+- `backtest/`: Vectorized backtest engine
+- `selection/`: Ranking and promotion logic
+- `live/`: Signal publishing
+- `results/`: Output artifacts
 
-## Running
+## Usage
+
+Run hourly:
 ```bash
-# Standard run (full search)
-python packages/strategy_foundry/run_hourly.py
-
-# Fast mode for CI / PRs
-FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+python -m packages.strategy_foundry.run_hourly
 ```
 
-Dependencies are lightweight: `pip install pandas numpy requests structlog pytz`.
+## Configuration
 
-## Signal Schema
-`results/live_signal.json` (example)
-```json
-{
-  "timestamp_ist": "2026-01-11T10:00:00+05:30",
-  "champion_id": "ab123...",
-  "instrument": "NIFTY",
-  "signal": 1,
-  "status": "OK",
-  "reason": "OK"
-}
-```
-Signals only publish when markets are open, a champion exists, and gating rules (Sharpe ≥ 1.0, MaxDD ≤ 25%) hold.
+Edit `configs/foundry.yaml` to adjust:
+- Risk parameters (slippage, costs)
+- Ranking weights
+- Candidate generation counts
+
+## Live Signals
+
+Generated at `results/live_signal.json`.
+Only published if Market is Open and a valid Champion exists.

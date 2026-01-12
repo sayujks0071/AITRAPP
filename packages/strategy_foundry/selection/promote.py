@@ -1,24 +1,95 @@
-from typing import Dict, Any
+import json
+from pathlib import Path
+from typing import Dict, Optional
+import structlog
+import pandas as pd
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
+
+logger = structlog.get_logger(__name__)
+
+RESULTS_DIR = Path(__file__).parent.parent / "results"
+CHAMPIONS_DIR = RESULTS_DIR / "champions"
 
 class Promoter:
-    def should_promote(self, challenger_score: float, challenger_metrics: Dict[str, Any],
-                       incumbent_score: float, incumbent_metrics: Dict[str, Any]) -> bool:
+    def __init__(self, config: Dict):
+        self.config = config
+        CHAMPIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+    def load_champion(self, timeframe: str) -> Optional[Dict]:
+        path = CHAMPIONS_DIR / f"current_{timeframe}.json"
+        if path.exists():
+            try:
+                with open(path) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return None
+
+    def promote(self, candidate_row: pd.Series, timeframe: str) -> bool:
         """
-        Promotion rule:
-        - New score >= Current score * 1.10 (10% improvement)
-        - OR Lower MaxDD materially (e.g. 20% relative reduction) AND score >= current score
+        Check if candidate should be promoted to champion.
         """
-        if incumbent_score is None:
-            return True
+        current_champ = self.load_champion(timeframe)
 
-        if challenger_score >= incumbent_score * 1.10:
-            return True
+        new_score = candidate_row["score"]
+        new_sharpe = candidate_row["sharpe"]
+        new_dd = candidate_row["max_dd"]
 
-        # Check DD improvement
-        curr_dd = incumbent_metrics.get("max_drawdown", 1.0)
-        new_dd = challenger_metrics.get("max_drawdown", 1.0)
+        # Promotion Logic
+        # New must beat current blended_score by >= 10% OR reduce MaxDD by >= 5% absolute
 
-        if new_dd < curr_dd * 0.8 and challenger_score >= incumbent_score:
+        should_promote = False
+
+        if current_champ is None:
+            # First champion!
+            # Must meet min standards
+            min_sharpe = self.config["ranking"]["promote_sharpe_min"]
+            max_dd = self.config["ranking"]["promote_dd_max"]
+
+            if new_sharpe >= min_sharpe and new_dd <= max_dd:
+                should_promote = True
+        else:
+            curr_score = current_champ["score"]
+            curr_dd = current_champ["metrics"]["max_dd_pct"]
+
+            score_impr = (new_score - curr_score) / curr_score if curr_score > 0 else 0.11
+            dd_impr = curr_dd - new_dd
+
+            if score_impr >= 0.10:
+                should_promote = True
+            elif dd_impr >= 5.0 and new_sharpe >= (current_champ["metrics"]["sharpe"] * 0.9):
+                should_promote = True
+
+        if should_promote:
+            self._save_champion(candidate_row, timeframe)
             return True
 
         return False
+
+    def _save_champion(self, row: pd.Series, timeframe: str):
+        c: StrategyCandidate = row["candidate_obj"]
+
+        data = {
+            "id": c.id,
+            "candidate": c.to_json(), # String
+            "metrics": {
+                "score": float(row["score"]),
+                "sharpe": float(row["sharpe"]),
+                "max_dd_pct": float(row["max_dd"]),
+                "calmar": float(row["calmar"]),
+                "trades": int(row["trades"])
+            },
+            "score": float(row["score"]),
+            "timestamp": pd.Timestamp.now().isoformat()
+        }
+
+        # Save Current
+        with open(CHAMPIONS_DIR / f"current_{timeframe}.json", "w") as f:
+            json.dump(data, f, indent=2)
+
+        # Save History
+        ts = int(pd.Timestamp.now().timestamp())
+        with open(CHAMPIONS_DIR / f"{timeframe}_{ts}_{c.id}.json", "w") as f:
+            json.dump(data, f, indent=2)
+
+        logger.info("New Champion Promoted!", timeframe=timeframe, id=c.id, score=row["score"])

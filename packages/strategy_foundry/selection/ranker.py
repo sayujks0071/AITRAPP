@@ -1,55 +1,93 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Optional
 import pandas as pd
+import numpy as np
+import structlog
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
+
+logger = structlog.get_logger(__name__)
 
 class Ranker:
-    def rank(self, candidates: List[Dict[str, Any]]) -> pd.DataFrame:
+    def __init__(self, config: Dict):
+        self.config = config
+
+    def rank(self, candidates: List[Dict], timeframe: str) -> pd.DataFrame:
         """
-        Rank candidates based on composite score.
-        Score = 0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - 0.1*Turnover
+        Rank candidates based on OOS metrics.
+        Input: list of dicts with 'candidate', 'metrics', 'folds'.
         """
+        if not candidates:
+            return pd.DataFrame()
+
         rows = []
-        for c in candidates:
-            m = c["result"]["metrics"]
-            stab = c["result"]["stability"]
+        for item in candidates:
+            m = item["metrics"]["aggregate"]
+            c = item["candidate"]
 
-            # Normalize inputs roughly to 0-1 range or just raw?
-            # User provided weights for raw metrics? Usually we standardize.
-            # But let's apply weights to raw first, assuming they are somewhat comparable.
-            # Sharpe ~ 1-3
-            # Calmar ~ 1-5
-            # CAGR ~ 0.2-0.5
-            # Stability ~ ? (Inverse std dev of sharpe). If std is 0.5, stab is 2.
-            # Turnover ~ ? (Need proxy).
+            # Apply Gates
+            if not self._check_gates(m, timeframe):
+                continue
 
-            # Turnover proxy: Average trades per day? Or total trades?
-            # "exposure %, turnover proxy"
-            # Let's use trades count / days as turnover proxy.
-            trades_per_year = m["trades"] / 10.0 # Approx 10y
-            turnover_score = trades_per_year / 252.0 # ~ daily turnover freq
+            score = self._compute_score(m, item["metrics"]["folds"])
 
-            score = (0.3 * m["sharpe"]) + \
-                    (0.25 * m["calmar"]) + \
-                    (0.2 * m["cagr"] * 100) + \
-                    (0.15 * stab) - \
-                    (0.1 * turnover_score * 100) # Penalty
-
-            row = {
-                "id": c["strategy"].id,
+            rows.append({
+                "id": c.id,
                 "score": score,
                 "sharpe": m["sharpe"],
                 "calmar": m["calmar"],
                 "cagr": m["cagr"],
-                "max_dd": m["max_drawdown"],
-                "trades": m["trades"],
-                "stability": stab,
-                "rule_summary": c["strategy"].rule_summary,
-                "strategy_obj": c["strategy"]
-            }
-            rows.append(row)
+                "max_dd": m["max_dd_pct"],
+                "trades": m["total_trades"],
+                "win_rate": m["win_rate"],
+                "pf": m["profit_factor"],
+                "candidate_obj": c # Keep for storage
+            })
 
         df = pd.DataFrame(rows)
         if not df.empty:
-            df.sort_values("score", ascending=False, inplace=True)
-            df.reset_index(drop=True, inplace=True)
+            df = df.sort_values("score", ascending=False).reset_index(drop=True)
 
         return df
+
+    def _check_gates(self, m: Dict, timeframe: str) -> bool:
+        ranking_cfg = self.config.get("ranking", {})
+
+        # Min Trades
+        min_trades = ranking_cfg.get(f"min_trades_{timeframe}", 20)
+        if m["total_trades"] < min_trades:
+            return False
+
+        # Max DD
+        if m["max_dd_pct"] > ranking_cfg.get("max_dd_pct", 30.0):
+            return False
+
+        # Profit Factor
+        if m["profit_factor"] < ranking_cfg.get("min_profit_factor", 1.1):
+            return False
+
+        return True
+
+    def _compute_score(self, m: Dict, folds: List[Dict]) -> float:
+        # Score weights:
+        # + 25% OOS Sharpe
+        # + 25% OOS Calmar
+        # + 20% Net return / CAGR (Normalized?)
+        # + 15% Stability (low variance across folds)
+        # + 10% Low turnover bonus ?? Or just higher returns handles it?
+
+        # Normalize somewhat to make them comparable
+        # Sharpe > 2 is great. Calmar > 2 is great.
+
+        sharpe_score = min(max(m["sharpe"], 0), 3.0) / 3.0
+        calmar_score = min(max(m["calmar"], 0), 3.0) / 3.0
+
+        # Stability: Fraction of profitable folds
+        positive_folds = sum(1 for f in folds if f["net_return_pct"] > 0)
+        stability_score = positive_folds / len(folds) if folds else 0
+
+        # CAGR score (cap at 100%)
+        cagr_score = min(max(m["cagr"], -0.5), 1.0)
+
+        score = (0.25 * sharpe_score) + (0.25 * calmar_score) + (0.20 * cagr_score) + (0.30 * stability_score)
+
+        return score

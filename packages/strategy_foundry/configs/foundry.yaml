@@ -1,19 +1,35 @@
-foundry:
-  max_candidates: 80
-  fast_mode_candidates: 15
-  timeframes: ["5m", "15m", "1d"]
-  data_days_intraday: 59
-  data_days_daily: 3650
-  folds: 4
-  fast_mode_folds: 2
+market:
+  timezone: "Asia/Kolkata"
+  open: "09:15"
+  close: "15:30"
+  hard_close: "15:25"
+  currency: "INR"
 
-execution:
+defaults:
+  timeframes: ["5m", "15m"]
+  sanity_timeframe: "1D"
+  candidates_per_run: 80
+  candidates_fast_mode: 15
+  folds: 4
+  folds_fast: 2
+  starting_capital: 100000.0
+
+costs:
   slippage_bps: 2.0
   brokerage_per_order: 20.0
+  tax_bps: 3.0
   spread_guard_bps: 1.0
 
-selection:
+ranking:
   min_trades_5m: 80
   min_trades_15m: 40
-  max_drawdown: 0.30
+  min_trades_fast: 10
+  max_dd_pct: 30.0
   min_profit_factor: 1.1
+  promote_sharpe_min: 1.2
+  promote_dd_max: 20.0
+
+proxies:
+  index_download:
+    NIFTY: "^NSEI"
+    SENSEX: "^BSESN"

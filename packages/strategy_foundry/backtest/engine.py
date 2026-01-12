@@ -1,217 +1,248 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List
+from typing import List, Dict, Any
 import structlog
-from packages.strategy_foundry.factory.grammar import Strategy
-from packages.strategy_foundry.adapters.core_costs import CostModel, RiskConfig
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicators
+from packages.strategy_foundry.adapters.core_costs import RiskConfig
 
 logger = structlog.get_logger(__name__)
 
 class BacktestEngine:
-    def __init__(self, cost_model: CostModel):
-        self.cost_model = cost_model
+    def __init__(self, data: pd.DataFrame, costs: RiskConfig):
+        self.data = data
+        self.costs = costs
+        self.indicators = VectorizedIndicators()
 
-    def run(self, strategy: Strategy, df: pd.DataFrame) -> Dict[str, Any]:
+    def run(self, candidate: StrategyCandidate) -> pd.DataFrame:
         """
-        Run backtest for a strategy on a DataFrame.
+        Run backtest for a candidate.
+        Returns trades DataFrame.
         """
-        if df.empty:
-            return {}
+        df = self.data.copy()
 
-        # 1. Generate Raw Signals
-        raw_positions = strategy.generate_positions(df)
+        # 1. Calculate Indicators
+        self._calculate_indicators(df, candidate)
 
-        # 2. Risk Management Overlay (Stop Loss / Take Profit)
-        # This requires iteration or vectorization with state.
-        # Vectorized path dependent logic is hard. We'll use a fast loop using numpy.
+        # 2. Generate Signals (1, -1, 0)
+        # Vectorized signal generation where possible
+        signals = self._generate_signals(df, candidate)
 
-        close = df["close"].values
-        high = df["high"].values
-        low = df["low"].values
-        timestamps = df.index
-        atr = strategy.get_atr_array(df)
+        # 3. Simulate Execution (Iterative for path dependence of stops)
+        # Although vectorized is faster, path-dependent stops (trailing, ATR based on entry) require loop or numba.
+        # We will use a fast loop.
+        trades = self._simulate_execution(df, signals, candidate)
 
-        raw_pos_arr = raw_positions.values
+        return pd.DataFrame(trades)
+
+    def _calculate_indicators(self, df: pd.DataFrame, candidate: StrategyCandidate):
+        p = candidate.params
+        c = df["close"].values
+        h = df["high"].values
+        l = df["low"].values
+
+        # ATR always needed for risk
+        df["atr"] = self.indicators.atr(h, l, c, period=p.get("sl_atr_period", 14))
+
+        entry = candidate.entry_logic["type"]
+        if entry == "trend_ema_cross":
+            df["ema_fast"] = pd.Series(c).ewm(span=p["ema_fast"], adjust=False).mean()
+            df["ema_slow"] = pd.Series(c).ewm(span=p["ema_slow"], adjust=False).mean()
+            if p.get("adx_filter"):
+                df["adx"] = self.indicators.adx(h, l, c, period=p["adx_period"])
+
+        elif entry == "breakout_donchian":
+            upper, lower = self.indicators.donchian(h, l, p["donchian_period"])
+            df["donchian_upper"] = upper
+            df["donchian_lower"] = lower
+            if p.get("filter_ma"):
+                 df["ma_filter"] = pd.Series(c).rolling(p["ma_period"]).mean()
+
+        elif entry == "mean_rev_rsi":
+            df["rsi"] = self.indicators.rsi(c, p["rsi_period"])
+
+        elif entry == "supertrend":
+            st, direction = self.indicators.supertrend(h, l, c, p["st_period"], p["st_multiplier"])
+            df["supertrend"] = st
+            df["supertrend_dir"] = direction
+
+    def _generate_signals(self, df: pd.DataFrame, candidate: StrategyCandidate) -> np.ndarray:
+        p = candidate.params
+        entry = candidate.entry_logic["type"]
+
+        # 0: None, 1: Long, -1: Short (optional)
+        # We process entries. Exits are handled in execution loop.
+        entries = np.zeros(len(df), dtype=int)
+
+        c = df["close"].values
+
+        if entry == "trend_ema_cross":
+            # Crossover: fast > slow AND prev_fast <= prev_slow
+            fast = df["ema_fast"].values
+            slow = df["ema_slow"].values
+
+            # Cross up
+            long_cond = (fast > slow) & (np.roll(fast, 1) <= np.roll(slow, 1))
+
+            if p.get("adx_filter"):
+                long_cond &= (df["adx"].values > p["adx_threshold"])
+
+            entries[long_cond] = 1
+
+        elif entry == "breakout_donchian":
+            # Close > prev upper
+            # Donchian upper is max of PREVIOUS N bars usually in signal definition?
+            # Or current bar breaks the level?
+            # Standard: Breakout above High(N).
+            # Our `donchian` calculation at `i` is max(high[i-N+1:i+1]).
+            # So if close[i] > donchian[i-1].
+
+            prev_upper = np.roll(df["donchian_upper"].values, 1)
+            long_cond = c > prev_upper
+
+            if p.get("filter_ma"):
+                long_cond &= (c > df["ma_filter"].values)
+
+            entries[long_cond] = 1
+
+        elif entry == "mean_rev_rsi":
+            # RSI < Oversold
+            rsi = df["rsi"].values
+            long_cond = (rsi < p["rsi_oversold"])
+            entries[long_cond] = 1
+
+        elif entry == "supertrend":
+            # Direction change -1 -> 1
+            st_dir = df["supertrend_dir"].values
+            prev_dir = np.roll(st_dir, 1)
+            long_cond = (st_dir == 1) & (prev_dir == -1)
+            entries[long_cond] = 1
+
+        return entries
+
+    def _simulate_execution(self, df: pd.DataFrame, entry_signals: np.ndarray, candidate: StrategyCandidate) -> List[Dict]:
+        """
+        Bar-by-bar execution.
+        Entry on Next Open.
+        Exits: Stop Loss (ATR), Take Profit, EOD.
+        """
+        p = candidate.params
+
+        opens = df["open"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        closes = df["close"].values
+        atrs = df["atr"].values
+        times = df.index
+
+        trades = []
+        position = 0 # 1 or 0 (Long only for now)
+        entry_price = 0.0
+        stop_loss = 0.0
+        take_profit = 0.0
+        entry_time = None
+        entry_idx = 0
 
         n = len(df)
-        final_pos = np.zeros(n, dtype=int)
-        trades = []
 
-        # State
-        current_pos = 0 # 0, 1, -1
-        entry_price = 0.0
-        entry_idx = 0
-        sl_price = 0.0
-        tp_price = 0.0
+        # Costs
+        slippage = self.costs.slippage_bps / 10000.0
+        tax = self.costs.tax_bps / 10000.0
+        brokerage = self.costs.brokerage_per_order # Flat INR, handling this requires assuming capital.
+        # We will compute return % and handle flat costs as reduction in capital if needed,
+        # but here we output trade details.
 
-        # Performance optimization: Use numpy arrays for lookup
-        # Execution: Next Open.
-        # So signal at i affects pos at i+1.
+        # EOD check: 15:25
+        # times are pandas timestamps
 
-        # We need Open prices for execution
-        opens = df["open"].values
-
-        # Loop starts at 1 because we need previous signal
         for i in range(1, n):
-            # Check exits if in position
-            if current_pos != 0:
-                # Check SL/TP hit on Today's OHLC
-                # Assumption: If Low < SL, we hit SL.
-                # If High > TP, we hit TP.
-                # Order of check matters.
-                # Standard assumption: Worst case first? Or based on Open?
-                # If Open triggers SL/TP?
+            current_time = times[i]
 
-                exit_price = None
+            # Check Exit if in position
+            if position == 1:
+                exit_price = 0.0
                 exit_reason = ""
 
-                # Check Gap Open vs SL/TP
-                if current_pos == 1:
-                    if opens[i] <= sl_price:
-                        exit_price = opens[i]
-                        exit_reason = "SL_GAP"
-                    elif opens[i] >= tp_price:
-                        exit_price = opens[i]
-                        exit_reason = "TP_GAP"
-                    elif low[i] <= sl_price:
-                        exit_price = sl_price
-                        exit_reason = "SL"
-                    elif high[i] >= tp_price:
-                        exit_price = tp_price
-                        exit_reason = "TP"
+                # 1. EOD Exit
+                # Assumes 5m/15m bars. If time >= 15:25, close.
+                # Actually, check if current bar time is >= 15:25.
+                # Market hours: 09:15-15:30.
+                if current_time.hour == 15 and current_time.minute >= 25:
+                    exit_price = opens[i] # Exit at Open of this bar (which is 15:25 bar?)
+                    # Or exit at Close? "Flat by 15:25".
+                    # If this bar starts at 15:25, we exit at Open.
+                    exit_reason = "EOD"
 
-                elif current_pos == -1:
-                    if opens[i] >= sl_price:
-                        exit_price = opens[i]
-                        exit_reason = "SL_GAP"
-                    elif opens[i] <= tp_price:
-                        exit_price = opens[i]
-                        exit_reason = "TP_GAP"
-                    elif high[i] >= sl_price:
-                        exit_price = sl_price
-                        exit_reason = "SL"
-                    elif low[i] <= tp_price:
-                        exit_price = tp_price
-                        exit_reason = "TP"
+                # 2. Stop Loss (Hit Low)
+                elif lows[i] <= stop_loss:
+                    exit_price = stop_loss # Assume filled at stop
+                    # Slippage on stop? Yes.
+                    exit_price *= (1 - slippage)
+                    exit_reason = "SL"
 
-                if exit_price is not None:
-                    # Close trade
+                # 3. Take Profit (Hit High)
+                elif take_profit > 0 and highs[i] >= take_profit:
+                    exit_price = take_profit
+                    exit_reason = "TP"
+
+                # Execute Exit
+                if exit_price > 0:
+                    # Calculate PnL
+                    # Gross Return
+                    gross_ret = (exit_price - entry_price) / entry_price
+
+                    # Apply Costs
+                    # Slippage on entry (already applied below) and exit?
+                    # We applied slippage on SL exit above.
+                    # If EOD/TP, apply slippage.
+                    if exit_reason != "SL":
+                        exit_price *= (1 - slippage)
+
+                    # Recalculate gross with exit slippage
+                    gross_ret = (exit_price - entry_price) / entry_price
+
+                    # Tax
+                    # Approx turnover tax
+                    # We will store net return
+
                     trades.append({
-                        "entry_time": timestamps[entry_idx],
-                        "exit_time": timestamps[i],
+                        "entry_time": entry_time,
+                        "exit_time": current_time,
                         "entry_price": entry_price,
                         "exit_price": exit_price,
-                        "side": current_pos,
+                        "return": gross_ret,
                         "reason": exit_reason
                     })
-                    current_pos = 0
-                    final_pos[i] = 0
-                else:
-                    # Hold
-                    final_pos[i] = current_pos
 
-                    # Check signal for reversal?
-                    # If raw_signal[i-1] != current_pos (and not 0), maybe reverse?
-                    # For simplicty: Exits are only SL/TP or Reversal Signal.
-                    # If Reversal:
-                    new_signal = raw_pos_arr[i-1]
-                    if new_signal != 0 and new_signal != current_pos:
-                        # Close current
-                        trades.append({
-                            "entry_time": timestamps[entry_idx],
-                            "exit_time": timestamps[i],
-                            "entry_price": entry_price,
-                            "exit_price": opens[i],
-                            "side": current_pos,
-                            "reason": "SIGNAL"
-                        })
-                        # Open new
-                        current_pos = int(new_signal)
-                        entry_price = opens[i]
-                        entry_idx = i
-                        final_pos[i] = current_pos
+                    position = 0
+                    continue
 
-                        # Set new SL/TP
-                        cur_atr = atr[i-1] # Use ATR from prev close
-                        if np.isnan(cur_atr): cur_atr = entry_price * 0.01 # Fallback
+            # Check Entry
+            # Signal from previous bar (i-1) triggers entry on Open (i)
+            # If flat
+            if position == 0:
+                if entry_signals[i-1] == 1:
+                    # Check spread/chop? (Spread guard)
+                    # Skip if High-Low is too small? (Optional)
 
-                        if current_pos == 1:
-                            sl_price = entry_price - (cur_atr * strategy.stop_loss_atr)
-                            tp_price = entry_price + (cur_atr * strategy.take_profit_atr)
-                        else:
-                            sl_price = entry_price + (cur_atr * strategy.stop_loss_atr)
-                            tp_price = entry_price - (cur_atr * strategy.take_profit_atr)
-
-            else:
-                # No position, check entry
-                signal = raw_pos_arr[i-1] # Signal from yesterday
-                if signal != 0:
-                    current_pos = int(signal)
-                    entry_price = opens[i]
+                    # Enter Long
+                    entry_price = opens[i] * (1 + slippage) # Buy slippage
+                    position = 1
+                    entry_time = current_time
                     entry_idx = i
-                    final_pos[i] = current_pos
 
-                    cur_atr = atr[i-1]
-                    if np.isnan(cur_atr): cur_atr = entry_price * 0.01
+                    # Set Stops
+                    atr_val = atrs[i-1] # Use previous ATR
+                    if np.isnan(atr_val) or atr_val == 0:
+                         atr_val = opens[i] * 0.01 # Fallback 1%
 
-                    if current_pos == 1:
-                        sl_price = entry_price - (cur_atr * strategy.stop_loss_atr)
-                        tp_price = entry_price + (cur_atr * strategy.take_profit_atr)
+                    sl_dist = atr_val * p["sl_atr_mult"]
+                    stop_loss = entry_price - sl_dist
+
+                    if "tp_risk_reward" in p:
+                        tp_dist = sl_dist * p["tp_risk_reward"]
+                        take_profit = entry_price + tp_dist
                     else:
-                        sl_price = entry_price + (cur_atr * strategy.stop_loss_atr)
-                        tp_price = entry_price - (cur_atr * strategy.take_profit_atr)
+                        take_profit = 0.0
 
-        # Close open position at end
-        if current_pos != 0:
-            trades.append({
-                "entry_time": timestamps[entry_idx],
-                "exit_time": timestamps[-1],
-                "entry_price": entry_price,
-                "exit_price": close[-1],
-                "side": current_pos,
-                "reason": "END"
-            })
-
-        # Calculate PnL curve
-        # We need equity curve.
-        # Simplified: Sum up trade returns.
-        # Better: Daily Mark-to-Market.
-        # Let's reconstruct daily equity from trades + hold logic.
-
-        # Convert trades to DataFrame
-        trades_df = pd.DataFrame(trades)
-
-        equity_curve = pd.Series(0.0, index=df.index)
-        # TODO: Precise daily equity logic is complex.
-        # For ranking, we usually rely on Trade Statistics.
-        # But Drawdown requires equity curve.
-        # Let's calculate Equity Curve by iterating days.
-
-        capital = 100000.0 # Base 100k
-        equity = [capital] * n
-
-        # Map trades to days
-        # This is O(N) pass again.
-
-        # Apply costs
-        if not trades_df.empty:
-            for idx, trade in trades_df.iterrows():
-                # Gross PnL
-                diff = trade["exit_price"] - trade["entry_price"]
-                gross_pnl_pts = diff * trade["side"]
-
-                # Costs
-                cost = self.cost_model.estimate_cost(trade["exit_price"], 1, "SELL") + \
-                       self.cost_model.estimate_cost(trade["entry_price"], 1, "BUY")
-
-                net_pnl_pts = gross_pnl_pts - cost
-
-                # ROI
-                # trade_ret = net_pnl_pts / trade["entry_price"]
-                trades_df.at[idx, "net_pnl"] = net_pnl_pts
-                trades_df.at[idx, "return_pct"] = net_pnl_pts / trade["entry_price"]
-
-        return {
-            "trades": trades_df,
-            "final_pos": final_pos
-        }
+        return trades

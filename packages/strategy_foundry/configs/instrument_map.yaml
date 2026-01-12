@@ -2,10 +2,14 @@ research:
   NIFTY: "^NSEI"
   SENSEX: "^BSESN"
 
+research_fallback:
+  NIFTY: "NIFTYBEES.NS"
+  SENSEX: "SENSEXBEES.NS"
+
 paper_proxy:
   NIFTY: "NIFTYBEES"
   SENSEX: "SENSEXBEES"
 
 live_proxy:
-  NIFTY: "NIFTY FUT"
+  NIFTY: "NIFTY 50 FUT"
   SENSEX: "SENSEX FUT"

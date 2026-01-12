@@ -1,106 +1,102 @@
 import pandas as pd
-import numpy as np
-from typing import List, Dict, Tuple, Any
-from packages.strategy_foundry.factory.grammar import Strategy
+from typing import List, Tuple, Dict
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
 from packages.strategy_foundry.backtest.engine import BacktestEngine
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
-class WalkForwardEvaluator:
-    def __init__(self, engine: BacktestEngine, n_folds: int = 3):
+class WalkForward:
+    def __init__(self, data: pd.DataFrame, engine: BacktestEngine, folds: int = 4):
+        self.data = data
         self.engine = engine
-        self.n_folds = n_folds
+        self.folds = folds
 
-    def evaluate(self, strategy: Strategy, df: pd.DataFrame) -> Dict[str, Any]:
+    def run(self, candidate: StrategyCandidate) -> Dict:
         """
-        Perform Walk-Forward Analysis.
+        Run walk-forward analysis.
         Splits data into K folds.
-        For simplicity in this MVP, we do K-Fold Cross Validation or Expanding Window?
-        User asked for "Walk-forward evaluation... 3-5 folds".
-        Standard WF: Train on [0..T], Test on [T..T+k].
-        Since we are *generating* strategies (not optimizing params per se),
-        we treat the "generation" phase as Training on the WHOLE past?
-        No, that causes overfitting.
+        Train on [0..i], Test on [i+1].
+        Actually, standard Walk Forward is Expanding or Rolling.
+        "Train on past, test on next".
 
-        The 'Generator' creates random strategies. We need to validate them.
-        We should evaluate on Out-Of-Sample data.
+        We will use simple K-Fold time-series split:
+        Split data into K+1 segments.
+        Fold 1: Train Seg 0, Test Seg 1
+        Fold 2: Train Seg 0+1, Test Seg 2 (Expanding window)
 
-        Approach:
-        Split data into chunks.
-        For each chunk i (Test), we could have trained on 0..i-1.
-        But since strategies are fixed (randomly generated parameters),
-        we just run the fixed strategy on the Test Fold and aggregate results.
-
-        Wait, if we don't optimize params, Walk-Forward is just "Backtest on whole history partitioned".
-        The value comes if we select the best strategy based on Train folds and verify on Test folds.
-
-        But here we are just filtering candidates.
-        So we just run backtest on the whole period, but calculate metrics on the "Out Of Sample" segments?
-        Or maybe the requirement implies:
-        Train (Optimize) -> Test.
-        But we skip Optimization (Grid Search).
-
-        So, we will just run the strategy on the ENTIRE dataset,
-        but compute stability metrics across folds.
-
-        Actually, let's treat the *most recent* fold as OOS for "Live Selection"?
-        Or just split into N folds and report metrics for each, plus aggregate.
-
-        Let's do this:
-        Divide DF into N equal time chunks.
-        Run backtest on each chunk.
-        Collect metrics for each chunk.
-
-        Return:
-        - Aggregate Metrics (Whole period)
-        - Fold Metrics
-        - Stability Score (Variance of Sharpe across folds)
+        Returns aggregated OOS metrics.
         """
-        n = len(df)
-        fold_size = n // self.n_folds
+        n = len(self.data)
+        if n < 500: # Not enough data
+            return {"status": "skipped", "reason": "insufficient_data"}
 
-        fold_metrics = []
+        segment_size = n // (self.folds + 1)
 
-        all_res = self.engine.run(strategy, df)
-        trades_all = all_res.get("trades", pd.DataFrame())
+        fold_results = []
+        all_oos_trades = []
 
-        if trades_all.empty:
-            return {"valid": False, "reason": "No trades"}
+        for i in range(self.folds):
+            # Train: 0 to (i+1)*segment_size
+            # Test: (i+1)*segment_size to (i+2)*segment_size
+            train_end = (i + 1) * segment_size
+            test_end = (i + 2) * segment_size
+            if i == self.folds - 1:
+                test_end = n # Catch remainder
 
-        # Calculate metrics per fold based on time
-        start_time = df.index[0]
-        end_time = df.index[-1]
-        total_duration = end_time - start_time
-        fold_duration = total_duration / self.n_folds
+            train_data = self.data.iloc[:train_end]
+            test_data = self.data.iloc[train_end:test_end]
 
-        for i in range(self.n_folds):
-            f_start = start_time + (fold_duration * i)
-            f_end = start_time + (fold_duration * (i+1))
+            # We don't "train" parameters here (parameters are fixed in candidate).
+            # We just EVALUATE on OOS.
+            # If we were optimizing, we would optimize on train.
+            # Here we are validating if the *randomly generated* strategy holds up.
+            # So we just run on Test data.
+            # But we might want to check Train to see if it was profitable there?
+            # The prompt says "Generate ... Backtest ... Rank with anti-overfit".
+            # "Use walk-forward OOS evaluation".
 
-            # Filter trades in this window
-            # Note: A trade might straddle folds. We use exit_time.
-            mask = (trades_all["exit_time"] >= f_start) & (trades_all["exit_time"] < f_end)
-            f_trades = trades_all[mask]
+            # Since params are fixed, "Walk Forward" here effectively means
+            # "Performance Consistency Check across time blocks".
 
-            m = calculate_metrics(f_trades)
-            m["fold"] = i
-            fold_metrics.append(m)
+            # Run on Test
+            # Need to warm up indicators?
+            # Pass a bit of train data for warmup?
+            warmup = 100
+            if len(test_data) < warmup: continue
 
-        # Aggregate (OOS) - effectively whole period is OOS if we didn't train on it.
-        # Since strategies are random, the whole history is OOS.
-        agg_metrics = calculate_metrics(trades_all)
+            # Slice with warmup
+            test_slice_start = train_end - warmup
+            if test_slice_start < 0: test_slice_start = 0
 
-        # Calculate Stability
-        sharpes = [m["sharpe"] for m in fold_metrics]
-        stability = 1.0 / (np.std(sharpes) + 0.1) # Inverse variance proxy
+            # Create a view for the engine that includes warmup
+            # But we only count trades starting after train_end
+            combined_view = self.data.iloc[test_slice_start:test_end]
 
-        # Check Sanity
-        # - trades < 30 (FAST_MODE: 10) -> handled by caller or here
-        # - MaxDD > 35%
+            # Temporary engine with slice
+            # We assume engine is stateless except for config
+            slice_engine = BacktestEngine(combined_view, self.engine.costs)
+
+            trades = slice_engine.run(candidate)
+
+            # Filter trades that started in the test period
+            if not trades.empty:
+                cutoff = self.data.index[train_end]
+                oos_trades = trades[trades["entry_time"] >= cutoff]
+
+                metrics = calculate_metrics(oos_trades)
+                fold_results.append(metrics)
+                all_oos_trades.append(oos_trades)
+            else:
+                fold_results.append(calculate_metrics(pd.DataFrame()))
+
+        # Aggregate OOS
+        if all_oos_trades:
+            merged_trades = pd.concat(all_oos_trades)
+            total_metrics = calculate_metrics(merged_trades)
+        else:
+            total_metrics = calculate_metrics(pd.DataFrame())
 
         return {
-            "valid": True,
-            "metrics": agg_metrics,
-            "fold_metrics": fold_metrics,
-            "stability": stability,
-            "trades": trades_all
+            "status": "ok",
+            "folds": fold_results,
+            "aggregate": total_metrics
         }

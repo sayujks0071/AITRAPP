@@ -1,29 +1,30 @@
 # Backtesting Methodology
 
-## Assumptions
-- **Timeframe**: Daily (1D).
-- **Execution**: Signals on the Close, trades at the next session Open.
-- **Costs**:
-  - Slippage: 5 bps per side (conservative buffer).
-  - Brokerage: Zerodha-like flat 20 INR structure + statutory taxes (~0.03% turnover).
+## Data Sources
+- **Primary**: Core Data Provider (if available).
+- **Secondary**: Yahoo Finance (`requests`-based downloader) for NIFTY/SENSEX indices.
+- **Fallback**: ETF Proxies.
 
-## Data
-Daily OHLCV is sourced from Yahoo Finance (`^NSEI`, `^BSESN`). This is sufficient for regime detection, but minor gaps/delays versus broker feeds should be expected.
+## Timeframes
+- **5m**: Intraday tactical.
+- **15m**: Intraday structural.
+- **1D**: Sanity check.
 
-## Walk-Forward Evaluation
-- **Method**: Expanding-window walk-forward (4 folds).
-- **Validation**: Strategy metrics aggregated per fold; candidates must be profitable in ≥3 folds to proceed.
-- **Training**: There is no traditional fit—parameters come from random grammar sampling, so each configuration is effectively out-of-sample.
+## Walk-Forward Analysis
+We use an expanding window approach for validation:
+- Data is split into `N` folds.
+- Each fold tests the strategy on "Out of Sample" data.
+- Metrics are aggregated across all folds.
+- Strategies with high variance across folds are penalized.
 
-## Intraday Constraints
-- Flatten positions by 15:20 IST; no overnight carry.
-- Optional guardrail: max 1 trade per direction per day.
+## Costs
+- **Slippage**: 2.0 bps (configurable).
+- **Brokerage**: Flat fee per order.
+- **Tax**: STT + Exchange charges approximated.
 
-## Metrics
-- **Sharpe**: Trade-based approximation.
-- **Calmar**: CAGR / MaxDD.
-- **Stability**: Inverse of Sharpe variance across folds.
-
-## Ranking
-Composite Score:
-`0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - 0.1*Turnover`
+## Gates
+Candidates are rejected if:
+- Trades < Minimum threshold (ensure statistical significance).
+- Max Drawdown > 30%.
+- Profit Factor < 1.1.
+- Stability Score (positive folds) is low.

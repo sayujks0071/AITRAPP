@@ -1,80 +1,94 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any
+from typing import Dict
 
 def calculate_metrics(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> Dict[str, float]:
     if trades_df.empty:
         return {
-            "total_return": 0.0,
-            "cagr": 0.0,
-            "sharpe": 0.0,
-            "sortino": 0.0,
-            "max_drawdown": 0.0,
-            "calmar": 0.0,
+            "total_trades": 0,
             "win_rate": 0.0,
             "profit_factor": 0.0,
-            "trades": 0
+            "sharpe": -99.0,
+            "calmar": -99.0,
+            "max_dd_pct": 0.0,
+            "net_return_pct": 0.0,
+            "cagr": 0.0,
+            "stability": 0.0
         }
 
-    # Simple Metrics based on trade returns
-    returns = trades_df["return_pct"]
+    # Trades returns are percentage returns
+    returns = trades_df["return"].values
 
-    total_return = returns.sum() # Simple sum (log returns would be additive, pct returns arithmetic approx)
-    # Compounded: (1+r1)*(1+r2)...
-    total_ret_comp = (1 + returns).prod() - 1
+    n_trades = len(trades_df)
+    n_wins = np.sum(returns > 0)
+    win_rate = n_wins / n_trades if n_trades > 0 else 0
 
-    wins = returns[returns > 0]
-    losses = returns[returns <= 0]
+    gross_profit = np.sum(returns[returns > 0])
+    gross_loss = np.abs(np.sum(returns[returns < 0]))
 
-    win_rate = len(wins) / len(returns) if len(returns) > 0 else 0
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else 99.0
 
-    avg_win = wins.mean() if not wins.empty else 0
-    avg_loss = losses.mean() if not losses.empty else 0
+    # Equity Curve (Simple compounding or fixed fractional?)
+    # foundry.yaml says "fixed fraction" or "1x notional".
+    # Assuming full capital reinvestment for compounding stats (CAGR),
+    # or simple sum for fixed sizing.
+    # Let's use simple cumulative sum of returns for Sharpe to be robust against sizing.
+    # Or equity curve:
+    equity = np.cumprod(1 + returns)
 
-    profit_factor = abs(wins.sum() / losses.sum()) if not losses.empty and losses.sum() != 0 else 999.0
+    # Max DD
+    peak = np.maximum.accumulate(equity)
+    drawdown = (equity - peak) / peak
+    max_dd = np.min(drawdown) # Negative value
 
-    # To get Sharpe/Drawdown properly, we need a time series of equity.
-    # Reconstructing rough equity curve from trade exits (sparse)
-    # Ideally backtest engine returns daily equity.
-    # For MVP fast evaluation, trade stats might suffice for Ranker?
-    # No, Ranker wants Sharpe/MaxDD.
+    # Sharpe (Annualized)
+    # How many trades per year?
+    # We need time duration.
+    start_time = trades_df["entry_time"].min()
+    end_time = trades_df["exit_time"].max()
+    duration_days = (end_time - start_time).days
+    if duration_days < 1: duration_days = 1
 
-    # We will approximate Sharpe from trade returns assuming 1 trade at a time.
-    # Annualized Sharpe = mean(ret) / std(ret) * sqrt(TradesPerYear) ?
-    # Or sqrt(252) if daily.
+    years = duration_days / 365.25
 
-    # Let's use the trade exit timestamps to determine duration.
-    start_date = trades_df["entry_time"].min()
-    end_date = trades_df["exit_time"].max()
-    duration_days = (end_date - start_date).days
-    years = max(duration_days / 365.25, 0.01)
+    # Simple average return per trade * trades per year?
+    # Or resample equity curve to daily?
+    # Resampling is better for Sharpe.
+    # But we only have trade endpoints.
+    # Let's map trades to a daily series.
 
-    cagr = (1 + total_ret_comp) ** (1 / years) - 1
+    # Construct Daily Returns Series
+    # We need a daily index from start to end.
+    daily_idx = pd.date_range(start=start_time.date(), end=end_time.date(), freq='D')
+    daily_pnl = pd.Series(0.0, index=daily_idx)
 
-    # Estimate Drawdown from cumulative returns
-    cum_ret = (1 + returns).cumprod()
-    peak = cum_ret.cummax()
-    dd = (cum_ret - peak) / peak
-    max_dd = dd.min() # Negative value
+    for _, row in trades_df.iterrows():
+        # Attribute pnl to exit day
+        d = row["exit_time"].date()
+        if d in daily_pnl.index:
+            daily_pnl[d] += row["return"]
 
-    # Sharpe (Trade based)
-    # Not strictly time-based Sharpe, but a proxy "Trade Sharpe"
-    # To be comparable to standard Sharpe (daily), we need daily returns.
-    # We will accept Trade Sharpe for now or 0 if single trade.
+    # Calculate Daily Stats
+    daily_ret = daily_pnl
+    mean_daily = daily_ret.mean()
+    std_daily = daily_ret.std()
 
-    std_dev = returns.std()
-    sharpe = (returns.mean() / std_dev) * np.sqrt(len(returns)/years) if std_dev > 0 else 0
+    sharpe = 0.0
+    if std_daily > 0:
+        sharpe = (mean_daily / std_daily) * np.sqrt(252)
+
+    cagr = (equity[-1] ** (1/years)) - 1 if years > 0 and equity[-1] > 0 else 0
 
     calmar = cagr / abs(max_dd) if max_dd != 0 else 0
 
     return {
-        "total_return": total_ret_comp,
-        "cagr": cagr,
-        "sharpe": sharpe,
-        "sortino": 0.0, # TODO
-        "max_drawdown": abs(max_dd),
-        "calmar": calmar,
-        "win_rate": win_rate,
-        "profit_factor": profit_factor,
-        "trades": len(trades_df)
+        "total_trades": int(n_trades),
+        "win_rate": float(win_rate),
+        "profit_factor": float(profit_factor),
+        "sharpe": float(sharpe),
+        "calmar": float(calmar),
+        "max_dd_pct": float(abs(max_dd) * 100),
+        "net_return_pct": float((equity[-1] - 1) * 100),
+        "cagr": float(cagr),
+        "stability": float(sharpe) # Placeholder
     }
