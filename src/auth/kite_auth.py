@@ -1,7 +1,7 @@
 import os
 import logging
 from typing import Optional
-from kiteconnect import KiteConnect
+from kiteconnect import KiteConnect, exceptions
 import dotenv
 
 logger = logging.getLogger(__name__)
@@ -40,9 +40,17 @@ class KiteAuth:
             # profile() is a lightweight call to validate session
             self.kite.profile()
             return True
+        except exceptions.TokenException:
+            logger.info("Session invalid: TokenException.")
+            return False
+        except exceptions.PermissionException:
+            logger.info("Session invalid: PermissionException.")
+            return False
         except Exception as e:
-            # TokenInvalidException or similar implies invalid session
-            logger.debug(f"Session validation failed: {str(e)}")
+            # Other exceptions like NetworkException shouldn't necessarily invalidate the session,
+            # but for safety in a check-validity context, if we can't verify, we might assume invalid or retry.
+            # Assuming invalid for now to prompt re-check or manual intervention if persistent.
+            logger.warning(f"Session validation failed with unexpected error: {str(e)}")
             return False
 
     def get_login_url(self) -> str:
