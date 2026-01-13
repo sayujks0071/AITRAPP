@@ -1,119 +1,122 @@
+"""Main Hourly Runner"""
 import os
 import sys
-import pandas as pd
 import structlog
+import pandas as pd
 from datetime import datetime
+import yaml
 
-# Add root to path
+# Ensure pythonpath
 sys.path.append(os.getcwd())
 
-from packages.strategy_foundry.data.loader import load_data
-from packages.strategy_foundry.factory.grammar import Grammar
-from packages.strategy_foundry.factory.generator import StrategyImpl
-from packages.strategy_foundry.backtest.walkforward import walk_forward_validation
-from packages.strategy_foundry.selection.ranker import Ranker, ChampionStore, check_promotion
-from packages.strategy_foundry.live.signal_publisher import publish_signal
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.factory.generator import StrategyGenerator
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.backtest.walkforward import WalkForward
+from packages.strategy_foundry.selection.ranker import Ranker, ChampionStore
+from packages.strategy_foundry.selection.promote import Promoter
+from packages.strategy_foundry.live.signal_publisher import SignalPublisher
+from packages.strategy_foundry.backtest.sanity import sanity_check_candidate, daily_sanity_overlay
 
-logger = structlog.get_logger()
+logger = structlog.get_logger(__name__)
 
-def main():
-    # Determine Mode
+def run():
+    # 1. Config
     fast_mode = os.environ.get("FAST_MODE", "0") == "1"
+    logger.info("Starting Hourly Run", fast_mode=fast_mode)
 
-    n_candidates = 10 if fast_mode else 50
-    n_folds = 2 if fast_mode else 4
-
-    instruments = ["NIFTY", "SENSEX"]
-
+    loader = DataLoader()
+    generator = StrategyGenerator()
     ranker = Ranker()
+    promoter = Promoter()
     store = ChampionStore()
 
-    run_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    run_dir = f"packages/strategy_foundry/results/runs/{run_timestamp}"
-    os.makedirs(run_dir, exist_ok=True)
+    # 2. Data Update
+    timeframes = ["5m", "15m"]
+    symbols = ["NIFTY"] # Focus on Nifty
 
-    all_candidates = []
+    datasets = {}
+    daily_data = None
 
-    for symbol in instruments:
-        logger.info(f"Processing {symbol}...")
+    for s in symbols:
+        # Load Daily for Sanity
+        daily_data = loader.get_data(s, "1D")
 
-        # 1. Update Data
-        df = load_data(symbol)
-        if df is None:
-            continue
+        for tf in timeframes:
+            df = loader.get_data(s, tf)
+            if not df.empty:
+                datasets[(s, tf)] = df
 
-        candidates = []
+    if not datasets:
+        logger.error("No data available")
+        return
 
-        # 2. Generate Candidates
-        for _ in range(n_candidates):
-            config = Grammar.get_random_strategy()
+    # 3. Generate Candidates
+    num_candidates = 15 if fast_mode else 80
+    candidates = generator.generate(num_candidates)
 
-            # Factory Func
-            def factory(d):
-                impl = StrategyImpl(config)
-                return impl.generate_positions(d)
+    # 4. Backtest & Eval
+    results = []
 
-            # 3. Walk-Forward
-            wf_res = walk_forward_validation(df, factory, n_folds=n_folds)
+    for cand in candidates:
+        for (sym, tf), df in datasets.items():
+            # Walk Forward
+            wf = WalkForward(df, folds=2 if fast_mode else 4)
+            wf_res = wf.run(cand)
 
-            # 4. Metrics & Sanity
-            # Check sanity
-            if "avg_sharpe" in wf_res.get("avg_stats", {}):
-                # Simple Sanity
-                # Trades? WF returns stats per fold.
-                # Check avg trades
-                avg_trades = pd.DataFrame(wf_res['fold_results'])['trades'].mean()
-                if avg_trades < (10 if fast_mode else 30):
-                    continue
+            metrics = wf_res["full_result"] # Using full result for ranking for now, but gating on folds
 
-                # MaxDD
-                avg_dd = wf_res['avg_stats']['avg_calmar'] # wait, I didn't store avg_dd directly in stats?
-                # I stored fold results.
+            # Additional WF Metrics
+            metrics["consistency"] = wf_res["consistency"]
+            metrics["avg_sharpe_folds"] = wf_res["avg_sharpe"]
 
-                c_dict = config.to_dict()
-                c_dict['stats'] = wf_res['avg_stats']
-                c_dict['symbol'] = symbol
-                candidates.append(c_dict)
+            # Sanity Check
+            if not sanity_check_candidate(metrics, fast_mode):
+                continue
 
-        # 5. Rank
-        ranked_df = ranker.rank(candidates)
+            # Daily Sanity Overlay (Top candidates only? Or all? fast enough for all here)
+            if not daily_sanity_overlay(BacktestEngine, cand, daily_data):
+                continue
 
-        if not ranked_df.empty:
-            # Save candidates
-            ranked_df.to_json(f"{run_dir}/candidates_{symbol}.json", orient='records', indent=2)
+            res_entry = metrics.copy()
+            res_entry["id"] = cand.id
+            res_entry["symbol"] = sym
+            res_entry["timeframe"] = tf
+            res_entry["candidate_obj"] = cand
+            results.append(res_entry)
 
-            # 6. Promote
-            top = ranked_df.iloc[0].to_dict()
-            curr = store.get_current_champion(symbol)
+    # 5. Rank
+    if not results:
+        logger.warning("No viable candidates found")
+        return
 
-            # Check eligibility for LIVE (stricter than promotion?)
-            # "Live-eligible gate... OOS Sharpe >= 1.0"
-            # Promotion is relative.
-            # Let's promote if better.
+    ranked_df = ranker.rank(results, "blended")
 
-            if check_promotion(curr, top):
-                logger.info(f"New Champion for {symbol}!", name=top['name'])
-                store.promote(top, symbol)
+    # Save Leaderboard
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = f"packages/strategy_foundry/results/runs/{ts}"
+    os.makedirs(out_dir, exist_ok=True)
 
-            all_candidates.extend(ranked_df.to_dict('records'))
+    ranked_df_drop = ranked_df.drop(columns=["candidate_obj"])
+    ranked_df_drop.to_csv(f"{out_dir}/leaderboard.csv")
 
-    # Update Leaderboard
-    if all_candidates:
-        lb_path = "packages/strategy_foundry/results/leaderboard.csv"
-        new_lb = pd.DataFrame(all_candidates)
-        if os.path.exists(lb_path):
-            old_lb = pd.read_csv(lb_path)
-            combined = pd.concat([old_lb, new_lb]).drop_duplicates(subset=['id'])
+    # 6. Promote
+    if not fast_mode and not ranked_df.empty:
+        top = ranked_df.iloc[0]
+        cand_obj = [r["candidate_obj"] for r in results if r["id"] == top["id"]][0]
+
+        # Convert row to dict
+        metrics = top.to_dict()
+
+        if promoter.check_promotion(metrics, cand_obj.to_dict()):
+            logger.info("New Champion Promoted", id=top["id"], score=top["score"])
+            store.save_champion(cand_obj.to_dict(), metrics, top["timeframe"])
         else:
-            combined = new_lb
-        combined.to_csv(lb_path, index=False)
-
-        # Markdown
-        md_path = "packages/strategy_foundry/results/leaderboard.md"
-        combined.head(20).to_markdown(md_path, index=False)
+            logger.info("Champion retained")
 
     # 7. Publish Signal
-    publish_signal()
+    publisher = SignalPublisher()
+    publisher.publish()
 
 if __name__ == "__main__":
-    main()
+    run()

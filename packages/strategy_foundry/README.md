@@ -1,39 +1,41 @@
 # Strategy Foundry
 
-A self-generating strategy lab that operates autonomously to find, backtest, and select trading strategies for NIFTY/SENSEX.
-
 ## Overview
+An aggressive intraday strategy lab that self-generates, backtests, ranks, and publishes signals for NIFTY/Indices.
 
-- **Generates** strategies using a grammar of indicators (Trend, Mean Reversion, Volatility).
-- **Backtests** using a daily vectorized engine with slippage and costs.
-- **Validates** using Walk-Forward Analysis (Out-of-Sample).
-- **Ranks** candidates using a composite score (Sharpe, Calmar, CAGR).
-- **Publishes** a `live_signal.json` artifact (NO real orders placed).
-
-## Directory Structure
-
-- `data/`: Data loading and caching (Yahoo Finance).
-- `factory/`: Strategy grammar and generation.
-- `backtest/`: Vectorized backtesting engine.
-- `selection/`: Ranking and champion promotion.
-- `results/`: Output artifacts (candidates, signals, leaderboard).
+## Architecture
+- **Factory**: Generates strategies using a defined grammar (Breakout, Trend, Mean Reversion).
+- **Backtest**: Walk-forward analysis on 5m/15m data with 1D sanity checks.
+- **Data**: Caches Yahoo Finance data (CSV).
+- **Live**: Publishes `live_signal.json` during market hours (Signal only, no auto-execution).
 
 ## Usage
 
-### Local Run
-
+### Run Manually
 ```bash
-# Fast Mode (fewer candidates)
-export FAST_MODE=1
+export PYTHONPATH=.
 python packages/strategy_foundry/run_hourly.py
 ```
 
-### CI/CD
+### Fast Mode
+```bash
+FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+```
 
-Runs hourly via GitHub Actions.
+## Outputs
+- `results/runs/<ts>/leaderboard.csv`: Rankings
+- `results/champions/current.json`: Current best strategy
+- `results/live_signal.json`: Live trading signal (if eligible)
 
-## Output
+## Gating
+Live signals are only published if:
+1. Champion Sharpe > 1.2
+2. Champion MaxDD < 20%
+3. Market is Open
+4. Data is fresh
 
-- `results/live_signal.json`: The latest trading signal (if eligible).
-- `results/leaderboard.md`: Current top strategies.
-- `results/runs/<timestamp>/`: Detailed run logs and candidates.
+## Dependencies
+- pandas, numpy
+- requests
+- structlog
+- pyyaml

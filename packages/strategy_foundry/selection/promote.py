@@ -1,24 +1,31 @@
-from typing import Dict, Any
+"""Promotion Logic"""
+from packages.strategy_foundry.selection.ranker import ChampionStore
 
 class Promoter:
-    def should_promote(self, challenger_score: float, challenger_metrics: Dict[str, Any],
-                       incumbent_score: float, incumbent_metrics: Dict[str, Any]) -> bool:
-        """
-        Promotion rule:
-        - New score >= Current score * 1.10 (10% improvement)
-        - OR Lower MaxDD materially (e.g. 20% relative reduction) AND score >= current score
-        """
-        if incumbent_score is None:
+    def __init__(self):
+        self.store = ChampionStore()
+
+    def check_promotion(self, challenger_metrics: dict, challenger_cand: dict) -> bool:
+        current = self.store.load_current()
+        if not current:
             return True
 
-        if challenger_score >= incumbent_score * 1.10:
+        curr_score = current["metrics"].get("score", 0)
+        chall_score = challenger_metrics.get("score", 0)
+
+        # Rule: Beat score by 10%
+        if chall_score > curr_score * 1.10:
             return True
 
-        # Check DD improvement
-        curr_dd = incumbent_metrics.get("max_drawdown", 1.0)
-        new_dd = challenger_metrics.get("max_drawdown", 1.0)
+        # Rule: Reduce DD by 5% absolute
+        curr_dd = current["metrics"].get("max_drawdown", 1.0)
+        chall_dd = challenger_metrics.get("max_drawdown", 1.0)
 
-        if new_dd < curr_dd * 0.8 and challenger_score >= incumbent_score:
-            return True
+        if curr_dd - chall_dd > 0.05:
+            # But Sharpe must not degrade meaningfully (e.g. > 10% drop)
+            curr_sharpe = current["metrics"].get("sharpe", 0)
+            chall_sharpe = challenger_metrics.get("sharpe", 0)
+            if chall_sharpe >= curr_sharpe * 0.9:
+                return True
 
         return False

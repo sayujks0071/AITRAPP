@@ -1,19 +1,34 @@
-foundry:
-  max_candidates: 80
+# Foundry Configuration
+
+defaults:
+  timeframes: ["5m", "15m"]
+  sanity_timeframe: "1D"
+
+  # Generation defaults
+  candidates_per_run: 80
   fast_mode_candidates: 15
-  timeframes: ["5m", "15m", "1d"]
-  data_days_intraday: 59
-  data_days_daily: 3650
-  folds: 4
+
+  # Backtest defaults
+  oos_folds: 4
   fast_mode_folds: 2
 
-execution:
-  slippage_bps: 2.0
-  brokerage_per_order: 20.0
-  spread_guard_bps: 1.0
+  # Cost defaults (conservative)
+  costs:
+    equity_intraday:
+      slippage_bps: 3
+      brokerage_flat: 20
+      tax_bps: 3
 
-selection:
-  min_trades_5m: 80
-  min_trades_15m: 40
-  max_drawdown: 0.30
-  min_profit_factor: 1.1
+  # Risk management
+  risk:
+    max_drawdown_limit: 30.0  # %
+    min_trades_oos: 10
+    profit_factor_min: 1.1
+
+  # Market Hours (IST)
+  market_open: "09:15"
+  market_close: "15:30"
+  intraday_square_off: "15:25"
+
+logging:
+  level: "INFO"

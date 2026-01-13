@@ -1,80 +1,63 @@
+"""Backtest Metrics and Metrics Calculation"""
 import pandas as pd
 import numpy as np
-from typing import Dict, Any
 
-def calculate_metrics(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> Dict[str, float]:
+def calculate_metrics(trades_df: pd.DataFrame, equity_curve: list) -> dict:
     if trades_df.empty:
         return {
-            "total_return": 0.0,
-            "cagr": 0.0,
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0,
             "sharpe": 0.0,
             "sortino": 0.0,
             "max_drawdown": 0.0,
             "calmar": 0.0,
-            "win_rate": 0.0,
-            "profit_factor": 0.0,
-            "trades": 0
+            "net_profit": 0.0
         }
 
-    # Simple Metrics based on trade returns
-    returns = trades_df["return_pct"]
+    # Basic
+    total_trades = len(trades_df)
+    wins = trades_df[trades_df["pnl_net"] > 0]
+    losses = trades_df[trades_df["pnl_net"] <= 0]
+    win_rate = len(wins) / total_trades
 
-    total_return = returns.sum() # Simple sum (log returns would be additive, pct returns arithmetic approx)
-    # Compounded: (1+r1)*(1+r2)...
-    total_ret_comp = (1 + returns).prod() - 1
+    gross_profit = wins["pnl_net"].sum()
+    gross_loss = abs(losses["pnl_net"].sum())
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else 99.0
 
-    wins = returns[returns > 0]
-    losses = returns[returns <= 0]
+    # Sharpe approximation: sqrt(TradesPerYear) * (Mean / Std)
+    # We estimate trades per year based on time span of trades
+    if "entry_time" in trades_df.columns:
+        times = pd.to_datetime(trades_df["entry_time"])
+        days = (times.max() - times.min()).days
+        if days < 1: days = 1
+        trades_per_year = total_trades * (365 / days)
+    else:
+        # Fallback if no dates
+        trades_per_year = total_trades # Assume 1 year data
 
-    win_rate = len(wins) / len(returns) if len(returns) > 0 else 0
+    avg_ret = trades_df["pnl_net"].mean()
+    std_ret = trades_df["pnl_net"].std()
 
-    avg_win = wins.mean() if not wins.empty else 0
-    avg_loss = losses.mean() if not losses.empty else 0
+    if std_ret > 0:
+        sharpe = (avg_ret / std_ret) * np.sqrt(trades_per_year)
+    else:
+        sharpe = 0.0
 
-    profit_factor = abs(wins.sum() / losses.sum()) if not losses.empty and losses.sum() != 0 else 999.0
+    # Drawdown
+    eq = np.array(equity_curve)
+    peaks = np.maximum.accumulate(eq)
+    dds = (peaks - eq) / peaks
+    max_dd = np.max(dds)
 
-    # To get Sharpe/Drawdown properly, we need a time series of equity.
-    # Reconstructing rough equity curve from trade exits (sparse)
-    # Ideally backtest engine returns daily equity.
-    # For MVP fast evaluation, trade stats might suffice for Ranker?
-    # No, Ranker wants Sharpe/MaxDD.
-
-    # We will approximate Sharpe from trade returns assuming 1 trade at a time.
-    # Annualized Sharpe = mean(ret) / std(ret) * sqrt(TradesPerYear) ?
-    # Or sqrt(252) if daily.
-
-    # Let's use the trade exit timestamps to determine duration.
-    start_date = trades_df["entry_time"].min()
-    end_date = trades_df["exit_time"].max()
-    duration_days = (end_date - start_date).days
-    years = max(duration_days / 365.25, 0.01)
-
-    cagr = (1 + total_ret_comp) ** (1 / years) - 1
-
-    # Estimate Drawdown from cumulative returns
-    cum_ret = (1 + returns).cumprod()
-    peak = cum_ret.cummax()
-    dd = (cum_ret - peak) / peak
-    max_dd = dd.min() # Negative value
-
-    # Sharpe (Trade based)
-    # Not strictly time-based Sharpe, but a proxy "Trade Sharpe"
-    # To be comparable to standard Sharpe (daily), we need daily returns.
-    # We will accept Trade Sharpe for now or 0 if single trade.
-
-    std_dev = returns.std()
-    sharpe = (returns.mean() / std_dev) * np.sqrt(len(returns)/years) if std_dev > 0 else 0
-
-    calmar = cagr / abs(max_dd) if max_dd != 0 else 0
+    calmar = (eq[-1]/100.0 - 1) / max_dd if max_dd > 0 else 0
 
     return {
-        "total_return": total_ret_comp,
-        "cagr": cagr,
-        "sharpe": sharpe,
-        "sortino": 0.0, # TODO
-        "max_drawdown": abs(max_dd),
-        "calmar": calmar,
+        "total_trades": total_trades,
         "win_rate": win_rate,
         "profit_factor": profit_factor,
-        "trades": len(trades_df)
+        "sharpe": sharpe,
+        "max_drawdown": max_dd,
+        "calmar": calmar,
+        "net_profit": eq[-1] - 100.0
     }

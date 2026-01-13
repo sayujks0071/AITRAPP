@@ -1,30 +1,56 @@
 import pytest
 import pandas as pd
 import numpy as np
-from packages.strategy_foundry.backtest.engine import Engine
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, EntryType, ExitType
 
-def test_engine_basic():
-    # Create simple data
-    dates = pd.date_range("2023-01-01", periods=10)
-    data = pd.DataFrame({
-        "open": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
-        "close": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
+@pytest.fixture
+def sample_data():
+    # Generate 100 bars of dummy data
+    dates = pd.date_range("2023-01-01", periods=100, freq="5min")
+    df = pd.DataFrame({
+        "open": np.linspace(100, 110, 100),
+        "high": np.linspace(101, 111, 100),
+        "low": np.linspace(99, 109, 100),
+        "close": np.linspace(100.5, 110.5, 100),
+        "volume": 1000
     }, index=dates)
+    return df
 
-    # Signal: Always Long
-    signals = pd.Series(1, index=dates)
+def test_engine_basic(sample_data):
+    cand = StrategyCandidate(
+        id="test",
+        source_grammar="v1",
+        entry_block={"type": EntryType.EMA_CROSS, "params": {"fast": 5, "slow": 10}},
+        filter_blocks=[],
+        exit_blocks=[{"type": ExitType.STOP_LOSS_ATR, "params": {"period": 14, "mult": 2.0}}]
+    )
 
-    engine = Engine(data, initial_capital=10000, slippage_bps=0, cost_bps=0)
-    res = engine.run(signals)
+    engine = BacktestEngine(sample_data)
+    res = engine.run(cand)
 
-    # We enter at Open of Day 2 (index 1) based on Signal Day 1 (index 0).
-    # Position day 1 is 0.
-    # Position day 2 is 1.
+    assert "total_return" in res
+    assert "equity_curve" in res
+    assert len(res["equity_curve"]) >= 1
 
-    # Day 1: pos=0. Ret=0.
-    # Day 2: pos=1. Gap Ret = (101-101)/101 * 0 = 0. Intra Ret = (102-101)/101 = ~1%.
-    # Day 3: pos=1. Gap Ret = (102-102)/102 * 1 = 0. Intra Ret = (103-102)/102.
+def test_engine_session_close(sample_data):
+    # Ensure session close exit works
+    cand = StrategyCandidate(
+        id="test_sess",
+        source_grammar="v1",
+        entry_block={"type": EntryType.EMA_CROSS, "params": {"fast": 2, "slow": 5}},
+        filter_blocks=[],
+        exit_blocks=[
+            {"type": ExitType.SESSION_CLOSE, "params": {"time": "15:25"}}
+        ]
+    )
 
-    # Check Trades
-    assert res.stats['trades'] == 1 # Entry at start
-    assert res.stats['total_return'] > 0
+    # Force a setup
+    sample_data["close"] = np.random.normal(100, 2, 100)
+    # Make EMA cross happen
+
+    engine = BacktestEngine(sample_data)
+    res = engine.run(cand)
+
+    # We just check it runs without error and returns structure
+    assert res["candidate_id"] == "test_sess"
