@@ -85,18 +85,26 @@ class KiteAuth:
     def persist_access_token(self, access_token: str):
         """
         Stores the token securely.
-        Prioritizes .env file as per repo convention for 'local encrypted file mechanism'.
+        Prioritizes SECRETS_FILE_PATH if set (e.g. for mounted secrets), otherwise .env.
         """
-        # 1. Update .env file
-        env_path = dotenv.find_dotenv()
-        if not env_path:
-            # Default to .env in current directory if not found
-            env_path = ".env"
+        # Check for dedicated secrets file (Option 1/3)
+        secrets_path = os.getenv("SECRETS_FILE_PATH")
 
-        logger.info(f"Persisting access token to {env_path}")
+        target_path = secrets_path
+        if not target_path:
+             # Fallback to standard .env
+            target_path = dotenv.find_dotenv()
+            if not target_path:
+                target_path = ".env"
 
-        # We use set_key which handles quoting and updates
-        dotenv.set_key(env_path, "KITE_ACCESS_TOKEN", access_token)
+        logger.info(f"Persisting access token to {target_path}")
 
-        # 2. Update current environment to reflect changes immediately in this process
-        os.environ["KITE_ACCESS_TOKEN"] = access_token
+        try:
+            # We use set_key which handles quoting and updates
+            dotenv.set_key(target_path, "KITE_ACCESS_TOKEN", access_token)
+
+            # Update current environment to reflect changes immediately
+            os.environ["KITE_ACCESS_TOKEN"] = access_token
+        except Exception as e:
+            logger.error(f"Failed to persist token to {target_path}: {e}")
+            raise
