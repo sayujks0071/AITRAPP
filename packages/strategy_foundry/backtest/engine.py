@@ -1,165 +1,239 @@
+"""Backtest Engine for Intraday Strategies"""
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List
+from typing import List, Dict, Any
 import structlog
-
-# Simple Backtest Engine for Strategy Foundry
-# Daily Timeframe
-# Execution: Next Bar Open
-# Vectorized/Loop Hybrid
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, EntryType, FilterType, ExitType
+from packages.strategy_foundry.adapters.core_indicators import IndicatorCalculator
 
 logger = structlog.get_logger(__name__)
 
-class BacktestResult:
-    def __init__(self, trades: pd.DataFrame, equity_curve: pd.Series, stats: Dict[str, Any]):
-        self.trades = trades
-        self.equity_curve = equity_curve
-        self.stats = stats
+class BacktestEngine:
+    def __init__(self, data: pd.DataFrame, costs_bps=5.0):
+        self.data = data.copy()
+        self.costs_bps = costs_bps
+        self.calculator = IndicatorCalculator()
 
-class Engine:
-    def __init__(self, data: pd.DataFrame, initial_capital: float = 100000.0,
-                 slippage_bps: float = 5.0, cost_bps: float = 10.0):
-        self.data = data
-        self.initial_capital = initial_capital
-        self.slippage = slippage_bps / 10000.0
-        self.cost = cost_bps / 10000.0
+    def _prepare_indicators(self, candidate: StrategyCandidate):
+        df = self.data.copy()
 
-    def run(self, signals: pd.Series) -> BacktestResult:
-        """
-        Run backtest.
-        signals: Series of target positions (-1, 0, 1) indexed by date.
-        Interpretation: Signal at index `t` executes at `Open` of `t+1`.
-        """
-        # Align signals with data
-        # Shift signals by 1 to represent "Action at Next Open"
-        # If signal[t] = 1, then position[t+1] should be 1.
+        # Helper for EMA
+        def ema(series, span):
+            return series.ewm(span=span, adjust=False).mean()
 
-        # Current Position held at END of day t
-        # If we execute at Open t, the position covers the day t.
-        # Wait. "Execution: next-bar open".
-        # Signal generated at Close of Day T.
-        # Trade happens at Open of Day T+1.
-        # So Position for Day T+1 is determined by Signal at T.
+        # Helper for ATR
+        def atr(high, low, close, period):
+            tr1 = high - low
+            tr2 = (high - close.shift(1)).abs()
+            tr3 = (low - close.shift(1)).abs()
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            return tr.rolling(period).mean()
 
-        # Let `pos` be the position held during the day.
-        # pos[t] comes from signal[t-1].
+        # Helper for RSI
+        def rsi(close, period):
+            delta = close.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+            rs = gain / loss
+            return 100 - (100 / (1 + rs))
 
-        pos = signals.shift(1).fillna(0)
+        # Entry logic preparation
+        e = candidate.entry_block
+        p = e["params"]
+        if e["type"] == EntryType.EMA_CROSS:
+            df[f"ema_{p['fast']}"] = ema(df["close"], p["fast"])
+            df[f"ema_{p['slow']}"] = ema(df["close"], p["slow"])
+        elif e["type"] == EntryType.RSI_OVERSOLD:
+            df["rsi"] = rsi(df["close"], p["period"])
+        elif e["type"] == EntryType.SUPERTREND:
+            pass
+        elif e["type"] == EntryType.DONCHIAN_BREAKOUT:
+            df["donchian_high"] = df["high"].rolling(p["period"]).max().shift(1)
+            df["donchian_low"] = df["low"].rolling(p["period"]).min().shift(1)
 
-        # Calculate Returns
-        # Strategy Return = Position[t] * (Close[t] - Open[t]) / Open[t] ??
-        # Or (Close[t] - Close[t-1])/Close[t-1]?
-        # If we enter at Open[t], our return for day t is (Close[t] - Open[t]).
-        # But we also hold overnight?
-        # Usually strategy positions are "Target Position".
-        # If pos[t] == pos[t-1], we hold.
-        # Return is (Close[t] - Close[t-1]) / Close[t-1].
+        # Exits preparation
+        for x in candidate.exit_blocks:
+            if x["type"] == ExitType.STOP_LOSS_ATR:
+                df["atr"] = atr(df["high"], df["low"], df["close"], x["params"]["period"])
 
-        # But if we change position at Open[t]?
-        # Then on Day T:
-        # We hold pos[t] from Open[t] to Close[t].
-        # Return = pos[t] * (Close[t] - Open[t]) / Open[t] ... plus gap?
-        # No, if we execute at Open, we capture Open->Close movement.
-        # What about Close[t-1] -> Open[t] gap?
-        # That belongs to pos[t-1].
+        # Filters preparation
+        for f in candidate.filter_blocks:
+            if f["type"] == FilterType.REGIME_SMA:
+                df["regime_sma"] = df["close"].rolling(f["params"]["period"]).mean()
 
-        # Accurate PnL:
-        # Day T:
-        # Gap PnL = pos[t-1] * (Open[t] - Close[t-1])
-        # Intraday PnL = pos[t] * (Close[t] - Open[t])
-        # Total PnL = Gap + Intraday
-        # Total Return = PnL / Close[t-1]
+        return df
 
-        # Let's vectorize this.
+    def run(self, candidate: StrategyCandidate) -> Dict[str, Any]:
+        df = self._prepare_indicators(candidate)
 
-        opens = self.data['open']
-        closes = self.data['close']
-        prev_closes = closes.shift(1)
-        prev_pos = pos.shift(1).fillna(0)
+        # State
+        position = 0 # 1 or 0 (long only)
+        entry_price = 0.0
+        trades = []
+        equity = [100.0]
 
-        # Gap return
-        gap_ret = (opens - prev_closes) / prev_closes * prev_pos
+        # 1. Entry Signals
+        entry_signal = pd.Series(False, index=df.index)
 
-        # Intraday return
-        intra_ret = (closes - opens) / opens * pos
+        e = candidate.entry_block
+        p = e["params"]
 
-        # Note: Denominators are approximations of capital base.
-        # Strictly: PnL / Capital.
-        # Assume 100% allocation.
+        if e["type"] == EntryType.EMA_CROSS:
+            fast = df[f"ema_{p['fast']}"]
+            slow = df[f"ema_{p['slow']}"]
+            entry_signal = (fast > slow) & (fast.shift(1) <= slow.shift(1))
+        elif e["type"] == EntryType.RSI_OVERSOLD:
+            entry_signal = (df["rsi"] < p["threshold"])
+        elif e["type"] == EntryType.DONCHIAN_BREAKOUT:
+            entry_signal = (df["close"] > df["donchian_high"])
 
-        # Combine
-        # This is approximation (sum of logs or simple sum for small returns).
-        # Let's use simple returns.
-        # Strategy Daily Return approx = gap_ret + intra_ret
-        # (ignoring compounding within the day for gap+intra)
+        # Apply filters
+        for f in candidate.filter_blocks:
+            if f["type"] == FilterType.REGIME_SMA:
+                mask = df["close"] > df["regime_sma"]
+                entry_signal = entry_signal & mask
 
-        strat_ret = gap_ret.fillna(0) + intra_ret.fillna(0)
+        # 2. Iteration for Exits
+        dates = df.index
+        opens = df["open"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        closes = df["close"].values
+        entry_sigs = entry_signal.values
 
-        # Costs
-        # Trades occur when pos[t] != pos[t-1]
-        # We trade at Open[t].
-        trades_mask = (pos != prev_pos)
+        atr_vals = df["atr"].values if "atr" in df.columns else np.zeros(len(df))
 
-        # Cost penalty: applied on turnover
-        # Turnover value approx = abs(pos - prev_pos) * 1.0 (since 100% equity)
-        turnover = abs(pos - prev_pos)
+        # Exit params
+        atr_stop_mult = 0
+        for x in candidate.exit_blocks:
+            if x["type"] == ExitType.STOP_LOSS_ATR:
+                atr_stop_mult = x["params"]["mult"]
 
-        # Cost deduction
-        # slippage + commission
-        total_cost_bps = self.slippage + self.cost
-        cost_deduction = turnover * total_cost_bps
+        current_stop = 0.0
+        entry_idx = 0
 
-        net_ret = strat_ret - cost_deduction
+        session_end_strs = [x["params"]["time"] for x in candidate.exit_blocks if x["type"] == ExitType.SESSION_CLOSE]
+        session_end_hm = int(session_end_strs[0].replace(":", "")) if session_end_strs else 1525
 
-        # Equity Curve
-        equity_curve = (1 + net_ret).cumprod() * self.initial_capital
+        for i in range(1, len(df)):
+            date = dates[i]
+            # Market check: 15:25
+            curr_hm = date.hour * 100 + date.minute
+            is_session_end = curr_hm >= session_end_hm
 
-        # Generate Trade List
-        trades_list = []
-        # Identify trade entry/exits
-        # This is bit harder to vectorise perfectly for trade table, but we can loop the transitions
-        trade_indices = trades_mask[trades_mask].index
+            # Check Exit
+            if position == 1:
+                exit_price = 0.0
+                reason = ""
 
-        current_trade = {}
+                # SL Check (Low penetrates stop)
+                if lows[i] < current_stop:
+                    exit_price = current_stop
+                    if opens[i] < current_stop:
+                        exit_price = opens[i]
+                    reason = "SL"
+                # Session Close
+                elif is_session_end:
+                    exit_price = closes[i]
+                    reason = "Session"
 
-        # Simple loop for trade stats
-        for d in trade_indices:
-            p_curr = pos[d]
-            p_prev = prev_pos[d]
+                if exit_price > 0:
+                    # Execute Exit
+                    pnl_pct = (exit_price - entry_price) / entry_price
+                    # Costs
+                    cost_pct = (self.costs_bps * 2) / 10000.0
+                    net_pnl = pnl_pct - cost_pct
 
-            # Close previous trade
-            if p_prev != 0:
-                # We are closing or flipping
-                # Exit Price = Open[d]
-                pass
+                    trades.append({
+                        "entry_time": dates[entry_idx],
+                        "exit_time": date,
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "pnl_net": net_pnl,
+                        "reason": reason
+                    })
+                    position = 0
+                    equity.append(equity[-1] * (1 + net_pnl))
+                    continue # Next bar
 
-        # Actually, for "trades table", we just need to list actions.
-        # Or matched trades (Entry -> Exit).
-        # Let's stick to vector stats for metrics first, as table is secondary for now.
+            # Check Entry (if flat and not session end)
+            if position == 0 and not is_session_end:
+                if entry_sigs[i-1]: # Signal on CLOSE of prev bar -> Enter OPEN of current
+                    position = 1
+                    entry_price = opens[i]
+                    entry_idx = i
 
-        stats = {
-            "total_return": (equity_curve.iloc[-1] / self.initial_capital) - 1 if not equity_curve.empty else 0,
-            "cagr": self._cagr(equity_curve),
-            "max_drawdown": self._max_dd(equity_curve),
-            "sharpe": self._sharpe(net_ret),
-            "trades": trades_mask.sum()
+                    # Set Initial Stop
+                    if atr_stop_mult > 0:
+                        vol = atr_vals[i-1]
+                        if np.isnan(vol): vol = entry_price * 0.01
+                        current_stop = entry_price - (vol * atr_stop_mult)
+                    else:
+                        current_stop = entry_price * 0.99
+
+        # Stats
+        df_trades = pd.DataFrame(trades)
+        final_equity = equity[-1]
+
+        if not df_trades.empty:
+            win_rate = len(df_trades[df_trades["pnl_net"] > 0]) / len(df_trades)
+            avg_ret = df_trades["pnl_net"].mean()
+
+            # Determine annualized factor based on data freq
+            # Assume 15m (25 bars/day), 5m (75 bars/day), 1D (1 bar/day)
+            # Default to 5m logic (75*252) if unknown, but better to detect
+            freq_mins = pd.Timedelta(dates[1] - dates[0]).seconds / 60
+            if freq_mins > 1400: # Daily
+                bars_per_year = 252
+            elif freq_mins > 10: # 15m (approx)
+                bars_per_year = 25 * 252
+            else: # 5m or less
+                bars_per_year = 75 * 252
+
+            # Calculate Sharpe correctly using per-trade returns is WRONG usually.
+            # We should construct a daily equity curve and calculate Daily Sharpe.
+            # But constructing daily curve from trade list is complex in this lightweight engine.
+            # Approximation: sqrt(TradesPerYear) * (MeanTrade / StdTrade)
+            # TradesPerYear = TotalTrades / (TotalDays / 252)
+            total_days = (dates[-1] - dates[0]).days
+            if total_days < 1: total_days = 1
+            trades_per_year = len(df_trades) * (365 / total_days) # Calendar days approx
+
+            std_ret = df_trades["pnl_net"].std()
+            if std_ret > 0:
+                sharpe = (avg_ret / std_ret) * np.sqrt(trades_per_year)
+            else:
+                sharpe = 0
+
+            # Max DD
+            eq_arr = np.array(equity)
+            peaks = np.maximum.accumulate(eq_arr)
+            dds = (peaks - eq_arr) / peaks
+            max_dd = np.max(dds)
+
+            cum_ret = (final_equity - 100.0)/100.0
+
+            # Profit Factor
+            gross_win = df_trades[df_trades["pnl_net"] > 0]["pnl_net"].sum()
+            gross_loss = abs(df_trades[df_trades["pnl_net"] <= 0]["pnl_net"].sum())
+            profit_factor = gross_win / gross_loss if gross_loss > 0 else 99.0
+
+        else:
+            win_rate = 0.0
+            avg_ret = 0.0
+            sharpe = 0.0
+            max_dd = 0.0
+            cum_ret = 0.0
+            profit_factor = 0.0
+
+        return {
+            "candidate_id": candidate.id,
+            "total_trades": len(df_trades),
+            "trades": len(df_trades),
+            "win_rate": win_rate,
+            "sharpe": sharpe,
+            "max_drawdown": max_dd,
+            "profit_factor": profit_factor,
+            "total_return": cum_ret,
+            "equity_curve": equity
         }
-
-        return BacktestResult(pd.DataFrame(), equity_curve, stats)
-
-    def _cagr(self, equity: pd.Series) -> float:
-        if equity.empty: return 0.0
-        days = (equity.index[-1] - equity.index[0]).days
-        if days <= 0: return 0.0
-        total_ret = equity.iloc[-1] / equity.iloc[0]
-        return (total_ret ** (365.0/days)) - 1
-
-    def _max_dd(self, equity: pd.Series) -> float:
-        if equity.empty: return 0.0
-        peak = equity.cummax()
-        dd = (equity - peak) / peak
-        return abs(dd.min())
-
-    def _sharpe(self, returns: pd.Series) -> float:
-        if returns.empty or returns.std() == 0: return 0.0
-        return np.sqrt(252) * returns.mean() / returns.std()

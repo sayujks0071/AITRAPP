@@ -1,30 +1,23 @@
-# Deployment & Live Signals
-
-## Philosophy
-
-Strategy Foundry is **Passive**. It generates signals but does not execute them.
-Live execution requires a separate, explicit bridge in `packages/core` which is currently **Disabled**.
+# Deployment & Live Bridge
 
 ## Signal Artifact
+The foundry publishes `packages/strategy_foundry/results/live_signal.json`.
 
-The output is `packages/strategy_foundry/results/live_signal.json`.
-
+Schema:
 ```json
 {
-  "timestamp_ist": "2023-10-27T09:15:00",
-  "champion_id": "abc123hash",
-  "instrument": "NIFTY",
-  "signal": 1,
-  "rule_summary": "Trend(EMA) + Exit(ATR)",
+  "timestamp_ist": "2023-10-27T10:15:00.123456",
+  "champion_id": "a1b2c3d4",
+  "signal": 1, // 1=Long, 0=Flat, -1=Short (if enabled)
   "status": "OK"
 }
 ```
 
-## Gating
+## Live Execution (Optional)
+To enable live execution:
+1. Ensure Core system is running.
+2. Set `ENABLE_LIVE=true` in environment.
+3. Create `approvals/ALLOW_LIVE.txt` file.
+4. Implement a bridge script that reads `live_signal.json` and calls Core API.
 
-To enable any form of live usage (future):
-1. Env var `ENABLE_LIVE=true`
-2. File `approvals/ALLOW_LIVE.txt` must exist.
-3. Core system must implement a reader for this JSON.
-
-Currently, **NO** order placement code exists in this module.
+**Note**: By default, this package is READ-ONLY and does not place orders.

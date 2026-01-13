@@ -1,19 +1,32 @@
+"""Backtest Sanity Checks"""
+import pandas as pd
 from typing import Dict, Any
 
-def check_sanity(metrics: Dict[str, Any], min_trades: int = 30, max_dd: float = 0.35, min_positive_folds: int = 2) -> bool:
-    if not metrics.get("valid", False):
+def sanity_check_candidate(metrics: Dict[str, Any], fast_mode: bool = False) -> bool:
+    # 1. Trade Count
+    min_trades = 10 if fast_mode else 30
+    if metrics["total_trades"] < min_trades:
         return False
 
-    agg = metrics["metrics"]
-    if agg["trades"] < min_trades:
+    # 2. Max DD
+    if metrics["max_drawdown"] > 0.35: # 35%
         return False
 
-    if agg["max_drawdown"] > max_dd:
+    # 3. Profit Factor
+    if metrics["profit_factor"] < 1.05:
         return False
 
-    # Check folds
-    pos_folds = sum(1 for f in metrics["fold_metrics"] if f["total_return"] > 0)
-    if pos_folds < min_positive_folds:
-        return False
+    return True
+
+def daily_sanity_overlay(engine_cls, candidate, daily_data: pd.DataFrame) -> bool:
+    """Run candidate on Daily data to check for catastrophic failure"""
+    if daily_data.empty: return True # Cannot check
+
+    eng = engine_cls(daily_data)
+    res = eng.run(candidate)
+
+    # If daily performance is terrible, reject
+    if res["sharpe"] < -0.5: return False
+    if res["max_drawdown"] > 0.45: return False
 
     return True

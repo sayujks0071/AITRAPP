@@ -1,11 +1,14 @@
+# Instrument Mapping
+# Maps research symbols to paper/live proxies
+
 research:
   NIFTY: "^NSEI"
   SENSEX: "^BSESN"
 
 paper_proxy:
-  NIFTY: "NIFTYBEES"
-  SENSEX: "SENSEXBEES"
+  NIFTY: "NIFTYBEES.NS"  # Yahoo symbol for ETF
+  SENSEX: "SETFNIF50.NS" # Placeholder/Proxy
 
 live_proxy:
-  NIFTY: "NIFTY FUT"
-  SENSEX: "SENSEX FUT"
+  NIFTY: "NIFTY 50"
+  SENSEX: "SENSEX"

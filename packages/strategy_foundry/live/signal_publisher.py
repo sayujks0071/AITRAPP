@@ -1,151 +1,127 @@
+"""Live Signal Publisher"""
 import json
-import os
+import structlog
 from datetime import datetime
-import pandas as pd
-from packages.strategy_foundry.adapters.core_market_hours import is_market_open
+from pathlib import Path
+from packages.strategy_foundry.adapters.core_market_hours import FoundryMarketHours
 from packages.strategy_foundry.selection.ranker import ChampionStore
-from packages.strategy_foundry.factory.grammar import StrategyConfig
-from packages.strategy_foundry.factory.generator import StrategyImpl
-from packages.strategy_foundry.data.loader import load_data
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.factory.grammar import EntryType
 
-SIGNAL_FILE = "packages/strategy_foundry/results/live_signal.json"
+logger = structlog.get_logger(__name__)
 
-def publish_signal():
-    """
-    Load champion, run on latest data, publish signal.
-    """
-    os.makedirs(os.path.dirname(SIGNAL_FILE), exist_ok=True)
+class SignalPublisher:
+    def __init__(self):
+        self.market = FoundryMarketHours()
+        self.store = ChampionStore()
+        self.loader = DataLoader()
+        self.output_path = Path("packages/strategy_foundry/results/live_signal.json")
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check Market Hours
-    # if not is_market_open():
-    #     _write_status("SKIPPED", "Market Closed")
-    #     return
-
-    # For MVP, we might run this in CI which runs hourly.
-    # CI might run when market is closed?
-    # Requirement: "If market open AND champion live-eligible..."
-    # If closed, write SKIPPED.
-
-    # However, to test, I might want to force it.
-    # But sticking to requirements.
-    # But wait, CI runs hourly 24/7.
-    pass
-
-    store = ChampionStore()
-
-    # We execute for both NIFTY and SENSEX?
-    # Usually we have one champion per instrument?
-    # Let's support NIFTY for now.
-
-    instruments = ["NIFTY", "SENSEX"]
-    signals = []
-
-    for symbol in instruments:
-        champ = store.get_current_champion(symbol)
-
-        if not champ:
-            # No champion
-            continue
-
-        # Check eligibility (already checked during promotion, but safe to check flag)
-        # Assuming champ is eligible if it's in current.
-
-        if not is_market_open():
-             _write_status("SKIPPED", "Market Closed")
-             return
-
-        # Load Data
-        df = load_data(symbol)
-        if df is None or df.empty:
-            _write_status("SKIPPED", f"No data for {symbol}")
+    def publish(self):
+        # 1. Check Market Hours
+        if not self.market.is_market_open():
+            self._write_skipped("Market Closed")
             return
 
-        # Run Strategy
-        # Reconstruct config
-        config = StrategyConfig(champ['name'], champ['blocks'], champ['params'])
-        impl = StrategyImpl(config)
+        # 2. Load Champion
+        champ = self.store.load_current()
+        if not champ:
+            self._write_skipped("No Champion")
+            return
 
-        # Get positions
-        # We need to run on recent history to get signal for TODAY.
-        # "Signal ... execute next bar open".
-        # We need signal generated at close of last bar?
-        # If we run hourly DURING the day, we don't have today's close yet.
-        # But we might have intraday bars?
-        # Requirement says "Daily (1D)".
-        # So we only generate signal once a day after close?
-        # Or before open?
-        # If we run hourly, and data is daily candles...
-        # We only have Yesterday's Close.
-        # So we generate signal for Today's Open based on Yesterday's Close.
-        # This signal is valid for whole day Today.
+        # 3. Check Eligibility (Sanity)
+        metrics = champ["metrics"]
+        if metrics["sharpe"] < 1.2 or metrics["max_drawdown"] > 0.20:
+            self._write_skipped(f"Champion ineligible: Sharpe={metrics['sharpe']:.2f} DD={metrics['max_drawdown']:.2f}")
+            return
 
-        # So: Load daily data (up to Yesterday).
-        # Generate Signal.
-        # This signal is what we publish.
+        # 4. Generate Signal
+        symbol = "NIFTY"
+        timeframe = champ["timeframe"]
 
-        # Wait, if we fetch Yahoo data during trading day, does it include today's incomplete candle?
-        # Yahoo often gives incomplete candle.
-        # We should probably filter for completed candles or handle it.
-        # Safe bet: Use data up to yesterday.
+        df = self.loader.get_data(symbol, timeframe, force_refresh=True)
+        if df.empty or len(df) < 50:
+            self._write_skipped("No Data")
+            return
 
-        # Yahoo 'period2=now' gives incomplete today.
-        # We should probably drop the last row if date is today?
-        # Or use it as 'current price'?
+        from packages.strategy_foundry.factory.grammar import StrategyCandidate
+        c_dict = champ["candidate"]
+        candidate = StrategyCandidate(
+            id=c_dict["id"],
+            source_grammar=c_dict["source_grammar"],
+            entry_block=c_dict["entry"],
+            filter_blocks=c_dict["filters"],
+            exit_blocks=c_dict["exits"]
+        )
 
-        # Let's assume we use last FULL bar.
-        # If today is T, we use T-1 close to signal for T Open.
-        # So signal is constant for day T.
+        engine = BacktestEngine(df)
+        df_ind = engine._prepare_indicators(candidate)
 
-        # Calculate
-        positions = impl.generate_positions(df)
+        # Check Signal on last COMPLETED bar.
+        # Yahoo live data includes the forming candle as the last row.
+        # We look at [-2] for the last closed bar signal, to execute on [-1] (current open).
+        # Or more accurately: Strategy checks signal at Close[-1], enters Open[0].
+        # In live terms: We need signal from Close[FinishedBar].
+        # If Yahoo's last row is [Forming], then [FinishedBar] is [-2].
+        # If Yahoo's last row is [Finished] (e.g. at 09:20 we get 09:15 bar), then it is [-1].
+        # But Yahoo usually provides "realtime" forming bar.
 
-        # Signal for "Next Open" is the last value of positions series?
-        # positions[t] is the target position for day t (entered at Open t).
-        # No, in my engine logic:
-        # pos[t] comes from signal[t-1].
-        # `generate_positions` returns the TARGET position series.
-        # If `positions` has index T, it means "On day T, we want to be in this position".
-        # So we look at `positions.iloc[-1]`.
+        # Safe approach: Check signal on [-2] and [-3] to detect crossover completed at [-2].
+        last_completed_idx = -2
+        prev_idx = -3
 
-        target_pos = int(positions.iloc[-1])
+        last_row = df_ind.iloc[last_completed_idx]
+        prev_row = df_ind.iloc[prev_idx]
 
-        # Prepare Signal Object
-        sig = {
+        # Evaluate Entry Logic
+        entry = False
+        e = candidate.entry_block
+        p = e["params"]
+
+        if e["type"] == EntryType.EMA_CROSS:
+            fast = last_row[f"ema_{p['fast']}"]
+            slow = last_row[f"ema_{p['slow']}"]
+            p_fast = prev_row[f"ema_{p['fast']}"]
+            p_slow = prev_row[f"ema_{p['slow']}"]
+            # Cross UP
+            entry = (fast > slow) and (p_fast <= p_slow)
+
+        elif e["type"] == EntryType.RSI_OVERSOLD:
+            entry = last_row["rsi"] < p["threshold"]
+
+        elif e["type"] == EntryType.DONCHIAN_BREAKOUT:
+            entry = last_row["close"] > last_row["donchian_high"]
+
+        # Apply Filters (on last completed bar)
+        for f in candidate.filter_blocks:
+            # Simplified regime check (e.g. SMA)
+            if "regime_sma" in last_row:
+                if last_row["close"] <= last_row["regime_sma"]:
+                    entry = False
+
+        signal_val = 1 if entry else 0
+
+        out = {
             "timestamp_ist": datetime.now().isoformat(),
-            "champion_id": champ['id'],
+            "champion_id": candidate.id,
+            "timeframe": timeframe,
             "instrument": symbol,
-            "signal": target_pos,
-            "rule_summary": champ['rule_summary'],
-            "risk": {"note": "See strategy params"},
-            "status": "OK"
+            "signal": signal_val,
+            "status": "OK",
+            "rule_summary": str(c_dict),
+            "data_timestamp": str(last_row.name)
         }
-        signals.append(sig)
 
-    if not signals:
-         _write_status("SKIPPED", "No champions or data")
-         return
+        with open(self.output_path, "w") as f:
+            json.dump(out, f, indent=2)
 
-    # Write aggregated or single?
-    # Requirement: "live_signal.json". Schema shows single object?
-    # "instrument": "NIFTY|SENSEX".
-    # Maybe list? Or file per instrument?
-    # Schema seems to imply single object.
-    # Let's write the first one or valid one.
-    # Or maybe list of objects.
-    # User schema: { ... "instrument": ... }
-    # Let's write a list if multiple, or just NIFTY as primary.
-    # "NIFTY|SENSEX" suggests one of them.
-    # I'll default to NIFTY.
-
-    final_sig = signals[0]
-
-    with open(SIGNAL_FILE, 'w') as f:
-        json.dump(final_sig, f, indent=2)
-
-def _write_status(status, reason):
-    with open(SIGNAL_FILE, 'w') as f:
-        json.dump({
+    def _write_skipped(self, reason):
+        out = {
             "timestamp_ist": datetime.now().isoformat(),
-            "status": status,
+            "status": "SKIPPED",
             "reason": reason
-        }, f, indent=2)
+        }
+        with open(self.output_path, "w") as f:
+            json.dump(out, f, indent=2)
