@@ -3,119 +3,101 @@ import random
 import hashlib
 import json
 
-class StrategyConfig:
-    def __init__(self, name: str, blocks: List[Dict[str, Any]], params: Dict[str, Any]):
-        self.name = name
-        self.blocks = blocks
-        self.params = params
-
-    def get_id(self) -> str:
-        # Stable ID based on blocks and params
-        s = json.dumps({"blocks": self.blocks, "params": self.params}, sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()
-
-    def to_dict(self):
-        return {
-            "id": self.get_id(),
-            "name": self.name,
-            "blocks": self.blocks,
-            "params": self.params,
-            "rule_summary": self.describe()
-        }
-
-    def describe(self) -> str:
-        # Human readable summary
-        desc = []
-        for b in self.blocks:
-            desc.append(f"{b['type']}({b.get('subtype', '')})")
-        return " + ".join(desc)
-
 class Grammar:
-    # Trend: EMA/SMA cross, ADX filter, Supertrend, Donchian breakout
-    # Mean reversion: RSI reversion, Bollinger mean reversion
-    # Volatility/risk: ATR stop, time stop, trailing stop, max bars in trade
-    # Filters: regime filter, volatility filter, session filter
+    """
+    Strategy Grammar: defines valid blocks and how to compose them.
+    """
 
-    TREND_BLOCKS = [
-        {"type": "trend", "subtype": "ema_cross", "param_keys": ["ema_fast", "ema_slow"]},
-        {"type": "trend", "subtype": "supertrend", "param_keys": ["st_period", "st_multiplier"]},
-        {"type": "trend", "subtype": "donchian", "param_keys": ["donchian_period"]},
-    ]
-
-    MEAN_REV_BLOCKS = [
-        {"type": "mean_rev", "subtype": "rsi", "param_keys": ["rsi_period", "rsi_oversold", "rsi_overbought"]},
-        {"type": "mean_rev", "subtype": "bollinger", "param_keys": ["bb_period", "bb_std"]},
-    ]
-
-    EXIT_BLOCKS = [
-        {"type": "exit", "subtype": "atr_stop", "param_keys": ["atr_period", "stop_atr_mult"]},
-        {"type": "exit", "subtype": "time_stop", "param_keys": ["max_bars"]},
-        {"type": "exit", "subtype": "trailing_stop", "param_keys": ["trail_percent"]},
-    ]
-
-    FILTERS = [
-        {"type": "filter", "subtype": "adx", "param_keys": ["adx_period", "adx_threshold"]},
-        {"type": "filter", "subtype": "long_only", "param_keys": []} # Global filter often
-    ]
+    BLOCKS = {
+        "trend": ["ema_cross", "supertrend", "donchian_breakout"],
+        "mean_reversion": ["rsi_reversion", "bollinger_reversion"],
+        "filter": ["adx_filter", "regime_filter"],
+        "exit": ["atr_stop", "time_stop"]
+    }
 
     @staticmethod
-    def get_random_strategy() -> StrategyConfig:
-        # Compose 2-4 blocks
-        # Usually 1 Entry (Trend or MeanRev) + 1 Exit + Optional Filter
+    def generate_random_strategy() -> Dict[str, Any]:
+        """
+        Generates a random strategy configuration.
+        Structure:
+        {
+           "id": "hash",
+           "entry": { type: "trend"|"mean_rev", name: "...", params: {...} },
+           "filter": { name: "...", params: {...} } (optional),
+           "exit": { name: "...", params: {...} }
+        }
+        """
+        # Pick a style
+        style = random.choice(["trend", "mean_reversion"])
+        entry_name = random.choice(Grammar.BLOCKS[style])
 
-        blocks = []
-        params = {}
+        # Pick a filter (50% chance)
+        use_filter = random.random() > 0.5
+        filter_conf = None
+        if use_filter:
+            filter_name = random.choice(Grammar.BLOCKS["filter"])
+            filter_conf = {"name": filter_name, "params": Grammar.get_random_params(filter_name)}
 
-        # Decide Entry Type
-        entry_type = random.choice(["trend", "mean_rev"])
+        # Pick an exit
+        exit_name = random.choice(Grammar.BLOCKS["exit"])
+        exit_conf = {"name": exit_name, "params": Grammar.get_random_params(exit_name)}
 
-        if entry_type == "trend":
-            b = random.choice(Grammar.TREND_BLOCKS)
-            blocks.append(b)
-            # Add filter sometimes
-            if random.random() < 0.3:
-                f = random.choice(Grammar.FILTERS)
-                blocks.append(f)
-        else:
-            b = random.choice(Grammar.MEAN_REV_BLOCKS)
-            blocks.append(b)
+        entry_conf = {"type": style, "name": entry_name, "params": Grammar.get_random_params(entry_name)}
 
-        # Always add exit
-        e = random.choice(Grammar.EXIT_BLOCKS)
-        blocks.append(e)
-
-        # Generate Params
-        for b in blocks:
-            for k in b["param_keys"]:
-                params[k] = Grammar.sample_param(k)
-
-        # Name
-        name = f"Auto_{entry_type}_{len(blocks)}blocks"
-
-        return StrategyConfig(name, blocks, params)
-
-    @staticmethod
-    def sample_param(key: str):
-        # Define ranges
-        ranges = {
-            "ema_fast": [9, 10, 12, 15, 20],
-            "ema_slow": [20, 30, 50, 100, 200],
-            "st_period": [7, 10, 14],
-            "st_multiplier": [1.5, 2.0, 3.0, 4.0],
-            "donchian_period": [10, 20, 40, 55],
-            "rsi_period": [7, 14, 21],
-            "rsi_oversold": [20, 25, 30, 35],
-            "rsi_overbought": [65, 70, 75, 80],
-            "bb_period": [15, 20, 25],
-            "bb_std": [1.5, 2.0, 2.5],
-            "atr_period": [10, 14, 20],
-            "stop_atr_mult": [1.0, 1.5, 2.0, 3.0],
-            "max_bars": [3, 5, 10, 20],
-            "trail_percent": [0.01, 0.02, 0.03, 0.05],
-            "adx_period": [14],
-            "adx_threshold": [20, 25, 30]
+        strategy = {
+            "entry": entry_conf,
+            "filter": filter_conf,
+            "exit": exit_conf
         }
 
-        if key in ranges:
-            return random.choice(ranges[key])
-        return 0
+        # Generate stable ID
+        s_str = json.dumps(strategy, sort_keys=True)
+        s_id = hashlib.md5(s_str.encode()).hexdigest()[:12]
+        strategy["id"] = s_id
+
+        return strategy
+
+    @staticmethod
+    def get_random_params(block_name: str) -> Dict[str, Any]:
+        """Returns random parameters for a given block."""
+        if block_name == "ema_cross":
+            # Fast < Slow
+            fast = random.randint(5, 50)
+            slow = random.randint(fast + 10, 200)
+            return {"fast": fast, "slow": slow}
+        elif block_name == "supertrend":
+            return {"period": random.choice([7, 10, 14]), "multiplier": random.choice([2.0, 3.0, 4.0])}
+        elif block_name == "donchian_breakout":
+            return {"period": random.randint(10, 60)}
+        elif block_name == "rsi_reversion":
+            return {"period": 14, "buy_threshold": random.randint(20, 40), "sell_threshold": random.randint(60, 80)}
+        elif block_name == "bollinger_reversion":
+            return {"period": 20, "std": 2.0}
+        elif block_name == "adx_filter":
+            return {"threshold": random.randint(20, 30)}
+        elif block_name == "regime_filter":
+            return {"ma_period": 200}
+        elif block_name == "atr_stop":
+            return {"multiplier": random.choice([1.0, 1.5, 2.0, 3.0]), "period": 14}
+        elif block_name == "time_stop":
+            return {"days": random.randint(5, 20)}
+        return {}
+
+class StrategyGenerator:
+    def __init__(self, seed: int = None):
+        if seed:
+            random.seed(seed)
+
+    def generate_candidates(self, n: int) -> List[Dict[str, Any]]:
+        candidates = []
+        seen = set()
+
+        attempts = 0
+        while len(candidates) < n and attempts < n * 5:
+            strat = Grammar.generate_random_strategy()
+            if strat["id"] not in seen:
+                seen.add(strat["id"])
+                candidates.append(strat)
+            attempts += 1
+
+        return candidates

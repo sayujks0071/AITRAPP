@@ -1,109 +1,94 @@
-import pandas as pd
-from typing import Dict, Optional, List
-import requests
 import os
-from datetime import datetime
-import io
-import pytz
+import csv
+import time
+from datetime import datetime, timedelta
+import requests
+import pandas as pd
+import structlog
 
-CACHE_DIR = "packages/strategy_foundry/data/cache"
-IST = pytz.timezone("Asia/Kolkata")
+logger = structlog.get_logger(__name__)
 
-# Symbol Map
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
 SYMBOL_MAP = {
     "NIFTY": "^NSEI",
     "SENSEX": "^BSESN"
 }
 
-def load_data(symbol: str, lookback_days: int = 365*2) -> pd.DataFrame:
+def get_historical_data(symbol: str, days: int = 3650) -> pd.DataFrame:
     """
-    Load data for a symbol (NIFTY/SENSEX).
-    Checks cache first, then downloads if stale/missing.
-    Returns DataFrame with Index=Date (IST), columns=[open, high, low, close, volume]
+    Get historical daily data for a symbol (NIFTY or SENSEX).
+    Checks cache first, then downloads from Yahoo Finance.
+    Returns DataFrame with Index=Date (Asia/Kolkata) and columns: open, high, low, close, volume.
     """
-    y_symbol = SYMBOL_MAP.get(symbol, symbol)
-    cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
+    symbol_yahoo = SYMBOL_MAP.get(symbol, symbol)
+    cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
 
-    df = _load_from_cache(cache_path)
-    if df is not None and _is_fresh(df):
-        return df
+    needs_download = True
+    if os.path.exists(cache_file):
+        mtime = os.path.getmtime(cache_file)
+        if time.time() - mtime < 4 * 3600: # 4 hours
+            needs_download = False
 
-    # Download
-    print(f"Downloading fresh data for {symbol}...")
-    df = _download_yahoo(y_symbol, lookback_days)
+    df = None
+    if not needs_download:
+        try:
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            logger.info("Loaded from cache", symbol=symbol, rows=len(df))
+        except Exception:
+            needs_download = True
+
+    if needs_download:
+        logger.info("Downloading fresh data", symbol=symbol)
+        try:
+            df = download_yahoo_data(symbol_yahoo, days)
+            df.to_csv(cache_file)
+        except Exception as e:
+            logger.error("Download failed, trying cache fallback", error=str(e))
+            if os.path.exists(cache_file):
+                df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            else:
+                raise
+
+    # Normalize
     if df is not None:
-        # Save to cache
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        df.to_csv(cache_path)
-    elif df is None and os.path.exists(cache_path):
-        # Fallback to cache if download fails
-        print(f"Download failed, using stale cache for {symbol}")
-        df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+        else:
+            df.index = df.index.tz_convert("Asia/Kolkata")
 
-    # Ensure Index is tz-aware (IST) if not already
-    if df is not None and not df.empty:
-         if df.index.tz is None:
-             # Yahoo daily is usually just date.
-             # We can assume it represents 00:00 or market open.
-             # Let's normalize to UTC first if unsure, but usually date is date.
-             # If we just localize, 00:00 becomes 00:00 IST.
-             df.index = df.index.tz_localize("UTC").tz_convert(IST)
+        required = ['open', 'high', 'low', 'close', 'volume']
+        if not all(c in df.columns for c in required):
+            raise ValueError(f"Missing columns in data: {df.columns}")
 
     return df
 
-def _load_from_cache(path: str) -> Optional[pd.DataFrame]:
-    if not os.path.exists(path):
-        return None
-    try:
-        df = pd.read_csv(path, index_col=0, parse_dates=True)
-        return df
-    except Exception:
-        return None
-
-def _is_fresh(df: pd.DataFrame) -> bool:
-    if df.empty:
-        return False
-    last_date = df.index[-1]
-
-    # If tz-aware, compare with now(tz)
-    now = datetime.now(IST) if last_date.tzinfo else datetime.now()
-
-    # Simple check: if last date is today or yesterday
-    delta = now - last_date
-    return delta.days < 3
-
-def _download_yahoo(symbol: str, days: int) -> Optional[pd.DataFrame]:
+def download_yahoo_data(ticker: str, days: int) -> pd.DataFrame:
     """
-    Download from Yahoo Finance v8 endpoint using requests.
+    Download data from Yahoo Finance.
     """
-    try:
-        # Yahoo requires period1 and period2 in unix timestamp
-        end = int(datetime.now().timestamp())
-        start = int((datetime.now() - pd.Timedelta(days=days)).timestamp())
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
 
-        url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}?period1={start}&period2={end}&interval=1d&events=history&includeAdjustedClose=true"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-        }
+    period1 = int(start_date.timestamp())
+    period2 = int(end_date.timestamp())
 
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            print(f"Failed to download {symbol}: {response.status_code}")
-            return None
+    url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={period1}&period2={period2}&interval=1d&events=history"
 
-        df = pd.read_csv(io.StringIO(response.text), parse_dates=['Date'], index_col='Date')
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
 
-        # Normalize columns
-        df.columns = [c.lower() for c in df.columns]
-        # Keep OHLCV
-        cols = ['open', 'high', 'low', 'close', 'volume']
+    from io import StringIO
+    csv_data = StringIO(response.text)
+    df = pd.read_csv(csv_data, index_col=0, parse_dates=True)
 
-        df = df[cols].copy()
+    df.columns = [c.lower() for c in df.columns]
+    df = df[['open', 'high', 'low', 'close', 'volume']]
+    df = df.dropna()
 
-        # Drop NaNs
-        df.dropna(inplace=True)
+    for c in ['open', 'high', 'low', 'close']:
+        df[c] = df[c].astype(float)
 
-        return df
-    except Exception as e:
-        print(f"Error downloading {symbol}: {e}")
-        return None
+    return df

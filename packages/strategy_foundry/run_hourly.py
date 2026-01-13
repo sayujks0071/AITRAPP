@@ -1,119 +1,148 @@
 import os
 import sys
+import argparse
 import pandas as pd
 import structlog
 from datetime import datetime
 
-# Add root to path
+# Setup paths
 sys.path.append(os.getcwd())
 
-from packages.strategy_foundry.data.loader import load_data
-from packages.strategy_foundry.factory.grammar import Grammar
-from packages.strategy_foundry.factory.generator import StrategyImpl
-from packages.strategy_foundry.backtest.walkforward import walk_forward_validation
-from packages.strategy_foundry.selection.ranker import Ranker, ChampionStore, check_promotion
+from packages.strategy_foundry.data.loader import get_historical_data
+from packages.strategy_foundry.factory.generator import StrategyGenerator, GeneratedStrategy
+from packages.strategy_foundry.backtest.engine import FoundryEngine
+from packages.strategy_foundry.backtest.walkforward import WalkForward
+from packages.strategy_foundry.backtest.sanity import check_sanity
+from packages.strategy_foundry.selection.ranker import Ranker
+from packages.strategy_foundry.selection.champion_store import load_champion, save_champion
+from packages.strategy_foundry.selection.promote import should_promote
 from packages.strategy_foundry.live.signal_publisher import publish_signal
 
-logger = structlog.get_logger()
+logger = structlog.get_logger(__name__)
 
 def main():
-    # Determine Mode
-    fast_mode = os.environ.get("FAST_MODE", "0") == "1"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fast", action="store_true", help="Run in fast mode")
+    args = parser.parse_args()
 
-    n_candidates = 10 if fast_mode else 50
-    n_folds = 2 if fast_mode else 4
+    fast_mode = args.fast or os.environ.get("FAST_MODE") == "1"
 
-    instruments = ["NIFTY", "SENSEX"]
-
-    ranker = Ranker()
-    store = ChampionStore()
-
-    run_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = f"packages/strategy_foundry/results/runs/{run_timestamp}"
     os.makedirs(run_dir, exist_ok=True)
 
-    all_candidates = []
+    logger.info("Starting Foundry Run", fast_mode=fast_mode, run_dir=run_dir)
 
-    for symbol in instruments:
-        logger.info(f"Processing {symbol}...")
+    # 1. Data
+    try:
+        df_nifty = get_historical_data("NIFTY")
+    except Exception as e:
+        logger.error("Failed to load data", error=str(e))
+        return
 
-        # 1. Update Data
-        df = load_data(symbol)
-        if df is None:
+    # 2. Generate
+    n_candidates = 10 if fast_mode else 50
+    gen = StrategyGenerator()
+    candidates = gen.generate_candidates(n_candidates)
+
+    # 3. Backtest & Eval
+    engine = FoundryEngine()
+    wf = WalkForward(n_folds=2 if fast_mode else 4)
+
+    results = []
+
+    for cand in candidates:
+        strat = GeneratedStrategy(cand)
+
+        # We need to run WF
+        splits = wf.split(df_nifty)
+
+        fold_metrics = []
+        passed_folds = 0
+
+        for train, test in splits:
+            # We train on Train (optimize? No, we generate random fixed params).
+            # We just validate on Test.
+            # Actually WF implies training on window to select params, then testing.
+            # But our strategies are "Generated with Params".
+            # So we just evaluate performance on Test chunks (OOS).
+
+            # Generate positions on full DF to handle indicators warmup?
+            # Or just on test?
+            # Ideally generate on full, slice positions.
+
+            full_pos = strat.generate_positions(df_nifty)
+            test_pos = full_pos.loc[test.index]
+
+            res = engine.run(test, test_pos) # Pass full test DF? Yes.
+            met = engine.calculate_metrics(res["trades"])
+
+            # Calculate MaxDD/Sharpe for this fold
+            # Need equity curve from engine
+            # Engine returns trades.
+            # Let's reconstruct or assume calculate_metrics does it?
+            # calculate_metrics is basic.
+            # Engine.run_vectorized might be better for metrics.
+
+            # Use vectorized for fast metrics
+            v_res = engine.run_vectorized(test, test_pos)
+            fold_metrics.append(v_res)
+
+            if v_res["sharpe"] > 0 and v_res["total_return"] > 0:
+                passed_folds += 1
+
+        # Aggregate OOS metrics
+        # Average Sharpe, Total Return
+        if not fold_metrics:
             continue
 
-        candidates = []
+        avg_sharpe = sum(m["sharpe"] for m in fold_metrics) / len(fold_metrics)
+        avg_cagr = sum(m["cagr"] for m in fold_metrics) / len(fold_metrics)
+        avg_dd = min(m["max_dd"] for m in fold_metrics) # Worst case DD
+        avg_turnover = sum(m["turnover"] for m in fold_metrics) / len(fold_metrics)
 
-        # 2. Generate Candidates
-        for _ in range(n_candidates):
-            config = Grammar.get_random_strategy()
+        cand_res = {
+            **cand,
+            "sharpe": avg_sharpe,
+            "cagr": avg_cagr,
+            "max_dd": avg_dd,
+            "turnover": avg_turnover,
+            "passed_folds": passed_folds,
+            "trades": sum(m["trades"] for m in fold_metrics)
+        }
 
-            # Factory Func
-            def factory(d):
-                impl = StrategyImpl(config)
-                return impl.generate_positions(d)
-
-            # 3. Walk-Forward
-            wf_res = walk_forward_validation(df, factory, n_folds=n_folds)
-
-            # 4. Metrics & Sanity
-            # Check sanity
-            if "avg_sharpe" in wf_res.get("avg_stats", {}):
-                # Simple Sanity
-                # Trades? WF returns stats per fold.
-                # Check avg trades
-                avg_trades = pd.DataFrame(wf_res['fold_results'])['trades'].mean()
-                if avg_trades < (10 if fast_mode else 30):
-                    continue
-
-                # MaxDD
-                avg_dd = wf_res['avg_stats']['avg_calmar'] # wait, I didn't store avg_dd directly in stats?
-                # I stored fold results.
-
-                c_dict = config.to_dict()
-                c_dict['stats'] = wf_res['avg_stats']
-                c_dict['symbol'] = symbol
-                candidates.append(c_dict)
-
-        # 5. Rank
-        ranked_df = ranker.rank(candidates)
-
-        if not ranked_df.empty:
-            # Save candidates
-            ranked_df.to_json(f"{run_dir}/candidates_{symbol}.json", orient='records', indent=2)
-
-            # 6. Promote
-            top = ranked_df.iloc[0].to_dict()
-            curr = store.get_current_champion(symbol)
-
-            # Check eligibility for LIVE (stricter than promotion?)
-            # "Live-eligible gate... OOS Sharpe >= 1.0"
-            # Promotion is relative.
-            # Let's promote if better.
-
-            if check_promotion(curr, top):
-                logger.info(f"New Champion for {symbol}!", name=top['name'])
-                store.promote(top, symbol)
-
-            all_candidates.extend(ranked_df.to_dict('records'))
-
-    # Update Leaderboard
-    if all_candidates:
-        lb_path = "packages/strategy_foundry/results/leaderboard.csv"
-        new_lb = pd.DataFrame(all_candidates)
-        if os.path.exists(lb_path):
-            old_lb = pd.read_csv(lb_path)
-            combined = pd.concat([old_lb, new_lb]).drop_duplicates(subset=['id'])
+        # Sanity
+        passed, reason = check_sanity(cand_res, fast_mode)
+        if passed:
+            results.append(cand_res)
         else:
-            combined = new_lb
-        combined.to_csv(lb_path, index=False)
+            logger.debug("Candidate rejected", id=cand["id"], reason=reason)
 
-        # Markdown
-        md_path = "packages/strategy_foundry/results/leaderboard.md"
-        combined.head(20).to_markdown(md_path, index=False)
+    # 4. Rank
+    ranker = Ranker()
+    ranked_df = ranker.rank_candidates(results)
 
-    # 7. Publish Signal
-    publish_signal()
+    if not ranked_df.empty:
+        # Save results
+        ranked_df.to_csv(f"{run_dir}/candidates.csv")
+
+        best = ranked_df.iloc[0].to_dict()
+        current = load_champion()
+
+        if fast_mode:
+            logger.info("Fast mode: skipping promotion")
+        else:
+            if should_promote(best, current):
+                save_champion(best, "Score improvement")
+
+        # Leaderboard Update (Append)
+        # TODO: Implement global leaderboard file update
+        pass
+
+    # 5. Live Signal
+    publish_signal("NIFTY")
+
+    logger.info("Run completed")
 
 if __name__ == "__main__":
     main()

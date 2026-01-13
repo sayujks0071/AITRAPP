@@ -1,31 +1,24 @@
 # Backtesting Methodology
 
 ## Assumptions
-
 - **Timeframe**: Daily (1D).
 - **Execution**: Market Order at Next Bar Open.
-- **Costs**:
-  - Slippage: 5 bps per side.
-  - Commission + Tax: 10 bps per side (conservative estimate).
-- **Data**: Yahoo Finance (Close is Adjusted Close? No, using standard Close).
+- **Costs**: 5bps slippage + 3bps fees (approx).
+- **Long Only**: Currently restricted to Long/Flat.
 
-## Walk-Forward Analysis
-
-To prevent overfitting, we use Walk-Forward Validation:
-1. **Train** on expanding window (e.g., 2 years).
-2. **Test** on subsequent rolling window (e.g., 6 months).
-3. **Metrics** are computed strictly on concatenated Test folds (Out-of-Sample).
+## Evaluation
+- **Walk-Forward**: Expanding window validation.
+- **Metrics**: OOS Sharpe, CAGR, MaxDD.
+- **Sanity**: Minimum 30 trades, MaxDD < 35%.
 
 ## Ranking
-
 Composite Score:
-- 30% OOS Sharpe
-- 25% OOS Calmar
-- 20% OOS CAGR
-- (Penalties for turnover or instability may apply)
+- 30% Sharpe
+- 25% Calmar
+- 20% CAGR
+- 15% Stability
+- -10% Turnover (Penalty)
 
-## Sanity Checks
-
-Candidates are rejected if:
-- < 10 Trades (Fast Mode) or < 30 Trades (Prod).
-- Max Drawdown > 35%.
+## Caveats
+- Yahoo Finance data may have adjustments/gaps.
+- "Next Open" execution assumes liquidity at Open.
