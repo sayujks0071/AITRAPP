@@ -98,6 +98,22 @@ class OrderWatcher:
                                   old_status=old_status.value,
                                   new_status=new_status.value)
                         
+                        # Sync OCO manager in-memory state
+                        if local_order.parent_group:
+                            group = self.oco_manager.groups.get(local_order.parent_group)
+                            if group:
+                                # We need to update the correct order in the group
+                                if group.entry_order.client_order_id == local_order.client_order_id:
+                                    group.entry_order.status = new_status
+                                    group.entry_order.filled_qty = local_order.filled_qty
+                                    group.entry_order.average_price = local_order.average_price
+                                elif group.stop_order and group.stop_order.client_order_id == local_order.client_order_id:
+                                    group.stop_order.status = new_status
+                                elif group.tp1_order and group.tp1_order.client_order_id == local_order.client_order_id:
+                                    group.tp1_order.status = new_status
+                                elif group.tp2_order and group.tp2_order.client_order_id == local_order.client_order_id:
+                                    group.tp2_order.status = new_status
+
                         # Publish to Redis
                         if self.redis_bus:
                             await self.redis_bus.publish_order({
@@ -250,4 +266,3 @@ class OrderWatcher:
             }
         )
         db.add(risk_event)
-
