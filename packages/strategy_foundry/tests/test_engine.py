@@ -1,30 +1,38 @@
-import pytest
+from packages.strategy_foundry.backtest.engine import FoundryEngine
 import pandas as pd
 import numpy as np
-from packages.strategy_foundry.backtest.engine import Engine
 
-def test_engine_basic():
-    # Create simple data
+def test_engine_metrics():
+    engine = FoundryEngine()
+
+    # 10 days
     dates = pd.date_range("2023-01-01", periods=10)
-    data = pd.DataFrame({
-        "open": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
-        "close": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
+    df = pd.DataFrame({
+        "open": [100, 101, 102, 103, 104, 105, 104, 103, 102, 101],
+        "close": [100.5, 101.5, 102.5, 103.5, 104.5, 104.5, 103.5, 102.5, 101.5, 100.5],
+        "high": [101]*10,
+        "low": [99]*10
     }, index=dates)
 
-    # Signal: Always Long
-    signals = pd.Series(1, index=dates)
+    # Buy at T=0 (Exec T=1 Open: 101).
+    # Sell at T=5 (Exec T=6 Open: 104).
+    # Profit: (104 - 101)/101 approx 3%
 
-    engine = Engine(data, initial_capital=10000, slippage_bps=0, cost_bps=0)
-    res = engine.run(signals)
+    positions = pd.Series(0, index=dates)
+    positions.iloc[0:5] = 1 # Signal 1 for days 0,1,2,3,4.
+    # At day 0 signal 1 -> Day 1 Open enter.
+    # At day 4 signal 1 -> Day 5 Open hold.
+    # At day 5 signal 0 -> Day 6 Open exit.
 
-    # We enter at Open of Day 2 (index 1) based on Signal Day 1 (index 0).
-    # Position day 1 is 0.
-    # Position day 2 is 1.
+    # Expected: Enter 101, Exit 104.
 
-    # Day 1: pos=0. Ret=0.
-    # Day 2: pos=1. Gap Ret = (101-101)/101 * 0 = 0. Intra Ret = (102-101)/101 = ~1%.
-    # Day 3: pos=1. Gap Ret = (102-102)/102 * 1 = 0. Intra Ret = (103-102)/102.
+    res = engine.run(df, positions)
+    trades = res["trades"]
 
-    # Check Trades
-    assert res.stats['trades'] == 1 # Entry at start
-    assert res.stats['total_return'] > 0
+    assert len(trades) == 1
+    assert trades[0].entry_price > 100 # ~101 + slip
+    assert trades[0].exit_price < 105 # ~104 - slip
+    assert trades[0].pnl > 0
+
+    metrics = engine.calculate_metrics(trades)
+    assert metrics["win_rate"] == 1.0

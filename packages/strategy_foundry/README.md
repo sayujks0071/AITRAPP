@@ -1,39 +1,33 @@
 # Strategy Foundry
 
-A self-generating strategy lab that operates autonomously to find, backtest, and select trading strategies for NIFTY/SENSEX.
+Self-generating strategy lab.
 
-## Overview
+## Architecture
 
-- **Generates** strategies using a grammar of indicators (Trend, Mean Reversion, Volatility).
-- **Backtests** using a daily vectorized engine with slippage and costs.
-- **Validates** using Walk-Forward Analysis (Out-of-Sample).
-- **Ranks** candidates using a composite score (Sharpe, Calmar, CAGR).
-- **Publishes** a `live_signal.json` artifact (NO real orders placed).
-
-## Directory Structure
-
-- `data/`: Data loading and caching (Yahoo Finance).
-- `factory/`: Strategy grammar and generation.
-- `backtest/`: Vectorized backtesting engine.
-- `selection/`: Ranking and champion promotion.
-- `results/`: Output artifacts (candidates, signals, leaderboard).
+- **Data**: Yahoo Finance (Daily). Cached in `data/cache/`.
+- **Generation**: Random composition of Trend, Mean Reversion, and Risk blocks.
+- **Backtest**: Daily timeframe, executing at Next Open.
+- **Evaluation**: Walk-Forward (expanding window).
+- **Live**: Publishes `live_signal.json`. No automatic execution.
 
 ## Usage
 
-### Local Run
-
+### Run Locally
 ```bash
-# Fast Mode (fewer candidates)
-export FAST_MODE=1
+# Fast mode (fewer candidates)
+python packages/strategy_foundry/run_hourly.py --fast
+
+# Full mode
 python packages/strategy_foundry/run_hourly.py
 ```
 
-### CI/CD
-
+### CI
 Runs hourly via GitHub Actions.
 
-## Output
+## Modules
 
-- `results/live_signal.json`: The latest trading signal (if eligible).
-- `results/leaderboard.md`: Current top strategies.
-- `results/runs/<timestamp>/`: Detailed run logs and candidates.
+- `data`: Loading and caching.
+- `factory`: Strategy grammar and generation.
+- `backtest`: Engine and metrics.
+- `selection`: Ranking and promotion.
+- `live`: Signal publishing.

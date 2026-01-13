@@ -1,19 +1,20 @@
-from typing import Dict, Any
+from typing import Dict, Tuple
 
-def check_sanity(metrics: Dict[str, Any], min_trades: int = 30, max_dd: float = 0.35, min_positive_folds: int = 2) -> bool:
-    if not metrics.get("valid", False):
-        return False
+def check_sanity(metrics: Dict, fast_mode=False) -> Tuple[bool, str]:
+    min_trades = 10 if fast_mode else 30
 
-    agg = metrics["metrics"]
-    if agg["trades"] < min_trades:
-        return False
+    # Handle missing keys
+    trades = metrics.get("trades", 0)
+    max_dd = metrics.get("max_dd", -1.0)
+    sharpe = metrics.get("sharpe", 0.0)
 
-    if agg["max_drawdown"] > max_dd:
-        return False
+    if trades < min_trades:
+        return False, f"Too few trades ({trades} < {min_trades})"
 
-    # Check folds
-    pos_folds = sum(1 for f in metrics["fold_metrics"] if f["total_return"] > 0)
-    if pos_folds < min_positive_folds:
-        return False
+    if max_dd < -0.35: # -0.35 is -35%
+        return False, f"Max DD too high ({max_dd:.1%})"
 
-    return True
+    if sharpe <= 0:
+        return False, "Negative Sharpe"
+
+    return True, "OK"

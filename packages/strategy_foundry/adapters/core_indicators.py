@@ -1,112 +1,128 @@
-from typing import Dict, Any, Optional
-import pandas as pd
 import numpy as np
-from datetime import datetime
+import pandas as pd
+from packages.core.indicators import IndicatorCalculator
 
-def calculate_indicators(df: pd.DataFrame, params: Dict[str, Any] = None) -> pd.DataFrame:
+class VectorizedIndicators(IndicatorCalculator):
     """
-    Adapter to calculate vectorized indicators for the Strategy Foundry.
-    Returns a DataFrame with indicator columns added, suitable for vectorized backtesting.
+    Adapter to expose full series calculations from IndicatorCalculator logic.
+    Optimized for backtesting over full history.
     """
-    if params is None:
-        params = {}
 
-    # Defaults
-    atr_period = params.get('atr_period', 14)
-    rsi_period = params.get('rsi_period', 14)
-    adx_period = params.get('adx_period', 14)
+    def get_atr(self, df: pd.DataFrame) -> pd.Series:
+        tr = self._calculate_tr(df)
+        atr_arr = self._rolling_mean(tr, self.atr_period)
+        return pd.Series(atr_arr, index=df.index)
 
-    df = df.copy()
-    close = df['close']
-    high = df['high']
-    low = df['low']
+    def get_rsi(self, df: pd.DataFrame) -> pd.Series:
+        close = df["close"].values
+        delta = np.diff(close, prepend=np.nan)
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
 
-    # EMA
-    df['ema_50'] = close.ewm(span=50, adjust=False).mean()
-    df['ema_200'] = close.ewm(span=200, adjust=False).mean()
-    df['sma_50'] = close.rolling(window=50).mean()
+        # Use simple moving average as in core (or Wilder's? Core uses simple rolling mean)
+        # Core: self._rolling_mean(gain, self.rsi_period)
+        avg_gain = self._rolling_mean(gain, self.rsi_period)
+        avg_loss = self._rolling_mean(loss, self.rsi_period)
 
-    # RSI
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/rsi_period, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/rsi_period, adjust=False).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
 
-    # ATR
-    tr1 = high - low
-    tr2 = abs(high - close.shift())
-    tr3 = abs(low - close.shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    df['atr'] = tr.ewm(alpha=1/atr_period, adjust=False).mean()
+        return pd.Series(rsi, index=df.index)
 
-    # ADX
-    plus_dm = high.diff()
-    minus_dm = -low.diff()
-    plus_dm_s = pd.Series(np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0), index=df.index)
-    minus_dm_s = pd.Series(np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0), index=df.index)
+    def get_adx(self, df: pd.DataFrame) -> pd.Series:
+        tr = self._calculate_tr(df)
+        high = df["high"].values
+        low = df["low"].values
 
-    tr_s = tr.ewm(alpha=1/adx_period, adjust=False).mean()
-    plus_di = 100 * plus_dm_s.ewm(alpha=1/adx_period, adjust=False).mean() / tr_s
-    minus_di = 100 * minus_dm_s.ewm(alpha=1/adx_period, adjust=False).mean() / tr_s
-    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-    df['adx'] = dx.ewm(alpha=1/adx_period, adjust=False).mean()
+        prev_high = np.roll(high, 1)
+        prev_low = np.roll(low, 1)
 
-    # Bollinger
-    bb_period = params.get('bb_period', 20)
-    bb_std = params.get('bb_std', 2.0)
-    ma = close.rolling(window=bb_period).mean()
-    std = close.rolling(window=bb_period).std()
-    df['bb_upper'] = ma + (std * bb_std)
-    df['bb_lower'] = ma - (std * bb_std)
+        up_move = high - prev_high
+        down_move = prev_low - low
 
-    # Supertrend
-    st_period = params.get('st_period', 10)
-    st_multiplier = params.get('st_multiplier', 3.0)
+        up_move[0] = np.nan
+        down_move[0] = np.nan
 
-    # Need ATR for Supertrend Period
-    tr_st = tr.ewm(alpha=1/st_period, adjust=False).mean()
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-    hl_avg = (high + low) / 2
-    basic_ub = hl_avg + (st_multiplier * tr_st)
-    basic_lb = hl_avg - (st_multiplier * tr_st)
+        atr = self._rolling_mean(tr, self.adx_period)
+        plus_dm_smooth = self._rolling_mean(plus_dm, self.adx_period)
+        minus_dm_smooth = self._rolling_mean(minus_dm, self.adx_period)
 
-    # Iterative calculation for Supertrend
-    n = len(df)
-    final_ub = np.zeros(n)
-    final_lb = np.zeros(n)
-    supertrend = np.zeros(n)
-    close_vals = close.values
+        with np.errstate(divide='ignore', invalid='ignore'):
+            plus_di = 100 * plus_dm_smooth / atr
+            minus_di = 100 * minus_dm_smooth / atr
+            dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
 
-    # Initialize
-    final_ub[0] = basic_ub.iloc[0]
-    final_lb[0] = basic_lb.iloc[0]
+        adx = self._rolling_mean(dx, self.adx_period)
+        return pd.Series(adx, index=df.index)
 
-    for i in range(1, n):
-        # Final Upper Band
-        if basic_ub.iloc[i] < final_ub[i-1] or close_vals[i-1] > final_ub[i-1]:
-            final_ub[i] = basic_ub.iloc[i]
-        else:
-            final_ub[i] = final_ub[i-1]
+    def get_ema(self, series: pd.Series, period: int) -> pd.Series:
+        return series.ewm(span=period, adjust=False).mean()
 
-        # Final Lower Band
-        if basic_lb.iloc[i] > final_lb[i-1] or close_vals[i-1] < final_lb[i-1]:
-            final_lb[i] = basic_lb.iloc[i]
-        else:
-            final_lb[i] = final_lb[i-1]
+    def get_supertrend(self, df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        """Returns (supertrend_line, direction)"""
+        # We can't reuse the core single-value logic easily because it iterates.
+        # But core actually iterates over the whole array in _supertrend!
+        # It just returns the last value.
+        # So we can just copy-paste that logic and return the arrays.
 
-        # Supertrend
-        if supertrend[i-1] == final_ub[i-1]: # Downtrend previously
-             if close_vals[i] <= final_ub[i]:
-                 supertrend[i] = final_ub[i]
-             else:
-                 supertrend[i] = final_lb[i]
-        else: # Uptrend previously
-             if close_vals[i] >= final_lb[i]:
-                 supertrend[i] = final_lb[i]
-             else:
-                 supertrend[i] = final_ub[i]
+        tr = self._calculate_tr(df)
+        atr = self._rolling_mean(tr, self.supertrend_period)
 
-    df['supertrend'] = supertrend
+        high = df["high"].values
+        low = df["low"].values
+        close = df["close"].values
 
-    return df
+        hl_avg = (high + low) / 2
+        basic_ub = hl_avg + (self.supertrend_multiplier * atr)
+        basic_lb = hl_avg - (self.supertrend_multiplier * atr)
+
+        n = len(df)
+        final_ub = np.zeros(n)
+        final_lb = np.zeros(n)
+        supertrend = np.zeros(n)
+        direction = np.ones(n, dtype=int)
+
+        # Initial values
+        final_ub[0] = basic_ub[0]
+        final_lb[0] = basic_lb[0]
+
+        for i in range(1, n):
+            if np.isnan(final_ub[i-1]):
+                final_ub[i] = basic_ub[i]
+            elif (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
+                final_ub[i] = basic_ub[i]
+            else:
+                final_ub[i] = final_ub[i-1]
+
+            if np.isnan(final_lb[i-1]):
+                final_lb[i] = basic_lb[i]
+            elif (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
+                final_lb[i] = basic_lb[i]
+            else:
+                final_lb[i] = final_lb[i-1]
+
+            if close[i] <= final_ub[i]:
+                supertrend[i] = final_ub[i]
+                direction[i] = -1
+            else:
+                supertrend[i] = final_lb[i]
+                direction[i] = 1
+
+        return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
+
+    def get_bollinger(self, series: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
+        middle = series.rolling(window=self.bb_period).mean()
+        std = series.rolling(window=self.bb_period).std()
+        upper = middle + (std * self.bb_std)
+        lower = middle - (std * self.bb_std)
+        return upper, middle, lower
+
+    def get_donchian(self, df: pd.DataFrame, period=20) -> tuple[pd.Series, pd.Series]:
+        upper = df["high"].rolling(window=period).max()
+        lower = df["low"].rolling(window=period).min()
+        return upper, lower
+
