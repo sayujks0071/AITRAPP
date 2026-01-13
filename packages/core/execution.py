@@ -107,6 +107,11 @@ class ExecutionEngine:
         self.is_paper_mode = settings.app_mode.value == "PAPER"
         self.paper_orders: Dict[str, Order] = {}
         self.paper_order_counter = 0
+
+        # Safety Rail: Validate access token in LIVE mode
+        if not self.is_paper_mode and not getattr(self.kite, "access_token", None):
+            logger.critical("ExecutionEngine initialized without access_token in LIVE mode! Order placement will fail.")
+            # We don't raise here to allow initialization for checking status, but we log critically.
     
     async def execute_signal(
         self,

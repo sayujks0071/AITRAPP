@@ -60,6 +60,7 @@ class CallbackHandler(BaseHTTPRequestHandler):
                 <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
                     <h1 style="color: green;">Authentication Captured</h1>
                     <p>You can close this window now.</p>
+                    <p><b>Please restart your trading runner to apply changes.</b></p>
                 </body>
                 </html>
             """)
@@ -147,6 +148,7 @@ def main():
             access_token = auth.exchange_request_token(captured_request_token)
             auth.persist_access_token(access_token)
             logger.info("✅ Token exchanged and persisted successfully.")
+            logger.info("🔄 Please restart your trading runner to apply changes.")
             sys.exit(0)
         except Exception as e:
             logger.error(f"Failed to exchange token: {e}")

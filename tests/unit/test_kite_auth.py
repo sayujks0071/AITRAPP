@@ -66,3 +66,11 @@ class TestKiteAuth:
 
         mock_dotenv.set_key.assert_called_with(".env.test", "KITE_ACCESS_TOKEN", "persisted_token")
         assert os.environ["KITE_ACCESS_TOKEN"] == "persisted_token"
+
+    @patch("src.auth.kite_auth.dotenv")
+    def test_persist_access_token_secrets_file(self, mock_dotenv, kite_auth):
+        with patch.dict(os.environ, {"SECRETS_FILE_PATH": "/tmp/secrets.env"}):
+             kite_auth.persist_access_token("secret_token")
+
+             mock_dotenv.set_key.assert_called_with("/tmp/secrets.env", "KITE_ACCESS_TOKEN", "secret_token")
+             assert os.environ["KITE_ACCESS_TOKEN"] == "secret_token"
