@@ -800,7 +800,7 @@ class TradingOrchestrator:
             # Place entry order
             result, order = await self.execution_engine.execute_signal(signal, quantity)
             
-            if result == OrderResult.SUCCESS and order:
+            if result in (OrderResult.SUCCESS, OrderResult.PARTIAL) and order:
                 # Persist order
                 order_model = persist_order(
                     decision_model=decision_model,
