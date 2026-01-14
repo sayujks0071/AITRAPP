@@ -1,47 +1,85 @@
-# Authentication Guide
+# Kite Authentication Guide
 
-This document outlines the authentication flow for Zerodha Kite Connect integration.
+This document outlines the daily authentication process for the AITRAPP trading system using Zerodha Kite Connect.
 
 ## Overview
 
-The application requires a valid `access_token` to communicate with the Kite Connect API. This token expires daily (or upon explicit logout) and must be refreshed every morning.
+Kite Connect requires a valid `access_token` to interact with the API. This token expires daily.
+Due to Zerodha's security policies and [Kite Trade guidelines](https://kite.trade/docs/connect/v3/exceptions/), automated login (using Selenium/headless browsers) is **strictly prohibited**.
 
-Due to Zerodha's policy and security best practices, the login process requires **manual user intervention** at least once a day. We do not automate the credential entry process.
+Therefore, we implement a **Daily Manual Login Flow** facilitated by a bootstrap script.
 
-## Daily Workflow (8:00 AM IST)
+## Daily Schedule (8:00 AM IST)
 
-### 1. Automated Check
-A daily cron job (or GitHub Action) runs `scripts/kite_auth_bootstrap.py`.
-- It checks if the current session (stored in `.env` or secrets) is valid.
-- If valid, no action is taken.
-- If invalid, it flags that authentication is required.
+The system is designed to be bootstrapped every morning at 08:00 AM IST.
 
-### 2. Manual Login
-If authentication is required:
-1.  Run the bootstrap script on your server/local machine:
-    ```bash
-    python scripts/kite_auth_bootstrap.py
-    ```
-2.  The script will display a login URL.
-3.  Open the URL in your browser and log in to Zerodha.
-4.  Upon success, Zerodha redirects to your configured callback URL (e.g., `http://localhost:8000/auth/kite/callback`).
-5.  The running API server receives the `request_token`, exchanges it for a new `access_token`, and securely persists it to your `.env` file.
+### Automation vs Manual Action
 
-### 3. Verification
-You can verify the session is valid by running the script again:
+1.  **Automation**: The `kite_auth_bootstrap.py` script runs automatically via cron or CI.
+2.  **Manual Action**: The user must click the generated login URL and complete the 2FA process on Zerodha's website.
+3.  **Automation**: The script captures the callback, exchanges the token, and updates the secure storage.
+
+## Setup
+
+### 1. Environment Variables
+
+Ensure your `.env` file contains your Kite API credentials:
+
+```env
+KITE_API_KEY=your_api_key
+KITE_API_SECRET=your_api_secret
+KITE_USER_ID=your_user_id
+APP_MODE=PAPER  # Default to PAPER for safety
+```
+
+### 2. Redirect URI
+
+For the bootstrap script to work locally, set your Kite Connect App's **Redirect URI** to:
+`http://localhost:8000/auth/kite/callback`
+
+If you are running the API server in production, point it to your domain:
+`https://your-domain.com/auth/kite/callback`
+
+## Usage
+
+### Local / VPS (Interactive)
+
+Run the bootstrap script:
+
+```bash
+python scripts/kite_auth_bootstrap.py
+```
+
+1.  The script checks if the current session is valid.
+2.  If invalid, it starts a local server on port 8000.
+3.  It prints a Login URL.
+4.  Open the URL in your browser, log in to Zerodha.
+5.  The browser redirects to `localhost:8000`, the script captures the token, saves it to `.env`, and exits.
+
+### Cron Job (Example)
+
+To automate the check (and prompt if needed):
+
+```bash
+# Run at 8:00 AM daily
+0 8 * * * cd /path/to/repo && TRADING_MODE=paper /usr/bin/python3 scripts/kite_auth_bootstrap.py >> /var/log/kite_auth.log 2>&1
+```
+
+*Note: Since the login is manual, the cron job will hang waiting for the callback if the session is invalid. It is recommended to run this in a terminal or use a notification system to alert you to login.*
+
+### CI / GitHub Actions
+
+In CI environments, we cannot perform interactive login. The workflow should check for validity and alert if action is needed.
+
 ```bash
 python scripts/kite_auth_bootstrap.py --check-only
 ```
-It should exit with success (status 0).
+
+If this command exits with status `1` (invalid session), the CI pipeline can trigger an alert (Email, Slack, GitHub Issue) containing the login URL.
 
 ## Security
 
--   **Credentials**: `KITE_API_KEY` and `KITE_API_SECRET` are stored in environment variables (or `.env` locally).
--   **Tokens**: `KITE_ACCESS_TOKEN` is rotated daily. It is never committed to version control.
--   **Trading Mode**: The bootstrap process runs in `PAPER` mode context by default. Live trading requires explicit `TRADING_MODE=LIVE`.
-
-## Troubleshooting
-
--   **Redirect URL Mismatch**: Ensure your Kite Connect app's redirect URL matches your server's address (e.g., `http://localhost:8000/auth/kite/callback`).
--   **Token Expired**: If you see "Token is invalid" errors in logs, run the bootstrap script to refresh the session.
--   **Logging**: Tokens are never printed in logs. The login URL contains the public API Key only.
+*   **No Password Storage**: We never store Zerodha passwords or TOTP secrets.
+*   **Token Storage**: `access_token` is stored in the `.env` file (local) or injected via secrets manager (cloud).
+*   **Logs**: The bootstrap script masks sensitive tokens in logs.
+*   **Live Safety**: `APP_MODE` defaults to `PAPER`. Live trading requires explicit configuration.

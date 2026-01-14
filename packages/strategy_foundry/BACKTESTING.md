@@ -1,29 +1,31 @@
 # Backtesting Methodology
 
-## Assumptions
+## Engine
 - **Timeframe**: Daily (1D).
-- **Execution**: Signals on the Close, trades at the next session Open.
+- **Execution**: Signal generated at Close (t), Entry at Open (t+1).
+- **Type**: Vectorized with loop-based risk overlay.
 - **Costs**:
-  - Slippage: 5 bps per side (conservative buffer).
-  - Brokerage: Zerodha-like flat 20 INR structure + statutory taxes (~0.03% turnover).
-
-## Data
-Daily OHLCV is sourced from Yahoo Finance (`^NSEI`, `^BSESN`). This is sufficient for regime detection, but minor gaps/delays versus broker feeds should be expected.
+  - Slippage: 5 bps (default).
+  - Fees: Estimated brokerage + taxes (STT, GST, etc.) via `core` adapter.
 
 ## Walk-Forward Evaluation
-- **Method**: Expanding-window walk-forward (4 folds).
-- **Validation**: Strategy metrics aggregated per fold; candidates must be profitable in ≥3 folds to proceed.
-- **Training**: There is no traditional fit—parameters come from random grammar sampling, so each configuration is effectively out-of-sample.
-
-## Intraday Constraints
-- Flatten positions by 15:20 IST; no overnight carry.
-- Optional guardrail: max 1 trade per direction per day.
+- The dataset is split into `N` folds (Default 3).
+- Strategies are evaluated on each fold.
+- Ranking uses the aggregate metrics across folds.
+- **Anti-Overfitting**:
+  - Strategies are randomly generated (no parameter optimization on In-Sample data).
+  - Selection is based on stability across folds.
+  - Champions must beat incumbents by significant margin (10% score or 5% MaxDD).
 
 ## Metrics
-- **Sharpe**: Trade-based approximation.
-- **Calmar**: CAGR / MaxDD.
-- **Stability**: Inverse of Sharpe variance across folds.
+- **Sharpe Ratio**: Risk-adjusted return (rf=0).
+- **Calmar Ratio**: CAGR / MaxDD.
+- **Stability**: Inverse of Sharpe standard deviation across folds.
+- **Sanity Checks**:
+  - Min Trades: 30
+  - Max DD: 35%
 
-## Ranking
-Composite Score:
-`0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - 0.1*Turnover`
+## Caveats
+- Yahoo Finance data may have gaps or adjustments.
+- Daily timeframe ignores intraday volatility (though Risk Overlay checks Low/High for stops).
+- "Next Open" execution assumes liquidity at Open price.

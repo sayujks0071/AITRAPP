@@ -1,26 +1,36 @@
-# Deployment Guide
+# Deployment & Live Signals
 
 ## Philosophy
-- **Paper First**: Foundry only writes JSON artifacts; order execution stays off-box.
-- **Safety Rails**: Market-hour guard plus manual approvals prevent accidental live flips.
-- **Meritocracy**: Only champions beating gating thresholds (Sharpe ≥ 1.0, MaxDD ≤ 25%) may publish actionable signals.
+**Paper First**. The Strategy Foundry does NOT place orders. It only emits a signal JSON.
 
-## Live Signal Consumption
-The runner writes `packages/strategy_foundry/results/live_signal.json`. To consume it:
-1. Set `ENABLE_LIVE=true` and ensure `approvals/ALLOW_LIVE.txt` exists. Without both, `run_hourly.py` will skip publishing.
-2. Read the JSON, verify `status == "OK"` and `timestamp_ist` is fresh (<5 minutes).
-3. Map the `instrument` to your execution proxy (e.g., `NIFTY` → broker-specific symbol) in the downstream bridge.
-4. Execute manually or via a separate, audited bridge that talks to `packages.core`.
+## Signal Artifact
+The live signal is published to `packages/strategy_foundry/results/live_signal.json`.
 
-## Gating & Failure Modes
-- **Market Closed** → status `SKIPPED`, reason `Market Closed`.
-- **No Champion / Not Eligible** → status `SKIPPED`, explicit reason.
-- **Champion Health** → requires Sharpe ≥ 1.0 and Max Drawdown ≤ 25% (configurable in code).
-- **Approvals Disabled** → status `SKIPPED`, reason `Live Disabled`.
+Schema:
+```json
+{
+  "status": "OK|SKIPPED",
+  "reason": "...",
+  "timestamp_ist": "ISO8601",
+  "champion_id": "...",
+  "instrument": "NIFTY",
+  "signal": 1, // 1=Long, 0=Flat
+  "risk": {
+    "stop_loss": "...",
+    "take_profit": "..."
+  }
+}
+```
 
-Downstream systems should treat any non-`OK` status as non-tradable.
+## Consumption (Optional Bridge)
+To enable live trading (Bridge), the following conditions must be met:
+1. Environment variable `ENABLE_LIVE=true`.
+2. File `approvals/ALLOW_LIVE.txt` exists.
 
-## Operational Notes
-- Signals are generated off the prior completed daily bar to avoid repaint.
-- Artifacts live under `packages/strategy_foundry/results/` so runners/cron can archive them easily.
-- Keep `approvals/ALLOW_LIVE.txt` under change-control; deleting the file is the fastest kill switch.
+A separate process (e.g. in `packages/core`) would:
+1. Read `live_signal.json`.
+2. Verify timestamp is fresh (< 15 mins).
+3. Verify champion ID matches approved list (optional).
+4. Place orders via Broker API.
+
+**Note**: This module contains NO broker connection code.

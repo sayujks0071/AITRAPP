@@ -1,142 +1,146 @@
-import numpy as np
 import pandas as pd
-from typing import Dict, Optional, Tuple
+import numpy as np
+from packages.core.indicators import IndicatorCalculator
 
-class VectorizedIndicatorCalculator:
+class IndicatorsAdapter:
     """
-    Calculates technical indicators returning full Series/Arrays.
-    Based on packages.core.indicators.IndicatorCalculator logic but exposing full history.
+    Adapter for core indicators.
+    Allows strategies to compute indicators with specific parameters.
     """
 
-    def _rolling_mean(self, arr: np.ndarray, window: int) -> np.ndarray:
-        n = len(arr)
-        if n < window:
-             return np.full(n, np.nan)
-        kernel = np.ones(window) / window
-        result = np.convolve(arr, kernel, mode='valid')
-        pad = np.full(window - 1, np.nan)
-        return np.concatenate((pad, result))
+    def get_atr(self, df: pd.DataFrame) -> pd.Series:
+        tr = self._calculate_tr(df)
+        atr_arr = self._rolling_mean(tr, self.atr_period)
+        return pd.Series(atr_arr, index=df.index)
 
-    def tr(self, high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
-        tr1 = high - low
-        prev_close = np.roll(close, 1)
-        prev_close[0] = close[0] # Handle first element approx
-        tr2 = np.abs(high - prev_close)
-        tr3 = np.abs(low - prev_close)
-        return np.maximum(tr1, np.maximum(tr2, tr3))
-
-    def atr(self, high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-        tr = self.tr(high, low, close)
-        # Use EWM for ATR usually? Core uses rolling mean. I will stick to Core logic.
-        return self._rolling_mean(tr, period)
-
-    def rsi(self, close: np.ndarray, period: int = 14) -> np.ndarray:
+    def get_rsi(self, df: pd.DataFrame) -> pd.Series:
+        close = df["close"].values
         delta = np.diff(close, prepend=np.nan)
         gain = np.where(delta > 0, delta, 0)
         loss = np.where(delta < 0, -delta, 0)
 
-        # Wilder's Smoothing is standard for RSI, but Core used rolling mean.
-        # Wait, Core's `_rsi` implementation uses `_rolling_mean` which is SMA.
-        # This is not Wilder's RSI. But I must reuse Core logic as requested.
-        # Wait, usually RSI uses Wilder's smoothing.
-        # But `IndicatorCalculator._rsi` calls `_rolling_mean`.
-        # I will stick to what Core does: SMA based RSI.
-
-        avg_gain = self._rolling_mean(gain, period)
-        avg_loss = self._rolling_mean(loss, period)
+        # Use simple moving average as in core (or Wilder's? Core uses simple rolling mean)
+        # Core: self._rolling_mean(gain, self.rsi_period)
+        avg_gain = self._rolling_mean(gain, self.rsi_period)
+        avg_loss = self._rolling_mean(loss, self.rsi_period)
 
         with np.errstate(divide='ignore', invalid='ignore'):
-             rs = avg_gain / avg_loss
-             rsi = 100 - (100 / (1 + rs))
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
 
-        return rsi
+        return pd.Series(rsi, index=df.index)
 
-    def adx(self, high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-        tr = self.tr(high, low, close)
-        atr = self._rolling_mean(tr, period)
+    def get_adx(self, df: pd.DataFrame) -> pd.Series:
+        tr = self._calculate_tr(df)
+        high = df["high"].values
+        low = df["low"].values
 
         prev_high = np.roll(high, 1)
         prev_low = np.roll(low, 1)
+
         up_move = high - prev_high
         down_move = prev_low - low
 
-        # First element fix
-        up_move[0] = 0
-        down_move[0] = 0
+        up_move[0] = np.nan
+        down_move[0] = np.nan
 
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-        plus_dm_smooth = self._rolling_mean(plus_dm, period)
-        minus_dm_smooth = self._rolling_mean(minus_dm, period)
+        atr = self._rolling_mean(tr, self.adx_period)
+        plus_dm_smooth = self._rolling_mean(plus_dm, self.adx_period)
+        minus_dm_smooth = self._rolling_mean(minus_dm, self.adx_period)
 
         with np.errstate(divide='ignore', invalid='ignore'):
             plus_di = 100 * plus_dm_smooth / atr
             minus_di = 100 * minus_dm_smooth / atr
             dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
 
-        adx = self._rolling_mean(dx, period)
-        return adx
+        adx = self._rolling_mean(dx, self.adx_period)
+        return pd.Series(adx, index=df.index)
 
-    def ema(self, series: pd.Series, period: int) -> pd.Series:
+    def get_ema(self, series: pd.Series, period: int) -> pd.Series:
         return series.ewm(span=period, adjust=False).mean()
 
-    def sma(self, series: pd.Series, period: int) -> pd.Series:
-        return series.rolling(window=period).mean()
+    def get_supertrend(self, df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        """Returns (supertrend_line, direction)"""
+        # We can't reuse the core single-value logic easily because it iterates.
+        # But core actually iterates over the whole array in _supertrend!
+        # It just returns the last value.
+        # So we can just copy-paste that logic and return the arrays.
 
-    def bollinger_bands(self, series: pd.Series, period: int = 20, std: float = 2.0) -> Tuple[pd.Series, pd.Series, pd.Series]:
-        middle = series.rolling(window=period).mean()
-        sigma = series.rolling(window=period).std()
-        upper = middle + (sigma * std)
-        lower = middle - (sigma * std)
-        return upper, middle, lower
+        tr = self._calculate_tr(df)
+        atr = self._rolling_mean(tr, self.supertrend_period)
 
-    def donchian(self, high: pd.Series, low: pd.Series, period: int = 20) -> Tuple[pd.Series, pd.Series]:
-        upper = high.rolling(window=period).max()
-        lower = low.rolling(window=period).min()
-        return upper, lower
-
-    def supertrend(self, high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 10, multiplier: float = 3.0) -> Tuple[np.ndarray, np.ndarray]:
-        # Vectorized supertrend is tricky due to recursion.
-        # But `IndicatorCalculator` implements it with a loop.
-        # I'll do the same loop for correctness.
-        tr = self.tr(high, low, close)
-        atr = self._rolling_mean(tr, period)
+        high = df["high"].values
+        low = df["low"].values
+        close = df["close"].values
 
         hl_avg = (high + low) / 2
-        basic_ub = hl_avg + (multiplier * atr)
-        basic_lb = hl_avg - (multiplier * atr)
+        basic_ub = hl_avg + (self.supertrend_multiplier * atr)
+        basic_lb = hl_avg - (self.supertrend_multiplier * atr)
 
-        n = len(close)
+        n = len(df)
         final_ub = np.zeros(n)
         final_lb = np.zeros(n)
         supertrend = np.zeros(n)
         direction = np.ones(n, dtype=int)
 
-        # We need to fill NaNs with something safe to avoid runtime warnings in loop comparison
-        # But logic handles it.
+        # Initial values
+        curr_final_ub = basic_ub[0]
+        curr_final_lb = basic_lb[0]
+        final_ub[0] = curr_final_ub
+        final_lb[0] = curr_final_lb
+
+        # Pre-fetch arrays to avoid attribute lookup in loop
+        basic_ub_arr = basic_ub
+        basic_lb_arr = basic_lb
+        close_arr = close
 
         for i in range(1, n):
-            if np.isnan(basic_ub[i]): continue
-
             # Final Upper Band
-            if (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
-                final_ub[i] = basic_ub[i]
-            else:
-                final_ub[i] = final_ub[i-1]
+            bub = basic_ub_arr[i]
+            prev_close = close_arr[i-1]
+
+            if np.isnan(curr_final_ub):
+                curr_final_ub = bub
+            elif (bub < curr_final_ub) or (prev_close > curr_final_ub):
+                curr_final_ub = bub
+            # else: keep curr_final_ub
+
+            final_ub[i] = curr_final_ub
 
             # Final Lower Band
-            if (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
-                final_lb[i] = basic_lb[i]
-            else:
-                final_lb[i] = final_lb[i-1]
+            blb = basic_lb_arr[i]
 
-            # Supertrend
-            if close[i] <= final_ub[i]:
-                supertrend[i] = final_ub[i]
+            if np.isnan(curr_final_lb):
+                curr_final_lb = blb
+            elif (blb > curr_final_lb) or (prev_close < curr_final_lb):
+                curr_final_lb = blb
+            # else: keep curr_final_lb
+
+            final_lb[i] = curr_final_lb
+
+            # Supertrend Logic
+            curr_close = close_arr[i]
+            if curr_close <= curr_final_ub:
+                supertrend[i] = curr_final_ub
                 direction[i] = -1
             else:
-                supertrend[i] = final_lb[i]
+                supertrend[i] = curr_final_lb
                 direction[i] = 1
 
-        return supertrend, direction
+        return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
+
+    def get_bollinger(self, series: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
+        middle = series.rolling(window=self.bb_period).mean()
+        std = series.rolling(window=self.bb_period).std()
+        upper = middle + (std * self.bb_std)
+        lower = middle - (std * self.bb_std)
+        return upper, middle, lower
+
+    def get_donchian(self, df: pd.DataFrame, period=20) -> tuple[pd.Series, pd.Series]:
+        upper = df["high"].rolling(window=period).max()
+        lower = df["low"].rolling(window=period).min()
+        return upper, lower
+

@@ -1,13 +1,5 @@
 {
-  "timestamp_ist": "2026-01-11 06:38:59.351254+05:30",
-  "champion_id": "462f1cbb622e",
-  "instrument": "SENSEX",
-  "signal": 0,
-  "rule_summary": "Signal(Donchian({'period': 20}) AND EmaCross({'fast': 10, 'slow': 50})) | Risk(SL=2.0ATR, TP=3.0ATR)",
-  "risk": {
-    "stop_loss_atr": 2.0,
-    "take_profit_atr": 3.0
-  },
   "status": "SKIPPED",
-  "reason": "Market Closed"
+  "reason": "Market Closed",
+  "timestamp_gen": "2026-01-14T00:40:31.909541"
 }
