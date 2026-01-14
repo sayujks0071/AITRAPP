@@ -289,6 +289,7 @@ class TradingOrchestrator:
         """Recover open positions and re-arm OCO watchers (crash-safe)"""
         from packages.storage.models import Position as DBPosition, PositionStatusEnum, Order, OrderStatusEnum
         from packages.storage.database import get_db_session
+        from packages.core.models import Position, PositionStatus, SignalSide
         
         with get_db_session() as db:
             open_positions = db.query(DBPosition).filter_by(
@@ -301,6 +302,49 @@ class TradingOrchestrator:
             logger.info(f"Recovering {len(open_positions)} open positions")
             
             for pos in open_positions:
+                # Recover to memory
+                instrument = self.instrument_manager.get_instrument(pos.instrument_token)
+                if instrument:
+                    # Map Enums
+                    side_map = {
+                        "LONG": SignalSide.LONG,
+                        "SHORT": SignalSide.SHORT,
+                        "BUY": SignalSide.LONG,
+                        "SELL": SignalSide.SHORT
+                    }
+                    # Handle if side is enum object
+                    db_side = pos.side.value if hasattr(pos.side, 'value') else pos.side
+                    core_side = side_map.get(str(db_side), SignalSide.LONG)
+
+                    # Create Core Position
+                    core_pos = Position(
+                        position_id=pos.position_id,
+                        instrument=instrument,
+                        entry_time=pos.opened_at,
+                        entry_price=pos.avg_price,
+                        quantity=pos.qty,
+                        side=core_side,
+                        current_price=pos.current_price or pos.avg_price,
+                        unrealized_pnl=pos.unrealized or 0.0,
+                        stop_loss=pos.stop_loss or 0.0,
+                        trailing_stop=pos.trailing_stop,
+                        take_profit_1=pos.take_profit_1,
+                        take_profit_2=pos.take_profit_2,
+                        risk_amount=pos.risk_amount or 0.0,
+                        status=PositionStatus.OPEN,
+                        strategy_name=pos.strategy_name or "",
+                        entry_order_id=pos.entry_order_id,
+                        exit_order_id=pos.exit_order_id
+                    )
+
+                    # Prevent duplicates
+                    if not any(p.position_id == core_pos.position_id for p in self.positions):
+                        self.positions.append(core_pos)
+                        logger.info("Restored position to memory", position_id=core_pos.position_id)
+                else:
+                    logger.error("Failed to recover position: instrument not found",
+                               token=pos.instrument_token, position_id=pos.position_id)
+
                 if not pos.oco_group:
                     continue
                 
