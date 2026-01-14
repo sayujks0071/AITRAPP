@@ -1,25 +1,36 @@
 # Deployment & Live Signals
 
 ## Philosophy
-**Paper First**. The Foundry generates signals but does NOT execute them.
+**Paper First**. The Strategy Foundry does NOT place orders. It only emits a signal JSON.
 
 ## Signal Artifact
-`packages/strategy_foundry/results/live_signal.json`
+The live signal is published to `packages/strategy_foundry/results/live_signal.json`.
 
 Schema:
 ```json
 {
-  "timestamp_ist": "2023-10-27T09:15:00+05:30",
-  "champion_id": "ab123...",
-  "signal": 1,
-  "status": "OK"
+  "status": "OK|SKIPPED",
+  "reason": "...",
+  "timestamp_ist": "ISO8601",
+  "champion_id": "...",
+  "instrument": "NIFTY",
+  "signal": 1, // 1=Long, 0=Flat
+  "risk": {
+    "stop_loss": "...",
+    "take_profit": "..."
+  }
 }
 ```
 
-## Live Execution Bridge (Gated)
-To enable real execution (Optional):
-1. Set `ENABLE_LIVE=true` in environment.
-2. Create `approvals/ALLOW_LIVE.txt`.
-3. Implement a core adapter to read the JSON and place orders.
+## Consumption (Optional Bridge)
+To enable live trading (Bridge), the following conditions must be met:
+1. Environment variable `ENABLE_LIVE=true`.
+2. File `approvals/ALLOW_LIVE.txt` exists.
 
-**Default is OFF.**
+A separate process (e.g. in `packages/core`) would:
+1. Read `live_signal.json`.
+2. Verify timestamp is fresh (< 15 mins).
+3. Verify champion ID matches approved list (optional).
+4. Place orders via Broker API.
+
+**Note**: This module contains NO broker connection code.

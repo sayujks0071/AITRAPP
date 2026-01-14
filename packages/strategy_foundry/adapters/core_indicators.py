@@ -1,11 +1,11 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 from packages.core.indicators import IndicatorCalculator
 
-class VectorizedIndicators(IndicatorCalculator):
+class IndicatorsAdapter:
     """
-    Adapter to expose full series calculations from IndicatorCalculator logic.
-    Optimized for backtesting over full history.
+    Adapter for core indicators.
+    Allows strategies to compute indicators with specific parameters.
     """
 
     def get_atr(self, df: pd.DataFrame) -> pd.Series:
