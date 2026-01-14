@@ -1,5 +1,6 @@
 """Historical data loader for NSE options CSV files"""
 import csv
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -53,6 +54,13 @@ class HistoricalDataLoader:
         Returns:
             DataFrame with historical data
         """
+        # Input validation for security (path traversal prevention)
+        if not re.match(r"^[a-zA-Z0-9_-]+$", symbol):
+            raise ValueError(f"Invalid symbol format: {symbol}")
+
+        if option_type not in ["CE", "PE"]:
+            raise ValueError(f"Invalid option type: {option_type}")
+
         # Construct filename
         # Allow flexible filename matching in future, but stick to pattern for now
         filename = f"OPTIDX_{symbol}_{option_type}_12-Aug-2025_TO_12-Nov-2025.csv"

@@ -20,6 +20,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import threading
 import time
+from dotenv import load_dotenv
 
 # Ensure src is in python path
 sys.path.insert(0, os.getcwd())
@@ -78,7 +79,43 @@ def start_server(port):
     logger.info(f"Local callback server listening on port {port}")
     httpd.serve_forever()
 
+def poll_for_token_change(initial_token, max_retries=60, sleep_sec=5):
+    """
+    Poll .env for token changes.
+    Used when local server cannot be started (port in use).
+    """
+    logger.info("Polling for external token update...")
+
+    for i in range(max_retries):
+        load_dotenv(override=True)
+        # Reload auth to get new env var
+        auth = KiteAuth()
+        current_token = auth.access_token
+
+        # Check if token changed
+        if current_token != initial_token:
+            logger.info("Token changed in environment. Validating...")
+            if auth.is_session_valid():
+                 logger.info("✅ Session is now valid!")
+                 return True
+            else:
+                 logger.warning("Token changed but session is still invalid.")
+
+        # Also just check validity periodically even if token didn't change
+        # (in case we missed the change event or it was same token re-validated)
+        elif i % 6 == 0: # Every 30s
+             if auth.is_session_valid():
+                 logger.info("✅ Session is now valid!")
+                 return True
+
+        time.sleep(sleep_sec)
+
+    return False
+
 def main():
+    # Load env vars first thing
+    load_dotenv(override=True)
+
     parser = argparse.ArgumentParser(description="Kite Auth Bootstrap")
     parser.add_argument("--check-only", action="store_true", help="Only check session validity, do not prompt login")
     parser.add_argument("--port", type=int, default=8000, help="Port for local callback server")
@@ -108,6 +145,7 @@ def main():
         logger.info(f"Running in {app_mode} mode")
 
     auth = KiteAuth()
+    initial_token = auth.access_token
 
     logger.info("Checking session validity...")
     if auth.is_session_valid():
@@ -121,7 +159,11 @@ def main():
         sys.exit(1)
 
     # Manual Login Flow
-    login_url = auth.get_login_url()
+    try:
+        login_url = auth.get_login_url()
+    except Exception as e:
+        logger.error(f"Failed to generate login URL: {e}")
+        sys.exit(1)
 
     # We assume the user has configured the redirect_uri to http://localhost:PORT/auth/kite/callback
     # or similar. The script listens on all paths.
@@ -132,18 +174,41 @@ def main():
     logger.info(f"Callback Receiver: http://localhost:{args.port}/")
     logger.info("-" * 60)
 
-    # Start server in a separate thread
-    server_thread = threading.Thread(target=start_server, args=(args.port,))
-    server_thread.start()
+    # Try to start server
+    server_thread = None
+    try:
+        # Check if port is available by trying to bind
+        # We start the thread which calls serve_forever
+        server = HTTPServer(('', args.port), CallbackHandler)
+        # If successful, start thread
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
+
+    except OSError as e:
+        if e.errno == 98: # Address already in use
+            logger.warning(f"⚠️  Port {args.port} is in use. Assuming API server is running.")
+            logger.info("Please complete login. The API server should capture the token.")
+
+            # Fallback to polling
+            if poll_for_token_change(initial_token):
+                sys.exit(0)
+            else:
+                logger.error("Timed out waiting for token update.")
+                sys.exit(1)
+        else:
+            logger.error(f"Failed to start server: {e}")
+            sys.exit(1)
 
     logger.info("Waiting for callback...")
 
-    # Wait for server thread to finish (it shuts down upon receiving token)
-    server_thread.join()
+    if server_thread:
+        # Wait for server thread to finish (it shuts down upon receiving token)
+        server_thread.join()
 
     if captured_request_token:
         logger.info("Callback received. Exchanging token...")
         try:
+            # Re-init auth to be safe? No, just use existing.
             access_token = auth.exchange_request_token(captured_request_token)
             auth.persist_access_token(access_token)
             logger.info("✅ Token exchanged and persisted successfully.")
