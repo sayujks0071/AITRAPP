@@ -1,19 +1,22 @@
-foundry:
-  max_candidates: 80
-  fast_mode_candidates: 15
-  timeframes: ["5m", "15m", "1d"]
-  data_days_intraday: 59
-  data_days_daily: 3650
-  folds: 4
-  fast_mode_folds: 2
+timeframes:
+  - "5m"
+  - "15m"
+  - "1d"
 
-execution:
-  slippage_bps: 2.0
-  brokerage_per_order: 20.0
-  spread_guard_bps: 1.0
+lookback_days:
+  5m: 60
+  15m: 180
+  1d: 3650
 
-selection:
-  min_trades_5m: 80
-  min_trades_15m: 40
-  max_drawdown: 0.30
-  min_profit_factor: 1.1
+folds:
+  fast: 2
+  full: 4
+
+generation:
+  fast: 15
+  full: 80
+
+costs:
+  slippage_bps: 5
+  brokerage_per_order: 20
+  tax_bps: 3

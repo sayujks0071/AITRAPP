@@ -1,33 +1,30 @@
 # Strategy Foundry
 
-Self-generating strategy lab.
+An aggressive intraday strategy research lab that self-generates, backtests, and selects trading strategies for NIFTY/SENSEX.
 
-## Architecture
-
-- **Data**: Yahoo Finance (Daily). Cached in `data/cache/`.
-- **Generation**: Random composition of Trend, Mean Reversion, and Risk blocks.
-- **Backtest**: Daily timeframe, executing at Next Open.
-- **Evaluation**: Walk-Forward (expanding window).
-- **Live**: Publishes `live_signal.json`. No automatic execution.
+## Overview
+- **Timeframes**: 5m, 15m (Primary), 1D (Sanity).
+- **Generation**: Randomly composes Entry/Exit blocks (RSI, EMA, Donchian, etc.).
+- **Validation**: Walk-forward analysis (k-fold on time series).
+- **Output**: Live signal JSON artifact (no automated execution).
 
 ## Usage
-
-### Run Locally
+Run manually (Full Mode):
 ```bash
-# Fast mode (fewer candidates)
-python packages/strategy_foundry/run_hourly.py --fast
-
-# Full mode
 python packages/strategy_foundry/run_hourly.py
 ```
 
-### CI
-Runs hourly via GitHub Actions.
+Run Fast Mode (fewer candidates, fewer folds):
+```bash
+FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+```
 
-## Modules
-
-- `data`: Loading and caching.
-- `factory`: Strategy grammar and generation.
-- `backtest`: Engine and metrics.
-- `selection`: Ranking and promotion.
-- `live`: Signal publishing.
+## Structure
+- `adapters/`: Adapters to Core (Indicators, Market Hours).
+- `backtest/`: Vectorized Engine + Metrics.
+- `configs/`: YAML configs.
+- `data/`: Yahoo Downloader + CSV Cache.
+- `factory/`: Strategy Grammar + Generator.
+- `live/`: Signal Publisher.
+- `results/`: Artifacts (Runs, Champions, Signals).
+- `selection/`: Ranking & Promotion Logic.

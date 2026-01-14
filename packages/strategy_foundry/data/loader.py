@@ -1,94 +1,136 @@
 import os
-import csv
-import time
-from datetime import datetime, timedelta
 import requests
 import pandas as pd
+import yaml
 import structlog
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional, Dict
 
 logger = structlog.get_logger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
-os.makedirs(CACHE_DIR, exist_ok=True)
+def load_config():
+    config_path = Path("packages/strategy_foundry/configs/foundry.yaml")
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
+    return {}
 
-SYMBOL_MAP = {
-    "NIFTY": "^NSEI",
-    "SENSEX": "^BSESN"
-}
+def load_instrument_map():
+    map_path = Path("packages/strategy_foundry/configs/instrument_map.yaml")
+    if map_path.exists():
+        with open(map_path, "r") as f:
+            return yaml.safe_load(f)
+    return {}
 
-def get_historical_data(symbol: str, days: int = 3650) -> pd.DataFrame:
-    """
-    Get historical daily data for a symbol (NIFTY or SENSEX).
-    Checks cache first, then downloads from Yahoo Finance.
-    Returns DataFrame with Index=Date (Asia/Kolkata) and columns: open, high, low, close, volume.
-    """
-    symbol_yahoo = SYMBOL_MAP.get(symbol, symbol)
-    cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
+class DataLoader:
+    def __init__(self, cache_dir: str = "packages/strategy_foundry/data/cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.config = load_config()
+        self.instrument_map = load_instrument_map()
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+        })
 
-    needs_download = True
-    if os.path.exists(cache_file):
-        mtime = os.path.getmtime(cache_file)
-        if time.time() - mtime < 4 * 3600: # 4 hours
-            needs_download = False
+    def get_symbol_ticker(self, instrument: str) -> str:
+        return self.instrument_map.get("research", {}).get(instrument, instrument)
 
-    df = None
-    if not needs_download:
+    def get_proxy_ticker(self, instrument: str) -> str:
+        return self.instrument_map.get("paper_proxy", {}).get(instrument, None)
+
+    def fetch_yahoo(self, ticker: str, interval: str, range_str: str) -> pd.DataFrame:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+        params = {
+            "interval": interval,
+            "range": range_str,
+            "includePrePost": "false"
+        }
         try:
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            logger.info("Loaded from cache", symbol=symbol, rows=len(df))
-        except Exception:
-            needs_download = True
+            resp = self.session.get(url, params=params, timeout=10)
+            if resp.status_code == 404:
+                logger.warning(f"Ticker {ticker} not found")
+                return pd.DataFrame()
+            if resp.status_code == 429:
+                logger.warning(f"Rate limited for {ticker}")
+                return pd.DataFrame()
 
-    if needs_download:
-        logger.info("Downloading fresh data", symbol=symbol)
-        try:
-            df = download_yahoo_data(symbol_yahoo, days)
-            df.to_csv(cache_file)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if "chart" not in data or "result" not in data["chart"] or not data["chart"]["result"]:
+                logger.error("No data in response", ticker=ticker)
+                return pd.DataFrame()
+
+            result = data["chart"]["result"][0]
+            if "timestamp" not in result:
+                 return pd.DataFrame()
+
+            timestamps = result["timestamp"]
+            indicators = result["indicators"]["quote"][0]
+
+            df = pd.DataFrame({
+                "timestamp": pd.to_datetime(timestamps, unit="s", utc=True).tz_convert("Asia/Kolkata"),
+                "open": indicators["open"],
+                "high": indicators["high"],
+                "low": indicators["low"],
+                "close": indicators["close"],
+                "volume": indicators["volume"]
+            })
+
+            # Drop rows with NaN OHLC (sometimes happens)
+            df.dropna(subset=["open", "high", "low", "close"], inplace=True)
+
+            # Fill volume NaN with 0
+            df["volume"] = df["volume"].fillna(0)
+
+            return df
         except Exception as e:
-            logger.error("Download failed, trying cache fallback", error=str(e))
-            if os.path.exists(cache_file):
-                df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            else:
-                raise
+            logger.error("Failed to fetch yahoo data", ticker=ticker, error=str(e))
+            return pd.DataFrame()
 
-    # Normalize
-    if df is not None:
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+    def get_data(self, instrument: str, timeframe: str, force_refresh: bool = False) -> pd.DataFrame:
+        ticker = self.get_symbol_ticker(instrument)
+        y_interval = timeframe
+
+        # Map foundry timeframe to yahoo
+        if timeframe == "1d":
+            y_range = "5y" # 5y is safer than 10y for payload size
+        elif timeframe in ["5m", "15m"]:
+            y_range = "60d" # Yahoo max for intraday
         else:
-            df.index = df.index.tz_convert("Asia/Kolkata")
+            y_range = "60d"
 
-        required = ['open', 'high', 'low', 'close', 'volume']
-        if not all(c in df.columns for c in required):
-            raise ValueError(f"Missing columns in data: {df.columns}")
+        cache_file = self.cache_dir / f"{instrument}_{timeframe}.csv"
 
-    return df
+        # Check cache validity
+        is_cache_valid = False
+        if cache_file.exists():
+            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            # Valid if less than 60 mins old (since we run hourly)
+            if datetime.now() - mtime < timedelta(minutes=60):
+                is_cache_valid = True
 
-def download_yahoo_data(ticker: str, days: int) -> pd.DataFrame:
-    """
-    Download data from Yahoo Finance.
-    """
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
+        if not force_refresh and is_cache_valid:
+            try:
+                df = pd.read_csv(cache_file)
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                return df
+            except Exception:
+                logger.warning("Corrupt cache, refetching")
 
-    period1 = int(start_date.timestamp())
-    period2 = int(end_date.timestamp())
+        # Fetch
+        df = self.fetch_yahoo(ticker, y_interval, y_range)
 
-    url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={period1}&period2={period2}&interval=1d&events=history"
+        if df.empty:
+            # Fallback
+            proxy = self.get_proxy_ticker(instrument)
+            if proxy and proxy != ticker:
+                logger.info(f"Fallback to proxy {proxy} for {instrument}")
+                df = self.fetch_yahoo(proxy, y_interval, y_range)
 
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
+        if not df.empty:
+            df.to_csv(cache_file, index=False)
 
-    from io import StringIO
-    csv_data = StringIO(response.text)
-    df = pd.read_csv(csv_data, index_col=0, parse_dates=True)
-
-    df.columns = [c.lower() for c in df.columns]
-    df = df[['open', 'high', 'low', 'close', 'volume']]
-    df = df.dropna()
-
-    for c in ['open', 'high', 'low', 'close']:
-        df[c] = df[c].astype(float)
-
-    return df
+        return df

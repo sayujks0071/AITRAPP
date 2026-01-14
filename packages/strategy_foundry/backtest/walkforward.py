@@ -1,32 +1,23 @@
 import pandas as pd
-from typing import List, Tuple
+from typing import List
 
-class WalkForward:
-    def __init__(self, n_folds=5, train_ratio=0.7):
-        self.n_folds = n_folds
-        self.train_ratio = train_ratio
+def get_folds(df: pd.DataFrame, n_folds: int = 4) -> List[pd.DataFrame]:
+    """
+    Split DataFrame into n_folds sequential chunks.
+    Used for stability testing (k-fold cross validation on time series).
+    """
+    if df.empty:
+        return []
 
-    def split(self, df: pd.DataFrame) -> List[Tuple[pd.DataFrame, pd.DataFrame]]:
-        """
-        Expanding window walk-forward.
-        """
-        n = len(df)
-        min_train = int(n * 0.2)
-        fold_size = int((n - min_train) / self.n_folds)
+    n = len(df)
+    if n_folds <= 1 or n < n_folds * 100:
+        return [df]
 
-        splits = []
-        for i in range(self.n_folds):
-            train_end = min_train + i * fold_size
-            test_end = train_end + fold_size
+    fold_size = n // n_folds
+    folds = []
+    for i in range(n_folds):
+        start = i * fold_size
+        end = (i + 1) * fold_size if i < n_folds - 1 else n
+        folds.append(df.iloc[start:end].copy())
 
-            # Or fixed window? Expanding is safer for regime.
-            # Train: Start -> train_end
-            # Test: train_end -> test_end
-
-            train_df = df.iloc[:train_end]
-            test_df = df.iloc[train_end:test_end]
-
-            if len(test_df) > 0:
-                splits.append((train_df, test_df))
-
-        return splits
+    return folds
