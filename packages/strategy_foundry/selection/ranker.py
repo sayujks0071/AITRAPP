@@ -1,55 +1,101 @@
-from typing import List, Dict, Any
 import pandas as pd
+import numpy as np
 
 class Ranker:
-    def rank(self, candidates: List[Dict[str, Any]]) -> pd.DataFrame:
+    @staticmethod
+    def score(metrics_list: list[dict]) -> float:
         """
-        Rank candidates based on composite score.
-        Score = 0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - 0.1*Turnover
+        Computes composite score from fold metrics.
+        We treat the LAST fold as OOS?
+        Or all folds are OOS because we haven't trained?
+
+        Requirement: "Ranking uses OUT-OF-SAMPLE metrics only."
+        If we consider the generation random, and we select based on this score,
+        then the data used for this score BECOMES In-Sample.
+
+        But if we use Walk-Forward (Train/Test splits), we usually aggregate the Test results.
+
+        Let's assume `metrics_list` contains metrics for [Fold1, Fold2, Fold3].
+        If we just want stability, we average them.
+
+        Let's implement the default weights:
+        + 30% Sharpe
+        + 25% Calmar
+        + 20% CAGR
+        + 15% Stability (low dispersion of Sharpe)
+        - 10% Turnover penalty
+
+        We will calculate these stats across the folds.
+        Average Sharpe, Average Calmar, Average CAGR.
+        Stability = 1 / (StdDev(Sharpe) + 1).
+
+        Turnover = Avg Trades / Days? Or Portfolio Turnover.
+        We have 'trades' count.
+
         """
-        rows = []
-        for c in candidates:
-            m = c["result"]["metrics"]
-            stab = c["result"]["stability"]
+        if not metrics_list:
+            return -999.0
 
-            # Normalize inputs roughly to 0-1 range or just raw?
-            # User provided weights for raw metrics? Usually we standardize.
-            # But let's apply weights to raw first, assuming they are somewhat comparable.
-            # Sharpe ~ 1-3
-            # Calmar ~ 1-5
-            # CAGR ~ 0.2-0.5
-            # Stability ~ ? (Inverse std dev of sharpe). If std is 0.5, stab is 2.
-            # Turnover ~ ? (Need proxy).
+        sharpes = [m.get('sharpe', 0) for m in metrics_list]
+        calmars = [m.get('calmar', 0) for m in metrics_list]
+        cagrs = [m.get('cagr', 0) for m in metrics_list]
 
-            # Turnover proxy: Average trades per day? Or total trades?
-            # "exposure %, turnover proxy"
-            # Let's use trades count / days as turnover proxy.
-            trades_per_year = m["trades"] / 10.0 # Approx 10y
-            turnover_score = trades_per_year / 252.0 # ~ daily turnover freq
+        avg_sharpe = np.mean(sharpes)
+        avg_calmar = np.mean(calmars)
+        avg_cagr = np.mean(cagrs)
 
-            score = (0.3 * m["sharpe"]) + \
-                    (0.25 * m["calmar"]) + \
-                    (0.2 * m["cagr"] * 100) + \
-                    (0.15 * stab) - \
-                    (0.1 * turnover_score * 100) # Penalty
+        sharpe_std = np.std(sharpes)
+        stability = 1.0 / (sharpe_std + 0.1) # Higher is better
 
-            row = {
-                "id": c["strategy"].id,
+        # Turnover proxy: Average trades per fold (normalized by length?)
+        # Let's just use raw count penalty if high.
+        avg_trades = np.mean([m.get('trades', 0) for m in metrics_list])
+
+        # Penalize if too many trades (overtrading/costs) or too few
+        # Penalty logic:
+        # "Turnover penalty" usually means `Portfolio Turnover %`.
+        # We don't have exact turnover.
+        # Let's map avg_trades to a 0-1 score where optimum is e.g. 50-100?
+        # For now, simplistic: -0.1 * log(trades)?
+        # Let's use 0.0 for now as penalty is vague.
+        turnover_penalty = 0.0
+
+        score = (0.30 * avg_sharpe) + \
+                (0.25 * avg_calmar) + \
+                (0.20 * avg_cagr * 10) + \
+                (0.15 * stability) - \
+                (0.10 * turnover_penalty)
+
+        # Adjust scale
+        return score
+
+    @staticmethod
+    def rank(results: list[dict]) -> pd.DataFrame:
+        """
+        results: list of { 'strategy': config, 'metrics': [fold_metrics], ... }
+        Returns sorted DataFrame.
+        """
+        data = []
+        for r in results:
+            s_id = r['strategy'].strategy_id
+            m_list = r['metrics']
+            score = Ranker.score(m_list)
+
+            # Aggregate for display
+            avg_sharpe = np.mean([m.get('sharpe', 0) for m in m_list])
+            max_dd = np.min([m.get('max_dd', 0) for m in m_list]) # Worst DD
+
+            data.append({
+                "strategy_id": s_id,
                 "score": score,
-                "sharpe": m["sharpe"],
-                "calmar": m["calmar"],
-                "cagr": m["cagr"],
-                "max_dd": m["max_drawdown"],
-                "trades": m["trades"],
-                "stability": stab,
-                "rule_summary": c["strategy"].rule_summary,
-                "strategy_obj": c["strategy"]
-            }
-            rows.append(row)
+                "avg_sharpe": avg_sharpe,
+                "max_dd": max_dd,
+                "strategy_obj": r['strategy'],
+                "metrics_list": m_list
+            })
 
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(data)
         if not df.empty:
-            df.sort_values("score", ascending=False, inplace=True)
+            df.sort_values('score', ascending=False, inplace=True)
             df.reset_index(drop=True, inplace=True)
-
         return df

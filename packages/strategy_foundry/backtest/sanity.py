@@ -1,19 +1,16 @@
-from typing import Dict, Any
+class SanityCheck:
+    def __init__(self, min_trades=30, max_dd_pct=35.0):
+        self.min_trades = min_trades
+        self.max_dd_pct = max_dd_pct
 
-def check_sanity(metrics: Dict[str, Any], min_trades: int = 30, max_dd: float = 0.35, min_positive_folds: int = 2) -> bool:
-    if not metrics.get("valid", False):
-        return False
+    def check(self, metrics: dict) -> tuple[bool, str]:
+        if metrics.get('trades', 0) < self.min_trades:
+            return False, f"Not enough trades: {metrics.get('trades', 0)} < {self.min_trades}"
 
-    agg = metrics["metrics"]
-    if agg["trades"] < min_trades:
-        return False
+        if abs(metrics.get('max_dd', 0)) * 100 > self.max_dd_pct:
+             return False, f"Max DD too high: {metrics.get('max_dd', 0)*100:.1f}% > {self.max_dd_pct}%"
 
-    if agg["max_drawdown"] > max_dd:
-        return False
+        if metrics.get('cagr', 0) <= 0:
+            return False, "Negative CAGR"
 
-    # Check folds
-    pos_folds = sum(1 for f in metrics["fold_metrics"] if f["total_return"] > 0)
-    if pos_folds < min_positive_folds:
-        return False
-
-    return True
+        return True, "OK"

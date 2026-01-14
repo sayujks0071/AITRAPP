@@ -1,20 +1,21 @@
-import pytest
+import unittest
 import pandas as pd
-from packages.strategy_foundry.backtest.metrics import calculate_metrics
+from packages.strategy_foundry.backtest.metrics import MetricsCalculator
 
-def test_metrics_empty():
-    df = pd.DataFrame()
-    m = calculate_metrics(df)
-    assert m["total_return"] == 0.0
+class TestMetrics(unittest.TestCase):
+    def test_calculate(self):
+        equity = pd.Series([100, 101, 102, 105, 104, 110], index=pd.date_range('2023-01-01', periods=6))
+        trades = pd.DataFrame([
+            {'pnl': 5},
+            {'pnl': -1},
+            {'pnl': 6}
+        ])
 
-def test_metrics_basic():
-    trades = pd.DataFrame({
-        "entry_time": [pd.Timestamp("2023-01-01"), pd.Timestamp("2023-02-01")],
-        "exit_time": [pd.Timestamp("2023-01-10"), pd.Timestamp("2023-02-10")],
-        "return_pct": [0.05, -0.02]
-    })
+        m = MetricsCalculator.calculate(equity, trades)
 
-    m = calculate_metrics(trades)
-    assert m["trades"] == 2
-    assert m["total_return"] > 0
-    assert m["win_rate"] == 0.5
+        self.assertAlmostEqual(m['total_return'], 0.10)
+        self.assertEqual(m['trades'], 3)
+        self.assertGreater(m['cagr'], 0)
+
+if __name__ == '__main__':
+    unittest.main()
