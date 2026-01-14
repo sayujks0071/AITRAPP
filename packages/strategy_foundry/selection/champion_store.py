@@ -1,32 +1,39 @@
-import os
 import json
-import structlog
+import os
+from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any, Optional
 
-logger = structlog.get_logger(__name__)
+CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
 
-CHAMPION_DIR = os.path.join(os.path.dirname(__file__), "../results/champions")
-os.makedirs(CHAMPION_DIR, exist_ok=True)
-CURRENT_CHAMPION_FILE = os.path.join(CHAMPION_DIR, "current.json")
+def save_champion(candidate: Dict[str, Any], metrics: Dict[str, Any], spec: Dict[str, Any]):
+    CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_champion() -> dict:
-    if os.path.exists(CURRENT_CHAMPION_FILE):
-        with open(CURRENT_CHAMPION_FILE, "r") as f:
+    data = {
+        "timestamp": datetime.now().isoformat(),
+        "candidate_id": candidate.get("strategy_id"),
+        "metrics": metrics,
+        "spec": spec,
+        "blended_score": candidate.get("score", 0)
+    }
+
+    # Save current
+    with open(CHAMPION_DIR / "current.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+    # Archive
+    ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = f"{ts_str}_{candidate.get('strategy_id')}.json"
+    with open(CHAMPION_DIR / fname, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_champion() -> Optional[Dict[str, Any]]:
+    path = CHAMPION_DIR / "current.json"
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "r") as f:
             return json.load(f)
-    return None
-
-def save_champion(candidate: dict, reason: str):
-    candidate['promoted_at'] = datetime.now().isoformat()
-    candidate['promotion_reason'] = reason
-
-    # Versioned
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"{timestamp}_{candidate['id']}.json"
-    with open(os.path.join(CHAMPION_DIR, fname), "w") as f:
-        json.dump(candidate, f, indent=2)
-
-    # Current
-    with open(CURRENT_CHAMPION_FILE, "w") as f:
-        json.dump(candidate, f, indent=2)
-
-    logger.info("New champion promoted", id=candidate['id'], reason=reason)
+    except Exception:
+        return None

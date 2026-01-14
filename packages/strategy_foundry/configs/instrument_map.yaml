@@ -3,9 +3,9 @@ research:
   SENSEX: "^BSESN"
 
 paper_proxy:
-  NIFTY: "NIFTYBEES"
-  SENSEX: "SENSEXBEES"
+  NIFTY: "NIFTYBEES.NS"
+  SENSEX: "SENSEXBEES.NS"
 
 live_proxy:
-  NIFTY: "NIFTY FUT"
+  NIFTY: "NIFTY 50 FUT"
   SENSEX: "SENSEX FUT"

@@ -9,29 +9,29 @@ on:
       - 'packages/strategy_foundry/**'
 
 jobs:
-  hourly-run:
+  run-foundry:
     runs-on: ubuntu-latest
+    env:
+      FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+      PYTHONPATH: .
+
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pandas numpy requests structlog pytz
+    - name: Install dependencies
+      run: |
+        pip install pandas numpy requests pyyaml structlog tabulate
 
-      - name: Run Foundry
-        env:
-          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
-          PYTHONPATH: .
-        run: python packages/strategy_foundry/run_hourly.py
+    - name: Run Foundry
+      run: python packages/strategy_foundry/run_hourly.py
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: foundry-results
-          path: packages/strategy_foundry/results/
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: foundry-results
+        path: packages/strategy_foundry/results/
