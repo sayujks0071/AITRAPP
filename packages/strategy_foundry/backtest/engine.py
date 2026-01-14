@@ -20,6 +20,80 @@ class BacktestEngine:
         # 1. Generate Raw Entry Signals
         raw_signals = self.generator.generate_positions(self.df, strategy)
 
+        trades = []
+        equity_curve = [1.0]
+
+        opens = df["open"].values
+        dates = df.index
+        targets = target_pos.values
+
+        current_pos = 0 # 0 or 1
+        entry_price = 0.0
+        entry_date = None
+
+        capital = 1.0
+
+        for i in range(len(df)):
+            tgt = targets[i]
+            price = opens[i]
+
+            if tgt != current_pos:
+                # Close existing
+                if current_pos != 0:
+                    if current_pos == 1:
+                        # Long Exit (Sell)
+                        exit_price = price * (1 - self.slip_bps/10000)
+                        pnl_pct = (exit_price - entry_price) / entry_price
+                    else:
+                        # Short Exit (Buy to Cover)
+                        exit_price = price * (1 + self.slip_bps/10000)
+                        pnl_pct = (entry_price - exit_price) / entry_price
+
+                    pnl_pct -= (self.fee_bps/10000) * 2
+
+                    capital *= (1 + pnl_pct)
+
+                    trades.append(Trade(
+                        entry_date=entry_date,
+                        exit_date=dates[i],
+                        entry_price=entry_price,
+                        exit_price=exit_price,
+                        side=current_pos,
+                        pnl=pnl_pct * entry_price,
+                        pnl_pct=pnl_pct,
+                        exit_reason="Signal"
+                    ))
+
+                # Open new
+                if tgt != 0:
+                    current_pos = tgt
+                    if current_pos == 1:
+                        # Long Entry (Buy)
+                        entry_price = price * (1 + self.slip_bps/10000)
+                    else:
+                        # Short Entry (Sell)
+                        entry_price = price * (1 - self.slip_bps/10000)
+
+                    entry_date = dates[i]
+                else:
+                    current_pos = 0
+
+        return {
+            "trades": trades,
+            "equity_curve": [],
+            "final_capital": capital
+        }
+
+    def calculate_metrics(self, trades: List[Trade], initial_capital=100000.0) -> Dict[str, Any]:
+        if not trades:
+            return {"cagr": 0, "sharpe": 0, "max_dd": 0, "trades": 0, "total_return": 0}
+
+        df_trades = pd.DataFrame([vars(t) for t in trades])
+        df_trades['cum_pnl'] = (1 + df_trades['pnl_pct']).cumprod()
+
+        total_ret = df_trades['cum_pnl'].iloc[-1] - 1
+        n_years = (df_trades['exit_date'].max() - df_trades['entry_date'].min()).days / 365.25
+        cagr = (1 + total_ret) ** (1/n_years) - 1 if n_years > 0 else 0
         # 2. Simulate P&L
         # Note: We duplicate logic from generator.apply_risk_overlay because we need granular Trade P&L,
         # whereas apply_risk_overlay returns only position state for Signal Generation.
