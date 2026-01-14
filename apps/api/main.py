@@ -26,7 +26,8 @@ from packages.core.oco import OCOManager
 from packages.core.order_watcher import OrderWatcher
 from packages.core.kite_client import KiteClient
 from packages.storage.database import SessionLocal
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+import re
 
 from packages.core.config import app_config, settings
 from apps.api.auth import APIKeyMiddleware
@@ -1013,6 +1014,13 @@ class BacktestRequest(BaseModel):
     end_date: str  # YYYY-MM-DD
     initial_capital: float = 1000000
     strategy: str = "all"  # ORB, TrendPullback, OptionsRanker, or all
+
+    @field_validator('symbol')
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+            raise ValueError('Symbol must be alphanumeric')
+        return v
 
 
 @app.post("/backtest")
