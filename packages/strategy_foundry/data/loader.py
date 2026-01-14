@@ -1,94 +1,113 @@
 import os
-import csv
-import time
-from datetime import datetime, timedelta
-import requests
 import pandas as pd
-import structlog
+import requests
+import logging
+from datetime import datetime, timedelta
+from io import StringIO
+import pytz
 
-logger = structlog.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
-os.makedirs(CACHE_DIR, exist_ok=True)
+CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
+YAHOO_URL = "https://query1.finance.yahoo.com/v7/finance/download/{symbol}?period1={start}&period2={end}&interval=1d&events=history&includeAdjustedClose=true"
 
-SYMBOL_MAP = {
-    "NIFTY": "^NSEI",
-    "SENSEX": "^BSESN"
+INSTRUMENT_MAP = {
+    'NIFTY': '^NSEI',
+    'SENSEX': '^BSESN'
 }
 
-def get_historical_data(symbol: str, days: int = 3650) -> pd.DataFrame:
-    """
-    Get historical daily data for a symbol (NIFTY or SENSEX).
-    Checks cache first, then downloads from Yahoo Finance.
-    Returns DataFrame with Index=Date (Asia/Kolkata) and columns: open, high, low, close, volume.
-    """
-    symbol_yahoo = SYMBOL_MAP.get(symbol, symbol)
-    cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
+class DataLoader:
+    def __init__(self, cache_dir=CACHE_DIR):
+        self.cache_dir = cache_dir
+        os.makedirs(self.cache_dir, exist_ok=True)
 
-    needs_download = True
-    if os.path.exists(cache_file):
-        mtime = os.path.getmtime(cache_file)
-        if time.time() - mtime < 4 * 3600: # 4 hours
-            needs_download = False
+    def _get_cache_path(self, symbol):
+        return os.path.join(self.cache_dir, f"{symbol}.csv")
 
-    df = None
-    if not needs_download:
+    def download_data(self, symbol, days=365*5):
+        """Downloads data from Yahoo Finance."""
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=days)
+
+        # Yahoo expects unix timestamp
+        period1 = int(start_dt.timestamp())
+        period2 = int(end_dt.timestamp())
+
+        yahoo_symbol = INSTRUMENT_MAP.get(symbol, symbol)
+        url = YAHOO_URL.format(symbol=yahoo_symbol, start=period1, end=period2)
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+        }
+
         try:
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            logger.info("Loaded from cache", symbol=symbol, rows=len(df))
-        except Exception:
-            needs_download = True
+            logger.info(f"Downloading {symbol} from {url}")
+            response = requests.get(url, headers=headers, timeout=10.0)
+            response.raise_for_status()
 
-    if needs_download:
-        logger.info("Downloading fresh data", symbol=symbol)
-        try:
-            df = download_yahoo_data(symbol_yahoo, days)
-            df.to_csv(cache_file)
+            df = pd.read_csv(StringIO(response.text))
+
+            # Normalize columns
+            df.columns = [c.lower() for c in df.columns]
+            df.rename(columns={'date': 'datetime'}, inplace=True)
+
+            # Parse dates
+            df['datetime'] = pd.to_datetime(df['datetime'])
+
+            # Drop NaN
+            df.dropna(inplace=True)
+
+            return df
         except Exception as e:
-            logger.error("Download failed, trying cache fallback", error=str(e))
-            if os.path.exists(cache_file):
-                df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            else:
-                raise
+            logger.error(f"Failed to download {symbol}: {e}")
+            return None
 
-    # Normalize
-    if df is not None:
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+    def get_data(self, symbol, force_download=False):
+        """Gets data from cache or downloads it."""
+        cache_path = self._get_cache_path(symbol)
+
+        # Check cache validity (simple check: if exists and modified today)
+        is_cached = os.path.exists(cache_path)
+        is_fresh = False
+        if is_cached:
+            mtime = datetime.fromtimestamp(os.path.getmtime(cache_path))
+            if datetime.now() - mtime < timedelta(hours=12):
+                is_fresh = True
+
+        if is_cached and is_fresh and not force_download:
+            logger.info(f"Loading {symbol} from cache")
+            df = pd.read_csv(cache_path)
         else:
-            df.index = df.index.tz_convert("Asia/Kolkata")
+            df = self.download_data(symbol)
+            if df is not None:
+                # Save to cache
+                df.to_csv(cache_path, index=False)
+            elif is_cached:
+                 # Fallback to stale cache if download fails
+                logger.warning(f"Download failed, falling back to stale cache for {symbol}")
+                df = pd.read_csv(cache_path)
+            else:
+                raise ValueError(f"No data available for {symbol}")
 
-        required = ['open', 'high', 'low', 'close', 'volume']
-        if not all(c in df.columns for c in required):
-            raise ValueError(f"Missing columns in data: {df.columns}")
+        # Standardize columns if loaded from cache (e.g. date -> datetime)
+        df.columns = [c.lower() for c in df.columns]
+        if 'date' in df.columns and 'datetime' not in df.columns:
+            df.rename(columns={'date': 'datetime'}, inplace=True)
 
-    return df
+        if 'datetime' in df.columns:
+            df['datetime'] = pd.to_datetime(df['datetime'])
+        else:
+            raise ValueError(f"Data for {symbol} missing 'datetime' or 'date' column")
 
-def download_yahoo_data(ticker: str, days: int) -> pd.DataFrame:
-    """
-    Download data from Yahoo Finance.
-    """
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
+        df.sort_values('datetime', inplace=True)
+        df.reset_index(drop=True, inplace=True)
 
-    period1 = int(start_date.timestamp())
-    period2 = int(end_date.timestamp())
+        return df
 
-    url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={period1}&period2={period2}&interval=1d&events=history"
-
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-
-    from io import StringIO
-    csv_data = StringIO(response.text)
-    df = pd.read_csv(csv_data, index_col=0, parse_dates=True)
-
-    df.columns = [c.lower() for c in df.columns]
-    df = df[['open', 'high', 'low', 'close', 'volume']]
-    df = df.dropna()
-
-    for c in ['open', 'high', 'low', 'close']:
-        df[c] = df[c].astype(float)
-
-    return df
+if __name__ == "__main__":
+    loader = DataLoader()
+    try:
+        df = loader.get_data("NIFTY")
+        print(df.tail())
+    except Exception as e:
+        print(e)

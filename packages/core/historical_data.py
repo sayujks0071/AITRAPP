@@ -61,6 +61,12 @@ class HistoricalDataLoader:
         """
         self._validate_input(symbol)
         self._validate_input(option_type)
+        # Input validation for security (path traversal prevention)
+        if not re.match(r"^[a-zA-Z0-9_-]+$", symbol):
+            raise ValueError(f"Invalid symbol format: {symbol}")
+
+        if option_type not in ["CE", "PE"]:
+            raise ValueError(f"Invalid option type: {option_type}")
 
         # Construct filename
         # Allow flexible filename matching in future, but stick to pattern for now

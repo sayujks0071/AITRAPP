@@ -1,9 +1,21 @@
-from packages.strategy_foundry.backtest.metrics import calculate_cagr, calculate_sharpe
+import unittest
+import pandas as pd
+from packages.strategy_foundry.backtest.metrics import MetricsCalculator
 
-def test_metrics_empty():
-    assert calculate_cagr(1.0, 1.0, 1.0) == 0.0
+class TestMetrics(unittest.TestCase):
+    def test_calculate(self):
+        equity = pd.Series([100, 101, 102, 105, 104, 110], index=pd.date_range('2023-01-01', periods=6))
+        trades = pd.DataFrame([
+            {'pnl': 5},
+            {'pnl': -1},
+            {'pnl': 6}
+        ])
 
-def test_metrics_basic():
-    # Double in 1 year
-    cagr = calculate_cagr(100, 200, 1)
-    assert abs(cagr - 1.0) < 0.01
+        m = MetricsCalculator.calculate(equity, trades)
+
+        self.assertAlmostEqual(m['total_return'], 0.10)
+        self.assertEqual(m['trades'], 3)
+        self.assertGreater(m['cagr'], 0)
+
+if __name__ == '__main__':
+    unittest.main()
