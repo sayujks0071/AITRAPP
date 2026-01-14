@@ -87,29 +87,47 @@ class VectorizedIndicators(IndicatorCalculator):
         direction = np.ones(n, dtype=int)
 
         # Initial values
-        final_ub[0] = basic_ub[0]
-        final_lb[0] = basic_lb[0]
+        curr_final_ub = basic_ub[0]
+        curr_final_lb = basic_lb[0]
+        final_ub[0] = curr_final_ub
+        final_lb[0] = curr_final_lb
+
+        # Pre-fetch arrays to avoid attribute lookup in loop
+        basic_ub_arr = basic_ub
+        basic_lb_arr = basic_lb
+        close_arr = close
 
         for i in range(1, n):
-            if np.isnan(final_ub[i-1]):
-                final_ub[i] = basic_ub[i]
-            elif (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
-                final_ub[i] = basic_ub[i]
-            else:
-                final_ub[i] = final_ub[i-1]
+            # Final Upper Band
+            bub = basic_ub_arr[i]
+            prev_close = close_arr[i-1]
 
-            if np.isnan(final_lb[i-1]):
-                final_lb[i] = basic_lb[i]
-            elif (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
-                final_lb[i] = basic_lb[i]
-            else:
-                final_lb[i] = final_lb[i-1]
+            if np.isnan(curr_final_ub):
+                curr_final_ub = bub
+            elif (bub < curr_final_ub) or (prev_close > curr_final_ub):
+                curr_final_ub = bub
+            # else: keep curr_final_ub
 
-            if close[i] <= final_ub[i]:
-                supertrend[i] = final_ub[i]
+            final_ub[i] = curr_final_ub
+
+            # Final Lower Band
+            blb = basic_lb_arr[i]
+
+            if np.isnan(curr_final_lb):
+                curr_final_lb = blb
+            elif (blb > curr_final_lb) or (prev_close < curr_final_lb):
+                curr_final_lb = blb
+            # else: keep curr_final_lb
+
+            final_lb[i] = curr_final_lb
+
+            # Supertrend Logic
+            curr_close = close_arr[i]
+            if curr_close <= curr_final_ub:
+                supertrend[i] = curr_final_ub
                 direction[i] = -1
             else:
-                supertrend[i] = final_lb[i]
+                supertrend[i] = curr_final_lb
                 direction[i] = 1
 
         return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
