@@ -1,20 +1,16 @@
-from typing import Dict, Tuple
+class SanityCheck:
+    def __init__(self, min_trades=30, max_dd_pct=35.0):
+        self.min_trades = min_trades
+        self.max_dd_pct = max_dd_pct
 
-def check_sanity(metrics: Dict, fast_mode=False) -> Tuple[bool, str]:
-    min_trades = 10 if fast_mode else 30
+    def check(self, metrics: dict) -> tuple[bool, str]:
+        if metrics.get('trades', 0) < self.min_trades:
+            return False, f"Not enough trades: {metrics.get('trades', 0)} < {self.min_trades}"
 
-    # Handle missing keys
-    trades = metrics.get("trades", 0)
-    max_dd = metrics.get("max_dd", -1.0)
-    sharpe = metrics.get("sharpe", 0.0)
+        if abs(metrics.get('max_dd', 0)) * 100 > self.max_dd_pct:
+             return False, f"Max DD too high: {metrics.get('max_dd', 0)*100:.1f}% > {self.max_dd_pct}%"
 
-    if trades < min_trades:
-        return False, f"Too few trades ({trades} < {min_trades})"
+        if metrics.get('cagr', 0) <= 0:
+            return False, "Negative CAGR"
 
-    if max_dd < -0.35: # -0.35 is -35%
-        return False, f"Max DD too high ({max_dd:.1%})"
-
-    if sharpe <= 0:
-        return False, "Negative Sharpe"
-
-    return True, "OK"
+        return True, "OK"

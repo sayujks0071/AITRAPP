@@ -33,7 +33,7 @@ class IndicatorCalculator:
         self.bb_period = bb_period
         self.bb_std = bb_std
 
-    def _rolling_mean(self, arr: np.ndarray, window: int) -> np.ndarray:
+    def rolling_mean(self, arr: np.ndarray, window: int) -> np.ndarray:
         """
         Fast rolling mean using NumPy convolution.
         Matches pandas rolling(window).mean() behavior (propagates NaNs).
@@ -130,7 +130,7 @@ class IndicatorCalculator:
         except Exception:
             return None
 
-    def _calculate_tr(self, df: pd.DataFrame) -> np.ndarray:
+    def calculate_tr(self, df: pd.DataFrame) -> np.ndarray:
         """
         Calculate True Range using optimized NumPy operations.
         Returns numpy array.
@@ -155,178 +155,156 @@ class IndicatorCalculator:
 
         return np.maximum(tr1, np.maximum(tr2, tr3))
 
+    def atr_series(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> np.ndarray:
+        """Average True Range Series"""
+        if tr is None:
+            tr = self.calculate_tr(df)
+        return self.rolling_mean(tr, self.atr_period)
+
     def _atr(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> Optional[float]:
         """Average True Range"""
         try:
-            if tr is None:
-                tr = self._calculate_tr(df)
-
-            # Optimized using numpy rolling mean
-            atr = self._rolling_mean(tr, self.atr_period)
-
+            atr = self.atr_series(df, tr)
             # Return last element if valid
             last_val = atr[-1]
             return float(last_val) if not np.isnan(last_val) else None
         except Exception:
             return None
 
+    def rsi_series(self, df: pd.DataFrame) -> np.ndarray:
+        """Relative Strength Index Series"""
+        close = df["close"].values
+        delta = np.diff(close, prepend=np.nan)
+
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+
+        avg_gain = self.rolling_mean(gain, self.rsi_period)
+        avg_loss = self.rolling_mean(loss, self.rsi_period)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+        return rsi
+
     def _rsi(self, df: pd.DataFrame) -> Optional[float]:
         """Relative Strength Index"""
         try:
-            close = df["close"].values # Convert to numpy array immediately
-
-            # Numpy diff (prepend nan to match size)
-            delta = np.diff(close, prepend=np.nan)
-
-            # Vectorized gain/loss
-            # Note: np.where propagates NaNs if delta has NaNs (which it does at index 0)
-            gain = np.where(delta > 0, delta, 0)
-            loss = np.where(delta < 0, -delta, 0)
-
-            # Optimized rolling mean
-            avg_gain = self._rolling_mean(gain, self.rsi_period)
-            avg_loss = self._rolling_mean(loss, self.rsi_period)
-
-            # Avoid division by zero
-            # If avg_loss is 0, RS is infinite -> RSI is 100
-            # We handle this by checking mask or handling inf
-
-            with np.errstate(divide='ignore', invalid='ignore'):
-                 rs = avg_gain / avg_loss
-                 rsi = 100 - (100 / (1 + rs))
-
-            # If avg_loss was 0, rs is inf, rsi becomes 100.
-            # If avg_gain and avg_loss both 0 (unlikely for period>1), rs is nan.
-
+            rsi = self.rsi_series(df)
             last_val = rsi[-1]
             return float(last_val) if not np.isnan(last_val) else None
         except Exception:
             return None
 
+    def adx_series(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> np.ndarray:
+        """Average Directional Index Series"""
+        high = df["high"].values
+        low = df["low"].values
+
+        prev_high = np.roll(high, 1)
+        prev_low = np.roll(low, 1)
+
+        up_move = high - prev_high
+        down_move = prev_low - low
+
+        up_move[0] = np.nan
+        down_move[0] = np.nan
+
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+
+        if tr is None:
+            tr = self.calculate_tr(df)
+
+        atr = self.rolling_mean(tr, self.adx_period)
+        plus_dm_smooth = self.rolling_mean(plus_dm, self.adx_period)
+        minus_dm_smooth = self.rolling_mean(minus_dm, self.adx_period)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            plus_di = 100 * plus_dm_smooth / atr
+            minus_di = 100 * minus_dm_smooth / atr
+            dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+
+        adx = self.rolling_mean(dx, self.adx_period)
+        return adx
+
     def _adx(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> Optional[float]:
         """Average Directional Index"""
         try:
-            high = df["high"].values
-            low = df["low"].values
-
-            # Numpy diff
-            # up_move = high - prev_high
-            # down_move = prev_low - low
-
-            # Using roll for shift(1)
-            prev_high = np.roll(high, 1)
-            prev_low = np.roll(low, 1)
-            # Invalid first element logic handled by logic or explicit set
-
-            up_move = high - prev_high
-            down_move = prev_low - low
-
-            # We must ignore the first element (garbage from roll)
-            # But the subsequent logic (rolling mean) will naturally propagate if we treat it right.
-            # Pandas shift puts NaN at 0.
-            up_move[0] = np.nan
-            down_move[0] = np.nan
-
-            plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-            minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-
-            # Calculate ATR
-            if tr is None:
-                tr = self._calculate_tr(df)
-
-            # Optimized rolling mean for ATR
-            atr = self._rolling_mean(tr, self.adx_period)
-
-            # Optimized rolling mean for +DM, -DM
-            plus_dm_smooth = self._rolling_mean(plus_dm, self.adx_period)
-            minus_dm_smooth = self._rolling_mean(minus_dm, self.adx_period)
-
-            with np.errstate(divide='ignore', invalid='ignore'):
-                plus_di = 100 * plus_dm_smooth / atr
-                minus_di = 100 * minus_dm_smooth / atr
-
-                # Calculate DX and ADX
-                dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
-
-            adx = self._rolling_mean(dx, self.adx_period)
-
+            adx = self.adx_series(df, tr)
             last_val = adx[-1]
             return float(last_val) if not np.isnan(last_val) else None
         except Exception:
             return None
 
+    def ema_series(self, series: pd.Series, period: int) -> pd.Series:
+        """Exponential Moving Average Series"""
+        return series.ewm(span=period, adjust=False).mean()
+
     def _ema(self, series: pd.Series, period: int) -> Optional[float]:
         """Exponential Moving Average"""
         try:
-            ema = series.ewm(span=period, adjust=False).mean()
+            ema = self.ema_series(series, period)
             return float(ema.iloc[-1]) if not pd.isna(ema.iloc[-1]) else None
         except Exception:
             return None
 
+    def supertrend_series(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Supertrend indicator series.
+        """
+        high = df["high"].values
+        low = df["low"].values
+        close = df["close"].values
+
+        if tr is None:
+            tr = self.calculate_tr(df)
+
+        atr = self.rolling_mean(tr, self.supertrend_period)
+
+        hl_avg = (high + low) / 2
+        basic_ub = hl_avg + (self.supertrend_multiplier * atr)
+        basic_lb = hl_avg - (self.supertrend_multiplier * atr)
+
+        n = len(df)
+        final_ub = np.zeros(n)
+        final_lb = np.zeros(n)
+        supertrend = np.zeros(n)
+        direction = np.ones(n, dtype=int)
+
+        final_ub[0] = basic_ub[0]
+        final_lb[0] = basic_lb[0]
+
+        for i in range(1, n):
+            if np.isnan(final_ub[i-1]):
+                final_ub[i] = basic_ub[i]
+            elif (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
+                final_ub[i] = basic_ub[i]
+            else:
+                final_ub[i] = final_ub[i-1]
+
+            if np.isnan(final_lb[i-1]):
+                final_lb[i] = basic_lb[i]
+            elif (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
+                final_lb[i] = basic_lb[i]
+            else:
+                final_lb[i] = final_lb[i-1]
+
+            if close[i] <= final_ub[i]:
+                supertrend[i] = final_ub[i]
+                direction[i] = -1
+            else:
+                supertrend[i] = final_lb[i]
+                direction[i] = 1
+
+        return supertrend, direction
+
     def _supertrend(self, df: pd.DataFrame, tr: Optional[np.ndarray] = None) -> tuple[Optional[float], Optional[int]]:
         """
         Supertrend indicator.
-
-        Returns:
-            (supertrend_value, direction) where direction is 1 for uptrend, -1 for downtrend
         """
         try:
-            high = df["high"].values
-            low = df["low"].values
-            close = df["close"].values
-
-            # Calculate ATR
-            if tr is None:
-                tr = self._calculate_tr(df)
-
-            # ATR is moving average of TR
-            # Optimized rolling mean
-            atr = self._rolling_mean(tr, self.supertrend_period)
-
-            # Calculate basic upper and lower bands
-            hl_avg = (high + low) / 2
-            basic_ub = hl_avg + (self.supertrend_multiplier * atr)
-            basic_lb = hl_avg - (self.supertrend_multiplier * atr)
-
-            # Calculate final bands
-            # We must iterate because of recursive definition
-            n = len(df)
-            final_ub = np.zeros(n)
-            final_lb = np.zeros(n)
-            supertrend = np.zeros(n)
-            direction = np.ones(n, dtype=int)
-
-            # Initial values
-            final_ub[0] = basic_ub[0]
-            final_lb[0] = basic_lb[0]
-
-            # Optimized loop using numpy arrays (avoiding pandas overhead)
-            for i in range(1, n):
-                # Final Upper Band
-                # Note: nan comparisons in numpy are False.
-                if np.isnan(final_ub[i-1]):
-                    final_ub[i] = basic_ub[i]
-                elif (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
-                    final_ub[i] = basic_ub[i]
-                else:
-                    final_ub[i] = final_ub[i-1]
-
-                # Final Lower Band
-                if np.isnan(final_lb[i-1]):
-                    final_lb[i] = basic_lb[i]
-                elif (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
-                    final_lb[i] = basic_lb[i]
-                else:
-                    final_lb[i] = final_lb[i-1]
-
-                # Supertrend
-                if close[i] <= final_ub[i]:
-                    supertrend[i] = final_ub[i]
-                    direction[i] = -1
-                else:
-                    supertrend[i] = final_lb[i]
-                    direction[i] = 1
-
+            supertrend, direction = self.supertrend_series(df, tr)
             return (
                 float(supertrend[-1]) if not np.isnan(supertrend[-1]) else None,
                 int(direction[-1])
@@ -334,31 +312,20 @@ class IndicatorCalculator:
         except Exception:
             return None, None
 
+    def bollinger_bands_series(self, series: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
+        """Bollinger Bands Series"""
+        middle = series.rolling(window=self.bb_period).mean()
+        std = series.rolling(window=self.bb_period).std()
+        upper = middle + (std * self.bb_std)
+        lower = middle - (std * self.bb_std)
+        return upper, middle, lower
+
     def _bollinger_bands(self, series: pd.Series) -> tuple[Optional[float], Optional[float], Optional[float]]:
         """
         Bollinger Bands.
-
-        Returns:
-            (upper, middle, lower)
         """
         try:
-            # We can optimize 'middle' (mean) but 'std' requires creating Series anyway unless we impl std.
-            # But converting to numpy for mean saves one Series creation if passed as Series (it is).
-            # Wait, series is passed as Series.
-            # Using rolling mean on series is optimized C code in pandas.
-            # The bottleneck was converting numpy->Series. Here input IS Series.
-            # So optimization might be minimal, but let's see.
-            # Actually, `series` input is `df["close"]` which is Series.
-            # But let's check `compute_all`: `self._bollinger_bands(df["close"])`.
-            # If we used numpy input, we might avoid overhead if we implemented `rolling_std`.
-            # For now, let's leave bollinger alone as per my plan to focus on heavy hitters (ADX/ATR).
-            # Wait, I said I would optimize it. But safety first.
-
-            middle = series.rolling(window=self.bb_period).mean()
-            std = series.rolling(window=self.bb_period).std()
-            upper = middle + (std * self.bb_std)
-            lower = middle - (std * self.bb_std)
-
+            upper, middle, lower = self.bollinger_bands_series(series)
             return (
                 float(upper.iloc[-1]) if not pd.isna(upper.iloc[-1]) else None,
                 float(middle.iloc[-1]) if not pd.isna(middle.iloc[-1]) else None,
@@ -367,17 +334,18 @@ class IndicatorCalculator:
         except Exception:
             return None, None, None
 
+    def donchian_series(self, df: pd.DataFrame, period: int = 20) -> tuple[pd.Series, pd.Series]:
+        """Donchian Channel Series"""
+        upper = df["high"].rolling(window=period).max()
+        lower = df["low"].rolling(window=period).min()
+        return upper, lower
+
     def _donchian(self, df: pd.DataFrame, period: int = 20) -> tuple[Optional[float], Optional[float]]:
         """
         Donchian Channel.
-
-        Returns:
-            (upper, lower)
         """
         try:
-            upper = df["high"].rolling(window=period).max()
-            lower = df["low"].rolling(window=period).min()
-
+            upper, lower = self.donchian_series(df, period)
             return (
                 float(upper.iloc[-1]) if not pd.isna(upper.iloc[-1]) else None,
                 float(lower.iloc[-1]) if not pd.isna(lower.iloc[-1]) else None

@@ -1,148 +1,135 @@
 import os
 import sys
-import argparse
-import pandas as pd
-import structlog
+import logging
 from datetime import datetime
+import pandas as pd
+import pytz
 
-# Setup paths
-sys.path.append(os.getcwd())
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-from packages.strategy_foundry.data.loader import get_historical_data
-from packages.strategy_foundry.factory.generator import StrategyGenerator, GeneratedStrategy
-from packages.strategy_foundry.backtest.engine import FoundryEngine
-from packages.strategy_foundry.backtest.walkforward import WalkForward
-from packages.strategy_foundry.backtest.sanity import check_sanity
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.factory.generator import StrategyGenerator
+from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
 from packages.strategy_foundry.selection.ranker import Ranker
-from packages.strategy_foundry.selection.champion_store import load_champion, save_champion
-from packages.strategy_foundry.selection.promote import should_promote
-from packages.strategy_foundry.live.signal_publisher import publish_signal
+from packages.strategy_foundry.selection.promote import Promoter
+from packages.strategy_foundry.live.signal_publisher import SignalPublisher
+from packages.strategy_foundry.factory.registry import CandidateRegistry
 
-logger = structlog.get_logger(__name__)
+def run():
+    # 1. Config
+    FAST_MODE = os.environ.get('FAST_MODE', '0') == '1'
+    N_CANDIDATES = 10 if FAST_MODE else 50
+    FOLDS = 2 if FAST_MODE else 3
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--fast", action="store_true", help="Run in fast mode")
-    args = parser.parse_args()
+    logger.info(f"Starting Strategy Foundry (FAST_MODE={FAST_MODE})")
 
-    fast_mode = args.fast or os.environ.get("FAST_MODE") == "1"
+    instruments = ['NIFTY', 'SENSEX']
 
-    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = f"packages/strategy_foundry/results/runs/{run_timestamp}"
+    # Timestamp for artifacts
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = f"packages/strategy_foundry/results/runs/{run_ts}"
     os.makedirs(run_dir, exist_ok=True)
 
-    logger.info("Starting Foundry Run", fast_mode=fast_mode, run_dir=run_dir)
+    leaderboard_rows = []
 
-    # 1. Data
-    try:
-        df_nifty = get_historical_data("NIFTY")
-    except Exception as e:
-        logger.error("Failed to load data", error=str(e))
-        return
+    loader = DataLoader()
+    generator = StrategyGenerator()
+    promoter = Promoter() # Defaults to NIFTY, we might need one per instrument?
+    # Promoter uses ChampionStore which handles file per instrument.
+    # But Promoter init takes instrument.
 
-    # 2. Generate
-    n_candidates = 10 if fast_mode else 50
-    gen = StrategyGenerator()
-    candidates = gen.generate_candidates(n_candidates)
+    for instrument in instruments:
+        logger.info(f"Processing {instrument}")
 
-    # 3. Backtest & Eval
-    engine = FoundryEngine()
-    wf = WalkForward(n_folds=2 if fast_mode else 4)
-
-    results = []
-
-    for cand in candidates:
-        strat = GeneratedStrategy(cand)
-
-        # We need to run WF
-        splits = wf.split(df_nifty)
-
-        fold_metrics = []
-        passed_folds = 0
-
-        for train, test in splits:
-            # We train on Train (optimize? No, we generate random fixed params).
-            # We just validate on Test.
-            # Actually WF implies training on window to select params, then testing.
-            # But our strategies are "Generated with Params".
-            # So we just evaluate performance on Test chunks (OOS).
-
-            # Generate positions on full DF to handle indicators warmup?
-            # Or just on test?
-            # Ideally generate on full, slice positions.
-
-            full_pos = strat.generate_positions(df_nifty)
-            test_pos = full_pos.loc[test.index]
-
-            res = engine.run(test, test_pos) # Pass full test DF? Yes.
-            met = engine.calculate_metrics(res["trades"])
-
-            # Calculate MaxDD/Sharpe for this fold
-            # Need equity curve from engine
-            # Engine returns trades.
-            # Let's reconstruct or assume calculate_metrics does it?
-            # calculate_metrics is basic.
-            # Engine.run_vectorized might be better for metrics.
-
-            # Use vectorized for fast metrics
-            v_res = engine.run_vectorized(test, test_pos)
-            fold_metrics.append(v_res)
-
-            if v_res["sharpe"] > 0 and v_res["total_return"] > 0:
-                passed_folds += 1
-
-        # Aggregate OOS metrics
-        # Average Sharpe, Total Return
-        if not fold_metrics:
+        # 2. Data
+        try:
+            df = loader.get_data(instrument)
+            if df is None or df.empty:
+                logger.error(f"No data for {instrument}")
+                continue
+        except Exception as e:
+            logger.error(f"Failed to load data for {instrument}: {e}")
             continue
 
-        avg_sharpe = sum(m["sharpe"] for m in fold_metrics) / len(fold_metrics)
-        avg_cagr = sum(m["cagr"] for m in fold_metrics) / len(fold_metrics)
-        avg_dd = min(m["max_dd"] for m in fold_metrics) # Worst case DD
-        avg_turnover = sum(m["turnover"] for m in fold_metrics) / len(fold_metrics)
+        # 3. Generate Candidates
+        candidates = []
+        # Attempt to load previous candidates to mutate?
+        # Requirement says "Generate N candidates per run". "Self-generating".
+        # We can start fresh or keep some.
+        # For now, generate fresh N.
 
-        cand_res = {
-            **cand,
-            "sharpe": avg_sharpe,
-            "cagr": avg_cagr,
-            "max_dd": avg_dd,
-            "turnover": avg_turnover,
-            "passed_folds": passed_folds,
-            "trades": sum(m["trades"] for m in fold_metrics)
-        }
+        seen_ids = set()
+        while len(candidates) < N_CANDIDATES:
+            cand = generator.generate_candidate()
+            if cand.strategy_id not in seen_ids:
+                candidates.append(cand)
+                seen_ids.add(cand.strategy_id)
 
-        # Sanity
-        passed, reason = check_sanity(cand_res, fast_mode)
-        if passed:
-            results.append(cand_res)
-        else:
-            logger.debug("Candidate rejected", id=cand["id"], reason=reason)
+        # Save candidates
+        CandidateRegistry.save_candidates(candidates, f"{run_dir}/{instrument}_candidates.json")
 
-    # 4. Rank
-    ranker = Ranker()
-    ranked_df = ranker.rank_candidates(results)
+        # 4. Evaluate (Walk Forward)
+        wf = WalkForwardEvaluator(df, folds=FOLDS)
+        results = []
 
-    if not ranked_df.empty:
-        # Save results
-        ranked_df.to_csv(f"{run_dir}/candidates.csv")
+        for cand in candidates:
+            try:
+                # We need to map instrument type. NIFTY/SENSEX are Indices (EQUITY/FUTURE logic?)
+                # We trade NIFTY Futures usually or ETFs.
+                # CostsAdapter defaults to Equity structure but we can pass FUTURE.
+                # Let's assume FUTURE for Indices.
+                metrics_list = wf.evaluate(cand, instrument_type='FUTURE')
 
-        best = ranked_df.iloc[0].to_dict()
-        current = load_champion()
+                # Sanity Check?
+                # We rely on Ranker/Promoter to filter bad ones.
 
-        if fast_mode:
-            logger.info("Fast mode: skipping promotion")
-        else:
-            if should_promote(best, current):
-                save_champion(best, "Score improvement")
+                results.append({
+                    "strategy": cand,
+                    "metrics": metrics_list
+                })
+            except Exception as e:
+                logger.warning(f"Failed to evaluate {cand.strategy_id}: {e}")
 
-        # Leaderboard Update (Append)
-        # TODO: Implement global leaderboard file update
-        pass
+        # 5. Rank
+        ranked_df = Ranker.rank(results)
+        ranked_df.to_csv(f"{run_dir}/{instrument}_ranking.csv", index=False)
 
-    # 5. Live Signal
-    publish_signal("NIFTY")
+        # 6. Promote
+        if not ranked_df.empty:
+            top_row = ranked_df.iloc[0].to_dict()
+            promoter_inst = Promoter(instrument)
+            promoted = promoter_inst.check_and_promote(top_row)
+            if promoted:
+                logger.info(f"Promoted new champion for {instrument}: {top_row['strategy_id']}")
+
+            # Add to leaderboard list
+            leaderboard_rows.append({
+                "instrument": instrument,
+                "top_strategy": top_row['strategy_id'],
+                "score": top_row['score'],
+                "sharpe": top_row['avg_sharpe'],
+                "max_dd": top_row['max_dd'],
+                "promoted": promoted
+            })
+
+        # 7. Publish Live Signal (if eligible)
+        # Only for NIFTY/SENSEX (we iterate them)
+        # SignalPublisher handles "load current champion".
+        publisher = SignalPublisher(instrument)
+        publisher.publish()
+
+    # 8. Update Leaderboard MD
+    lb_df = pd.DataFrame(leaderboard_rows)
+    lb_path = "packages/strategy_foundry/results/leaderboard.md"
+
+    with open(lb_path, 'a') as f:
+        f.write(f"\n## Run {run_ts}\n")
+        f.write(lb_df.to_markdown(index=False))
+        f.write("\n")
 
     logger.info("Run completed")
 
 if __name__ == "__main__":
-    main()
+    run()
