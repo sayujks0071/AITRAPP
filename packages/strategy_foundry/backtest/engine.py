@@ -53,8 +53,15 @@ class FoundryEngine:
             if tgt != current_pos:
                 # Close existing
                 if current_pos != 0:
-                    exit_price = price * (1 - self.slip_bps/10000)
-                    pnl_pct = (exit_price - entry_price) / entry_price
+                    if current_pos == 1:
+                        # Long Exit (Sell)
+                        exit_price = price * (1 - self.slip_bps/10000)
+                        pnl_pct = (exit_price - entry_price) / entry_price
+                    else:
+                        # Short Exit (Buy to Cover)
+                        exit_price = price * (1 + self.slip_bps/10000)
+                        pnl_pct = (entry_price - exit_price) / entry_price
+
                     pnl_pct -= (self.fee_bps/10000) * 2
 
                     capital *= (1 + pnl_pct)
@@ -73,7 +80,13 @@ class FoundryEngine:
                 # Open new
                 if tgt != 0:
                     current_pos = tgt
-                    entry_price = price * (1 + self.slip_bps/10000)
+                    if current_pos == 1:
+                        # Long Entry (Buy)
+                        entry_price = price * (1 + self.slip_bps/10000)
+                    else:
+                        # Short Entry (Sell)
+                        entry_price = price * (1 - self.slip_bps/10000)
+
                     entry_date = dates[i]
                 else:
                     current_pos = 0
