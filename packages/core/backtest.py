@@ -165,11 +165,38 @@ class BacktestEngine:
                 if option_data.empty:
                     continue
 
+                # Pre-calculate instrument and token once per day/strike/type
+                # to avoid repeated hashing and Pydantic validation in the inner loop
+                from packages.core.models import Instrument, InstrumentType
+
+                inst_type = InstrumentType.CE if option_type == 'CE' else InstrumentType.PE
+
+                # Stable deterministic token generation
+                token_str = f"{symbol}_{strike}_{option_type}"
+                # Use MD5 to get consistent hash across runs/platforms
+                token_hash = hashlib.md5(token_str.encode()).hexdigest()
+                token = int(token_hash[:8], 16)  # Take first 8 chars (32 bits)
+
+                instrument = Instrument(
+                    token=token,
+                    symbol=symbol,
+                    tradingsymbol=f"{symbol}{int(strike)}{option_type}",
+                    exchange="NFO",
+                    instrument_type=inst_type,
+                    strike=strike,
+                    lot_size=50 if symbol == "NIFTY" else 25,
+                    tick_size=0.05
+                )
+
                 # Convert to bars
                 bars = self.data_loader.convert_to_bars(option_data, symbol, strike, option_type)
                 
                 # Sort bars by timestamp to enable sequential processing
                 bars.sort(key=lambda b: b.timestamp)
+
+                # Ensure bar tokens match instrument token (vectorized assign if possible, but bars is list)
+                for b in bars:
+                    b.token = token
 
                 # Pre-calculate instrument and token to avoid overhead in inner loop
                 from packages.core.models import Instrument, InstrumentType
@@ -206,7 +233,7 @@ class BacktestEngine:
                         bar = bars[i]
                         # Create tick from bar for strategy context
                         current_tick = Tick(
-                            token=bar.token,
+                            token=token,
                             timestamp=bar.timestamp,
                             last_price=bar.close,
                             last_quantity=bar.volume,
@@ -246,6 +273,7 @@ class BacktestEngine:
     def _generate_signals(
         self,
         strategy: Strategy,
+        instrument: "Instrument",
         instrument: 'Instrument',
         date: datetime,
         bars: List,
