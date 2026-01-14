@@ -26,7 +26,9 @@ def test_pandas_future_warning_repro():
 
     loader = HistoricalDataLoader()
 
-    with pytest.warns(None) as record:
+    import warnings
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
         # Call the method that was triggering the warning
         loader.convert_to_bars(df, "NIFTY", 10000, "CE")
         loader.convert_to_ticks(df, "NIFTY", 10000, "CE")

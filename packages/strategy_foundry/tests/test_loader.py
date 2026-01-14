@@ -1,22 +1,29 @@
-from packages.strategy_foundry.data.loader import get_historical_data
+import unittest
 import os
-from unittest.mock import patch, MagicMock
+import pandas as pd
+from packages.strategy_foundry.data.loader import DataLoader
 
-def test_loader_cache():
-    # Mock requests
-    with patch("requests.get") as mock_get:
-        mock_get.return_value.text = "Date,Open,High,Low,Close,Volume\n2023-01-01,100,101,99,100.5,1000"
-        mock_get.return_value.raise_for_status = MagicMock()
+class TestLoader(unittest.TestCase):
+    def test_cache_path(self):
+        loader = DataLoader()
+        path = loader._get_cache_path('TEST')
+        self.assertTrue(path.endswith('TEST.csv'))
 
-        # Test download
-        df = get_historical_data("TEST_SYM", days=10)
-        assert not df.empty
-        assert "close" in df.columns
+    def test_normalize(self):
+        # Create a dummy csv
+        loader = DataLoader()
+        df = pd.DataFrame({'Date': ['2023-01-01'], 'Close': [100]})
+        path = loader._get_cache_path('TEST_Dummy')
+        df.to_csv(path, index=False)
 
-        # Verify cache file created
-        cache_path = "packages/strategy_foundry/data/cache/TEST_SYM.csv"
-        assert os.path.exists(cache_path)
+        # Load
+        loaded = loader.get_data('TEST_Dummy', force_download=False)
+        self.assertIn('datetime', loaded.columns)
+        self.assertIn('close', loaded.columns)
 
         # Cleanup
-        if os.path.exists(cache_path):
-            os.remove(cache_path)
+        if os.path.exists(path):
+            os.remove(path)
+
+if __name__ == '__main__':
+    unittest.main()

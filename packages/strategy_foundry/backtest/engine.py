@@ -1,37 +1,24 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List
-import structlog
-from dataclasses import dataclass
+from packages.strategy_foundry.factory.grammar import StrategyConfig
+from packages.strategy_foundry.factory.generator import StrategyGenerator
+from packages.strategy_foundry.adapters.core_costs import CostsAdapter
+from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
 
-logger = structlog.get_logger(__name__)
+class BacktestEngine:
+    def __init__(self, df: pd.DataFrame, initial_capital=100000.0):
+        self.df = df
+        self.initial_capital = initial_capital
+        self.generator = StrategyGenerator()
+        self.costs_adapter = CostsAdapter()
 
-@dataclass
-class Trade:
-    entry_date: pd.Timestamp
-    exit_date: pd.Timestamp
-    entry_price: float
-    exit_price: float
-    side: int # 1 or -1
-    pnl: float
-    pnl_pct: float
-    exit_reason: str
-
-class FoundryEngine:
-    """
-    Lightweight Daily Backtest Engine.
-    Executes signals at Next Open.
-    """
-    def __init__(self, slip_bps=5, fee_bps=3):
-        self.slip_bps = slip_bps
-        self.fee_bps = fee_bps
-
-    def run(self, df: pd.DataFrame, positions: pd.Series) -> Dict[str, Any]:
+    def run(self, strategy: StrategyConfig, instrument_type='EQUITY'):
         """
-        Run backtest based on target positions.
+        Runs backtest for a single strategy.
+        Assumes df has OHLC data.
         """
-        # Align positions to next day (Execution at Open)
-        target_pos = positions.shift(1).fillna(0)
+        # 1. Generate Raw Entry Signals
+        raw_signals = self.generator.generate_positions(self.df, strategy)
 
         trades = []
         equity_curve = [1.0]
@@ -107,60 +94,157 @@ class FoundryEngine:
         total_ret = df_trades['cum_pnl'].iloc[-1] - 1
         n_years = (df_trades['exit_date'].max() - df_trades['entry_date'].min()).days / 365.25
         cagr = (1 + total_ret) ** (1/n_years) - 1 if n_years > 0 else 0
+        # 2. Simulate P&L
+        # Note: We duplicate logic from generator.apply_risk_overlay because we need granular Trade P&L,
+        # whereas apply_risk_overlay returns only position state for Signal Generation.
+        # Ideally, we should unify this logic in a shared component.
+
+        return self._simulate_loop(self.df, raw_signals, strategy, instrument_type)
+
+    def _simulate_loop(self, df: pd.DataFrame, entry_signals: pd.Series, config: StrategyConfig, instrument_type: str):
+        # ... logic similar to apply_risk_overlay but recording P&L ...
+
+        # Setup
+        open_prices = df['open'].values
+        high_prices = df['high'].values
+        low_prices = df['low'].values
+        close_prices = df['close'].values
+        dates = df['datetime'].values # assuming datetime column exists
+
+        # Indicators needed for stops
+        atr = IndicatorsAdapter.atr(df, period=14)
+        # Ensure it's numpy array (adapter returns ndarray or Series depending on implementation details)
+        if isinstance(atr, pd.Series):
+            atr = atr.values
+
+        n = len(df)
+        equity = np.zeros(n)
+        equity[0] = self.initial_capital
+        current_capital = self.initial_capital
+
+        trades = []
+
+        in_trade = False
+        entry_price = 0.0
+        entry_idx = 0
+        entry_date = None
+        quantity = 0
+
+        stop_loss = 0.0
+        take_profit = 0.0
+
+        signal_values = entry_signals.values
+
+        for i in range(1, n):
+            # Default: carry over capital
+            equity[i] = equity[i-1]
+
+            if in_trade:
+                # Mark to market (Close)
+                # Unrealized PnL
+                curr_val = quantity * close_prices[i]
+                # equity[i] = cash + curr_val
+                # cash = current_capital - (quantity * entry_price) approx
+                # Let's track Portfolio Value directly
+
+                # Check Exits
+                exit_price = 0.0
+                exit_reason = ""
+                bars_held = i - entry_idx
+
+                # SL/TP logic on Low/High
+                if low_prices[i] <= stop_loss:
+                    exit_price = stop_loss # Assumes fill at SL
+                    # Gap check: if Open < SL, we fill at Open
+                    if open_prices[i] < stop_loss:
+                         exit_price = open_prices[i]
+                    exit_reason = "SL"
+                elif high_prices[i] >= take_profit:
+                    exit_price = take_profit
+                    # Gap check: if Open > TP, fill at Open
+                    if open_prices[i] > take_profit:
+                        exit_price = open_prices[i]
+                    exit_reason = "TP"
+                elif bars_held >= config.max_bars_hold:
+                    exit_price = open_prices[i] # Exit at Open of this bar?
+                    # Or Close? "Time stop" usually at close of max bar or open of next.
+                    # Let's say Open of this bar (after max bars passed).
+                    exit_reason = "TIME"
+
+                if exit_price > 0:
+                    # Execute Exit
+                    cost_est = self.costs_adapter.estimate_costs(instrument_type, exit_price, quantity)
+                    proceeds = (exit_price * quantity) - cost_est.total_fees - cost_est.slippage
+
+                    current_capital += proceeds
+                    in_trade = False
+
+                    trades.append({
+                        "entry_date": entry_date,
+                        "exit_date": dates[i],
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "quantity": quantity,
+                        "pnl": proceeds - (quantity * entry_price), # Gross PnL - Exit Costs. Entry costs already deducted.
+                        "reason": exit_reason
+                    })
+
+                    equity[i] = current_capital
+                    continue # Next bar
+
+                # Still in trade, update equity with Close price
+                # We need to account for what capital would be if liquidated now
+                # But we don't pay costs yet.
+                unrealized_val = quantity * close_prices[i]
+                equity[i] = current_capital + unrealized_val
+
+            if not in_trade:
+                # Check Entry (signal from i-1)
+                if signal_values[i-1] == 1:
+                    entry_price = open_prices[i]
+
+                    # Risk Management for Sizing
+                    # 1% risk
+                    current_atr = atr[i-1]
+                    if np.isnan(current_atr) or current_atr == 0:
+                        current_atr = entry_price * 0.01
+
+                    sl_dist = config.stop_loss_atr * current_atr
+                    risk_per_share = sl_dist
+
+                    # Capital to risk = 1% of current equity
+                    risk_capital = equity[i] * 0.01
+
+                    if risk_per_share > 0:
+                        qty = int(risk_capital / risk_per_share)
+                    else:
+                        qty = 0
+
+                    if qty > 0:
+                        # Cost Check
+                        cost_est = self.costs_adapter.estimate_costs(instrument_type, entry_price, qty)
+                        total_cost = (entry_price * qty) + cost_est.total_fees + cost_est.slippage
+
+                        if total_cost < equity[i]:
+                            # Execute Entry
+                            current_capital = equity[i] - total_cost
+                            quantity = qty
+                            in_trade = True
+                            entry_idx = i
+                            entry_date = dates[i]
+
+                            stop_loss = entry_price - sl_dist
+                            take_profit = entry_price + (config.take_profit_atr * current_atr)
+
+                            # Update Equity (Mark to market at Open is Entry Price - Costs)
+                            # Actually usually MTM at Close
+                            unrealized_val = quantity * close_prices[i]
+                            equity[i] = current_capital + unrealized_val
+
+        # Use datetime index for equity curve if available
+        idx = df['datetime'] if 'datetime' in df.columns else df.index
 
         return {
-            "cagr": cagr,
-            "trades": len(trades),
-            "win_rate": len(df_trades[df_trades.pnl > 0]) / len(trades),
-            "total_return": total_ret,
-            # Placeholder for Sharpe/MaxDD if relying on this method,
-            # but run_hourly uses run_vectorized for these.
-            "sharpe": 0,
-            "max_dd": 0
-        }
-
-    def run_vectorized(self, df: pd.DataFrame, signals: pd.Series) -> Dict[str, Any]:
-        """
-        Fast vectorized backtest.
-        """
-        pos = signals.shift(1).fillna(0)
-
-        opens = df["open"]
-        mkt_ret = opens.pct_change()
-
-        strat_ret = pos.shift(1) * mkt_ret
-
-        turnover = pos.diff().abs().fillna(0)
-        costs = turnover * (self.slip_bps + self.fee_bps) / 10000
-
-        net_ret = strat_ret - costs
-
-        equity = (1 + net_ret).cumprod()
-
-        peak = equity.cummax()
-        # Handle division by zero if peak is 0 (unlikely)
-        dd = (equity - peak) / peak
-        max_dd = dd.min()
-
-        total_ret = equity.iloc[-1] - 1
-        days = (df.index[-1] - df.index[0]).days
-        years = days / 365.25
-        cagr = (equity.iloc[-1] ** (1/max(years, 0.1))) - 1
-
-        vol = net_ret.std() * np.sqrt(252)
-        sharpe = (cagr / vol) if vol > 0 else 0
-
-        calmar = abs(cagr / max_dd) if max_dd < 0 else 0
-
-        trade_count = (turnover > 0).sum() / 2
-
-        return {
-            "cagr": cagr,
-            "sharpe": sharpe,
-            "max_dd": max_dd,
-            "calmar": calmar,
-            "trades": trade_count,
-            "turnover": turnover.mean(),
-            "equity": equity,
-            "total_return": total_ret
+            "equity_curve": pd.Series(equity, index=idx),
+            "trades": pd.DataFrame(trades)
         }
