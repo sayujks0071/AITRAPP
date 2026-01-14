@@ -35,6 +35,11 @@ class HistoricalDataLoader:
                 logger.warning(f"Data dir {self.data_dir} not found, falling back to {fixtures_path}")
                 self.data_dir = fixtures_path
     
+    def _validate_input(self, text: str):
+        """Validate input to prevent path traversal"""
+        if not re.match(r"^[a-zA-Z0-9_-]+$", text):
+            raise ValueError(f"Invalid input: {text}. Only alphanumeric, underscore, and hyphen allowed.")
+
     def load_file(
         self,
         symbol: str,
@@ -54,6 +59,8 @@ class HistoricalDataLoader:
         Returns:
             DataFrame with historical data
         """
+        self._validate_input(symbol)
+        self._validate_input(option_type)
         # Input validation for security (path traversal prevention)
         if not re.match(r"^[a-zA-Z0-9_-]+$", symbol):
             raise ValueError(f"Invalid symbol format: {symbol}")
