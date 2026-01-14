@@ -26,6 +26,7 @@ class TestKiteAuthIntegration:
             instance.is_session_valid.return_value = False
             instance.get_login_url.return_value = "http://mock-login-url"
             instance.exchange_request_token.return_value = "new_access_token"
+            instance.access_token = "mock_initial_token"
             yield instance
 
     @pytest.fixture(autouse=True)
@@ -40,6 +41,7 @@ class TestKiteAuthIntegration:
         with patch("scripts.kite_auth_bootstrap.KiteAuth", autospec=True) as MockKiteAuth:
             instance = MockKiteAuth.return_value
             instance.is_session_valid.return_value = True
+            instance.access_token = "mock_initial_token"
 
             # Patch sys.argv to prevent argparse from seeing pytest args
             with patch("sys.argv", ["script_name"]):
