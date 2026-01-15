@@ -2,7 +2,7 @@
 import time
 import pandas as pd
 import numpy as np
-from packages.strategy_foundry.adapters.core_indicators import VectorizedIndicators
+from packages.strategy_foundry.adapters.core_indicators import VectorIndicatorCalculator
 
 def run_benchmark():
     # Setup Data
@@ -23,7 +23,7 @@ def run_benchmark():
         "volume": np.random.randint(100, 10000, N)
     })
 
-    calc = VectorizedIndicators()
+    calc = VectorIndicatorCalculator()
 
     # Set params
     calc.supertrend_period = 10
@@ -32,13 +32,13 @@ def run_benchmark():
     print(f"Benchmarking Supertrend calculation with {N} candles...")
 
     # Warmup
-    calc.get_supertrend(df.iloc[:1000])
+    calc.supertrend_series(df.iloc[:1000])
 
     start_time = time.time()
     iterations = 5
 
     for _ in range(iterations):
-        st, direction = calc.get_supertrend(df)
+        st, direction = calc.supertrend_series(df)
 
     end_time = time.time()
     avg_time = (end_time - start_time) / iterations
@@ -46,7 +46,8 @@ def run_benchmark():
     print(f"Average time over {iterations} runs: {avg_time:.4f}s")
 
     # Verification of output (checksum)
-    print(f"Checksum (ST sum): {st.sum():.2f}")
+    # Use nansum to ignore initial NaNs
+    print(f"Checksum (ST sum): {np.nansum(st):.2f}")
     print(f"Checksum (Dir sum): {direction.sum()}")
 
 if __name__ == "__main__":

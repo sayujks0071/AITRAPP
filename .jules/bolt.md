@@ -1,2 +1,3 @@
-perf
-## 2026-01-04 - [Historical Data Loading Optimization] **Learning:** Using `to_dict('records')` for large DataFrame iteration is significantly slower than vectorized NumPy access with `zip()`. When extracting data from pandas to native Python objects, ensuring correct type casting (e.g., `numpy.int64` -> `int`, `numpy.datetime64` -> `datetime`) is critical for JSON serialization and downstream compatibility. **Action:** Apply vectorization for bulk object creation patterns, but always verify type compatibility with unit tests and explicit casting.
+# Bolt's Journal
+
+## 2025-02-23 - [Supertrend Optimization] **Learning:** Python loops are slow for recursive indicators. **Action:** Optimize inner loop.
