@@ -1,101 +1,77 @@
 import pandas as pd
 import numpy as np
+from typing import List, Dict
 
 class Ranker:
     @staticmethod
-    def score(metrics_list: list[dict]) -> float:
+    def rank(results: List[Dict], timeframe_weights: Dict = None) -> pd.DataFrame:
         """
-        Computes composite score from fold metrics.
-        We treat the LAST fold as OOS?
-        Or all folds are OOS because we haven't trained?
-
-        Requirement: "Ranking uses OUT-OF-SAMPLE metrics only."
-        If we consider the generation random, and we select based on this score,
-        then the data used for this score BECOMES In-Sample.
-
-        But if we use Walk-Forward (Train/Test splits), we usually aggregate the Test results.
-
-        Let's assume `metrics_list` contains metrics for [Fold1, Fold2, Fold3].
-        If we just want stability, we average them.
-
-        Let's implement the default weights:
-        + 30% Sharpe
-        + 25% Calmar
-        + 20% CAGR
-        + 15% Stability (low dispersion of Sharpe)
-        - 10% Turnover penalty
-
-        We will calculate these stats across the folds.
-        Average Sharpe, Average Calmar, Average CAGR.
-        Stability = 1 / (StdDev(Sharpe) + 1).
-
-        Turnover = Avg Trades / Days? Or Portfolio Turnover.
-        We have 'trades' count.
-
+        Ranks candidates based on OOS metrics.
+        results: List of dicts, each containing 'strategy' (Config) and 'metrics' (List of fold metrics).
         """
-        if not metrics_list:
-            return -999.0
+        if not results:
+            return pd.DataFrame()
 
-        sharpes = [m.get('sharpe', 0) for m in metrics_list]
-        calmars = [m.get('calmar', 0) for m in metrics_list]
-        cagrs = [m.get('cagr', 0) for m in metrics_list]
+        rows = []
+        for res in results:
+            strat = res['strategy']
+            fold_metrics = res['metrics']
 
-        avg_sharpe = np.mean(sharpes)
-        avg_calmar = np.mean(calmars)
-        avg_cagr = np.mean(cagrs)
+            # Aggregate Fold Metrics
+            avg_sharpe = np.mean([m['sharpe'] for m in fold_metrics])
+            avg_calmar = np.mean([m['calmar'] for m in fold_metrics])
+            avg_return = np.mean([m['avg_return'] for m in fold_metrics])
+            avg_max_dd = np.mean([m['max_dd'] for m in fold_metrics])
 
-        sharpe_std = np.std(sharpes)
-        stability = 1.0 / (sharpe_std + 0.1) # Higher is better
+            # Stability (Variance of Sharpe)
+            sharpes = [m['sharpe'] for m in fold_metrics]
+            stability = 1.0 / (np.std(sharpes) + 0.1) # Higher is better
 
-        # Turnover proxy: Average trades per fold (normalized by length?)
-        # Let's just use raw count penalty if high.
-        avg_trades = np.mean([m.get('trades', 0) for m in metrics_list])
+            # Count Positive Folds
+            positive_folds = sum(1 for m in fold_metrics if m['avg_return'] > 0)
 
-        # Penalize if too many trades (overtrading/costs) or too few
-        # Penalty logic:
-        # "Turnover penalty" usually means `Portfolio Turnover %`.
-        # We don't have exact turnover.
-        # Let's map avg_trades to a 0-1 score where optimum is e.g. 50-100?
-        # For now, simplistic: -0.1 * log(trades)?
-        # Let's use 0.0 for now as penalty is vague.
-        turnover_penalty = 0.0
+            # Score Calculation
+            # Normalize? Or raw sum?
+            # Raw sum is easier for relative ranking.
+            # Weights: 25% Sharpe, 25% Calmar, 20% Return, 15% Stability
 
-        score = (0.30 * avg_sharpe) + \
-                (0.25 * avg_calmar) + \
-                (0.20 * avg_cagr * 10) + \
-                (0.15 * stability) - \
-                (0.10 * turnover_penalty)
+            score = (0.25 * avg_sharpe) + (0.25 * avg_calmar) + (20.0 * avg_return) + (0.15 * stability)
 
-        # Adjust scale
-        return score
+            # Sanity Bonus/Penalty (already applied to Sharpe in WF, but explicit here)
+            # Intraday Sanity: 5% (handled via Sharpe penalty in WF)
 
-    @staticmethod
-    def rank(results: list[dict]) -> pd.DataFrame:
-        """
-        results: list of { 'strategy': config, 'metrics': [fold_metrics], ... }
-        Returns sorted DataFrame.
-        """
-        data = []
-        for r in results:
-            s_id = r['strategy'].strategy_id
-            m_list = r['metrics']
-            score = Ranker.score(m_list)
-
-            # Aggregate for display
-            avg_sharpe = np.mean([m.get('sharpe', 0) for m in m_list])
-            max_dd = np.min([m.get('max_dd', 0) for m in m_list]) # Worst DD
-
-            data.append({
-                "strategy_id": s_id,
+            row = {
+                "strategy_id": strat.strategy_id,
                 "score": score,
                 "avg_sharpe": avg_sharpe,
-                "max_dd": max_dd,
-                "strategy_obj": r['strategy'],
-                "metrics_list": m_list
-            })
+                "avg_calmar": avg_calmar,
+                "avg_return": avg_return,
+                "avg_max_dd": avg_max_dd,
+                "stability": stability,
+                "positive_folds": positive_folds,
+                "total_trades": sum(m['total_trades'] for m in fold_metrics),
+                "strategy_config": strat.to_dict()
+            }
+            rows.append(row)
 
-        df = pd.DataFrame(data)
-        if not df.empty:
-            df.sort_values('score', ascending=False, inplace=True)
-            df.reset_index(drop=True, inplace=True)
+        df = pd.DataFrame(rows)
+
+        # Sort by Score
+        df.sort_values('score', ascending=False, inplace=True)
         return df
+
+    @staticmethod
+    def filter_candidates(df: pd.DataFrame, min_trades: int = 50, min_folds: int = 3) -> pd.DataFrame:
+        """
+        Applies gating criteria.
+        """
+        if df.empty:
+            return df
+
+        mask = (
+            (df['total_trades'] >= min_trades) &
+            (df['positive_folds'] >= min_folds) &
+            (df['avg_max_dd'] <= 0.30) &
+            (df['avg_sharpe'] > 0.5) # Basic quality
+        )
+        return df[mask]

@@ -1,8 +1,7 @@
 import random
 
 class ParameterSpace:
-    INDICATORS = ['rsi', 'adx', 'ema', 'supertrend', 'bollinger', 'donchian']
-    OPERATORS = ['>', '<']
+    INDICATORS = ['rsi', 'adx', 'ema', 'supertrend', 'bollinger', 'donchian', 'atr']
 
     @staticmethod
     def get_random_indicator():
@@ -13,15 +12,17 @@ class ParameterSpace:
         if indicator == 'rsi':
             return {'period': random.choice([7, 14, 21])}
         elif indicator == 'adx':
-            return {'period': random.choice([14, 21])}
+            return {'period': random.choice([7, 14, 21])}
         elif indicator == 'ema':
-            return {'period': random.choice([10, 20, 50, 100, 200])}
+            return {'period': random.choice([9, 21, 50, 200])}
         elif indicator == 'supertrend':
-            return {'period': random.choice([7, 10, 14]), 'multiplier': random.choice([2.0, 3.0])}
+            return {'period': random.choice([7, 10, 14]), 'multiplier': random.choice([1.0, 2.0, 3.0])}
         elif indicator == 'bollinger':
-            return {'period': 20, 'std': 2.0}
+            return {'period': random.choice([20, 50]), 'std': random.choice([1.5, 2.0, 2.5])}
         elif indicator == 'donchian':
-            return {'period': 20}
+            return {'period': random.choice([10, 20, 55])}
+        elif indicator == 'atr':
+            return {'period': 14}
         return {}
 
     @staticmethod
@@ -31,4 +32,3 @@ class ParameterSpace:
         elif indicator == 'adx':
             return random.choice([20, 25, 30])
         return 0
-

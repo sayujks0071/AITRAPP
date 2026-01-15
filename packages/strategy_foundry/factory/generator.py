@@ -1,51 +1,77 @@
 import random
 import hashlib
 import json
-from packages.strategy_foundry.factory.grammar import StrategyConfig, Rule
-from packages.strategy_foundry.factory.parameter_space import ParameterSpace
-from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
+from typing import Any, Dict
 import pandas as pd
 import numpy as np
+from packages.strategy_foundry.factory.grammar import StrategyConfig, Rule, Filter
+from packages.strategy_foundry.factory.parameter_space import ParameterSpace
+from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
 
 class StrategyGenerator:
     def generate_candidate(self) -> StrategyConfig:
-        """Generates a random strategy configuration."""
+        """Generates a random strategy configuration using grammar blocks."""
 
-        # Simple Logic: 1 or 2 entry rules
-        num_rules = random.choice([1, 2])
+        # 1. Choose Entry Logic (1-2 blocks)
+        entry_logic_type = random.choice(['breakout', 'trend', 'reversion'])
         entry_rules = []
 
-        for _ in range(num_rules):
-            ind = ParameterSpace.get_random_indicator()
-            params = ParameterSpace.get_random_params(ind)
-
-            # For simplicity, we compare against fixed thresholds or price
-            # Logic: Indicator > Threshold
-
-            op = random.choice(['>', '<'])
-
-            if ind in ['ema', 'supertrend', 'bollinger', 'donchian']:
-                # These are price overlays usually
-                # Condition: Close > Indicator
-                val = "close" # Special keyword
+        if entry_logic_type == 'breakout':
+            # Donchian Breakout or Bollinger Breakout
+            if random.random() < 0.5:
+                # Donchian High Breakout
+                period = random.choice([20, 55])
+                entry_rules.append(Rule('breakout', 'donchian', {'period': period}, '>', 'upper'))
             else:
-                # Oscillators
-                val = ParameterSpace.get_random_threshold(ind)
+                # BB Breakout
+                params = ParameterSpace.get_random_params('bollinger')
+                entry_rules.append(Rule('breakout', 'bollinger', params, '>', 'upper'))
 
-            entry_rules.append(Rule(ind, op, val, params))
+        elif entry_logic_type == 'trend':
+            # EMA Cross or Supertrend
+            if random.random() < 0.5:
+                # Price > EMA
+                params = ParameterSpace.get_random_params('ema')
+                entry_rules.append(Rule('trend', 'ema', params, '>', 'close')) # close > ema
+                # Wait, Rule structure: indicator vs value.
+                # If indicator=ema, val=close -> ema > close (Bearish).
+                # We want close > ema. So indicator='close', val='ema'.
+                # But my Rule def has indicator, operator, value.
+                # Let's say: indicator 'ema' > 'close' means EMA > Close.
+                # For Trend Long: Close > EMA. -> EMA < Close.
+                entry_rules.append(Rule('trend', 'ema', params, '<', 'close'))
+            else:
+                # Supertrend Bullish
+                params = ParameterSpace.get_random_params('supertrend')
+                entry_rules.append(Rule('trend', 'supertrend', params, '==', 1)) # direction == 1
 
-        # Exit rules: usually reverse of entry or trailing stop (handled by risk)
-        # We can add explicit exit rules later. For now let's rely on stop loss / take profit / time stop.
-        exit_rules = []
+        elif entry_logic_type == 'reversion':
+            # RSI Oversold or BB Lower bounce
+            if random.random() < 0.5:
+                params = ParameterSpace.get_random_params('rsi')
+                thresh = random.choice([30, 40])
+                entry_rules.append(Rule('reversion', 'rsi', params, '<', thresh))
+            else:
+                params = ParameterSpace.get_random_params('bollinger')
+                entry_rules.append(Rule('reversion', 'bollinger', params, '<', 'lower')) # Close < Lower
 
-        sl = random.choice([1.0, 2.0, 3.0])
-        tp = random.choice([2.0, 4.0, 6.0])
-        max_bars = random.choice([5, 10, 20, 50])
+        # 2. Add Filters (0-2)
+        filters = []
+        if random.random() < 0.5:
+            # ADX Filter (Trend Strength)
+            params = ParameterSpace.get_random_params('adx')
+            thresh = random.choice([20, 25])
+            filters.append(Filter('volatility', 'adx', params, '>', thresh))
+
+        # 3. Risk Params
+        sl = random.choice([1.0, 1.5, 2.0, 3.0])
+        tp = random.choice([2.0, 3.0, 4.0, 5.0])
+        max_bars = random.choice([12, 24, 36, 75]) # Intraday horizons (e.g. 5m bars: 12=1h)
 
         # Generate ID
-        # We use a hash of the rules to ensure stable ID for same logic
         config_dict = {
             "entry": [vars(r) for r in entry_rules],
+            "filters": [vars(f) for f in filters],
             "sl": sl,
             "tp": tp,
             "max_bars": max_bars
@@ -55,197 +81,87 @@ class StrategyGenerator:
         return StrategyConfig(
             strategy_id=sid,
             entry_rules=entry_rules,
-            exit_rules=exit_rules,
+            filters=filters,
             stop_loss_atr=sl,
             take_profit_atr=tp,
+            trailing_stop_atr=None,
             max_bars_hold=max_bars
         )
 
-    def generate_positions(self, df: pd.DataFrame, config: StrategyConfig) -> pd.Series:
+    def generate_signal(self, df: pd.DataFrame, config: StrategyConfig) -> pd.Series:
         """
-        Executes the strategy on a DataFrame to generate positions (-1, 0, 1).
-        This is a vectorized implementation.
+        Generates Entry Signal (1 = Buy, 0 = None).
+        Does NOT handle exits (Backtest engine handles exits).
         """
-        # 1. Compute Indicators
-        # We need to compute all indicators required by rules
-        # We can cache them to avoid recomputing if multiple rules use same indicator/params
+        # Base Signal
+        signal = pd.Series(True, index=df.index)
 
-        signals = pd.Series(0, index=df.index)
-
-        # Combine Entry Rules (AND logic)
-        entry_condition = pd.Series(True, index=df.index)
-
+        # Apply Entry Rules
         for rule in config.entry_rules:
-            # Get Indicator Series
-            if rule.indicator == 'rsi':
-                series = IndicatorsAdapter.rsi(df, **rule.params)
-            elif rule.indicator == 'adx':
-                series = IndicatorsAdapter.adx(df, **rule.params)
-            elif rule.indicator == 'ema':
-                series = IndicatorsAdapter.ema(df['close'], **rule.params)
-            elif rule.indicator == 'supertrend':
-                st, direction = IndicatorsAdapter.supertrend(df, **rule.params)
-                # Supertrend rule usually checks direction
-                # If rule.val is 'close', maybe we check close > supertrend?
-                # Or checks direction directly?
-                # Let's assume for supertrend we check Close > Supertrend for Long
-                series = st
-            elif rule.indicator == 'bollinger':
-                 u, m, l = IndicatorsAdapter.bollinger_bands(df['close'], **rule.params)
-                 # Usually we check Close < Lower (reversion) or Close > Upper (breakout)
-                 # Let's assume we use Lower/Upper based on operator
-                 if rule.operator == '<':
-                     series = l # Close < Lower
-                 else:
-                     series = u # Close > Upper
-            elif rule.indicator == 'donchian':
-                u, l = IndicatorsAdapter.donchian(df, **rule.params)
-                if rule.operator == '>':
-                    series = u
-                else:
-                    series = l
+            cond = self._evaluate_condition(df, rule.indicator, rule.operator, rule.threshold, rule.params)
+            signal = signal & cond
+
+        # Apply Filters
+        for filt in config.filters:
+            cond = self._evaluate_condition(df, filt.indicator, filt.operator, filt.threshold, filt.params)
+            signal = signal & cond
+
+        # Convert boolean to integer signal (1)
+        # Usually strategies trigger on crossover (False -> True)
+        # But some might be "State" based (Close > EMA).
+        # If we return "State", the engine will enter on first 0->1 transition.
+        # If we return "State", we might re-enter immediately after exit if condition persists?
+        # Standard: Return State. Engine handles re-entry logic (usually "wait for new signal" or "re-enter allowed").
+        # Requirements says "No pyramiding by default".
+
+        return signal.astype(int)
+
+    def _evaluate_condition(self, df: pd.DataFrame, indicator: str, operator: str, threshold: Any, params: Dict) -> pd.Series:
+        # Special composite handling first
+        if indicator == 'bollinger':
+            u, m, l = IndicatorsAdapter.bollinger_bands(df['close'], **params)
+            if threshold == 'upper':
+                return df['close'] > u if operator == '>' else df['close'] < u
+            elif threshold == 'lower':
+                return df['close'] < l if operator == '<' else df['close'] > l
+
+        if indicator == 'donchian':
+            u, l = IndicatorsAdapter.donchian(df, **params)
+            if threshold == 'upper':
+                 return df['close'] > u if operator == '>' else df['close'] < u
+            elif threshold == 'lower':
+                 return df['close'] < l if operator == '<' else df['close'] > l
+
+        # Standard LHS
+        if indicator == 'close':
+            lhs = df['close']
+        elif indicator == 'rsi':
+            lhs = IndicatorsAdapter.rsi(df, **params)
+        elif indicator == 'adx':
+            lhs = IndicatorsAdapter.adx(df, **params)
+        elif indicator == 'ema':
+            lhs = IndicatorsAdapter.ema(df['close'], **params)
+        elif indicator == 'supertrend':
+            st, direction = IndicatorsAdapter.supertrend(df, **params)
+            if threshold == 1 or threshold == -1:
+                lhs = direction
             else:
-                series = pd.Series(0, index=df.index) # Fallback
+                lhs = st
+        else:
+            lhs = pd.Series(0, index=df.index)
 
-            # Compare
-            val = rule.value
-            if val == 'close':
-                val_series = df['close']
-            else:
-                val_series = val
+        # Standard RHS
+        if threshold == 'close':
+            rhs = df['close']
+        else:
+            rhs = threshold
 
-            # Series comparison
-            # Need to align lengths? adapters return numpy arrays or series aligned with df
-            # If numpy array, convert to series for alignment safety
-            if isinstance(series, np.ndarray):
-                series = pd.Series(series, index=df.index)
+        # Comparison
+        if operator == '>':
+            return lhs > rhs
+        elif operator == '<':
+            return lhs < rhs
+        elif operator == '==':
+            return lhs == rhs
 
-            if rule.operator == '>':
-                cond = series > val_series
-            elif rule.operator == '<':
-                cond = series < val_series
-            else:
-                cond = pd.Series(False, index=df.index)
-
-            entry_condition = entry_condition & cond
-
-        # Generate raw signals (1 where condition met)
-        # Note: This is simplified "Long Only" generation for now as per requirements
-
-        # We want to enter when condition BECOMES true? Or while true?
-        # Usually strategies trigger on crossover.
-        # Let's do: True and Prev False (Crossover)
-        # entry_signal = entry_condition & (~entry_condition.shift(1).fillna(False))
-
-        # But for state persistence ("while condition true"), trend strategies might want to stay in.
-        # However, the foundry instruction says "generate_positions(df) -> positions in {-1,0,1}".
-        # And "Timeframe: Daily. Execution: next-bar open".
-
-        # If I return 1, it means "I want to be long". 0 means "Flat".
-        # So I should handle exits here too?
-        # "apply_risk_overlay(df, positions) -> final_positions"
-
-        # Let's generate 'signals' (1 = Buy Signal).
-        # And let the engine/risk overlay handle the holding period / stops.
-
-        # If the interface expects "Target Position", then 1 means "Hold Long".
-        # If it expects "Trade Signal", then 1 means "Buy".
-
-        # Let's make it return "Target Position" (State).
-        # But stops are dynamic (based on entry price).
-        # So `generate_positions` effectively generates the *Entry Signal*.
-        # The `apply_risk_overlay` will simulate the trade management (holding, stops).
-
-        entry_signal = entry_condition.astype(int)
-
-        return entry_signal
-
-    def apply_risk_overlay(self, df: pd.DataFrame, entry_signals: pd.Series, config: StrategyConfig) -> pd.Series:
-        """
-        Applies risk management (Stop Loss, Take Profit, Time Stop) to convert entry signals into actual positions.
-        This is a path-dependent loop (iterative).
-        """
-        positions = pd.Series(0, index=df.index)
-
-        atr = IndicatorsAdapter.atr(df, period=14) # Standard ATR for risk
-
-        in_trade = False
-        entry_price = 0.0
-        entry_idx = 0
-        stop_loss = 0.0
-        take_profit = 0.0
-
-        close_prices = df['close'].values
-        high_prices = df['high'].values
-        low_prices = df['low'].values
-        atr_values = atr
-
-        signal_values = entry_signals.values
-
-        n = len(df)
-        pos_array = np.zeros(n, dtype=int)
-
-        for i in range(1, n):
-            # Check exit if in trade
-            if in_trade:
-                bars_held = i - entry_idx
-
-                # Check Time Stop
-                if bars_held >= config.max_bars_hold:
-                    in_trade = False
-                    pos_array[i] = 0
-                    continue
-
-                # Check SL/TP
-                # We check against Low/High of current bar?
-                # "Execution: next-bar open".
-                # So if we entered at Open of i (signal at i-1), we check price action of i.
-
-                # Assuming signal at i means "be long at i".
-                # No, standard is: Signal at i (Close), Enter Open i+1.
-                # So here, `entry_signals` has 1 at i.
-                # If we are in trade, we maintain 1.
-
-                # Let's clarify: `entry_signals` has 1 where rules are met.
-                # If we are NOT in trade, and signal[i-1] == 1:
-                #   Enter at Open[i] (or assume Close[i-1] approx/slippage handled later).
-                #   Actually, the engine handles execution.
-                #   Here we just want to output the "Target Position" for bar i.
-
-                # If I return 1 for bar i, it means "I hold position during bar i".
-
-                current_low = low_prices[i]
-                current_high = high_prices[i]
-
-                if current_low <= stop_loss:
-                    in_trade = False # Stopped out
-                    pos_array[i] = 0
-                elif current_high >= take_profit:
-                    in_trade = False # TP hit
-                    pos_array[i] = 0
-                else:
-                    pos_array[i] = 1 # Hold
-
-            # Check Entry
-            if not in_trade:
-                # If signal was generated at i-1, we enter at i
-                # Or if signal is at i, we enter next?
-                # Usually signal series aligns with price. Signal at T means condition met at T.
-                # So we enter at T+1.
-                if signal_values[i-1] == 1:
-                    in_trade = True
-                    entry_price = df['open'].iloc[i] # Approximate entry at Open
-                    entry_idx = i
-
-                    # Set Stops
-                    current_atr = atr_values[i-1] # Use ATR at time of signal
-                    if np.isnan(current_atr):
-                        current_atr = entry_price * 0.01 # Fallback 1%
-
-                    stop_loss = entry_price - (config.stop_loss_atr * current_atr)
-                    take_profit = entry_price + (config.take_profit_atr * current_atr)
-
-                    pos_array[i] = 1
-
-        return pd.Series(pos_array, index=df.index)
-
+        return pd.Series(False, index=df.index)

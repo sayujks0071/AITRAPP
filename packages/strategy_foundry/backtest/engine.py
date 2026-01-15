@@ -1,250 +1,225 @@
 import pandas as pd
 import numpy as np
+from typing import Dict, List, Any
 from packages.strategy_foundry.factory.grammar import StrategyConfig
 from packages.strategy_foundry.factory.generator import StrategyGenerator
-from packages.strategy_foundry.adapters.core_costs import CostsAdapter
+from packages.strategy_foundry.adapters.core_costs import CostModel
+from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
 from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
 
 class BacktestEngine:
-    def __init__(self, df: pd.DataFrame, initial_capital=100000.0):
-        self.df = df
-        self.initial_capital = initial_capital
+    def __init__(self, cost_model: CostModel):
+        self.cost_model = cost_model
+        self.market_hours = MarketHoursAdapter()
         self.generator = StrategyGenerator()
-        self.costs_adapter = CostsAdapter()
 
-    def run(self, strategy: StrategyConfig, instrument_type='EQUITY'):
+    def run(self, df: pd.DataFrame, config: StrategyConfig) -> pd.DataFrame:
         """
-        Runs backtest for a single strategy.
-        Assumes df has OHLC data.
+        Runs the backtest. Returns a DataFrame of trades.
         """
-        # 1. Generate Raw Entry Signals
-        raw_signals = self.generator.generate_positions(self.df, strategy)
+        # 1. Generate Signals (Vectorized)
+        # Returns 1 where entry condition is met
+        entry_signals = self.generator.generate_signal(df, config)
 
-        trades = []
-        equity_curve = [1.0]
+        # 2. Prepare arrays for fast loop
+        opens = df['open'].values
+        highs = df['high'].values
+        lows = df['low'].values
+        closes = df['close'].values
+        times = df['datetime'].values # numpy array of datetime64[ns]
 
-        opens = df["open"].values
-        dates = df.index
-        targets = target_pos.values
+        # ATR for dynamic stops
+        # We need ATR series.
+        atr_series = IndicatorsAdapter.atr(df, period=14).fillna(0).values
 
-        current_pos = 0 # 0 or 1
-        entry_price = 0.0
-        entry_date = None
-
-        capital = 1.0
-
-        for i in range(len(df)):
-            tgt = targets[i]
-            price = opens[i]
-
-            if tgt != current_pos:
-                # Close existing
-                if current_pos != 0:
-                    if current_pos == 1:
-                        # Long Exit (Sell)
-                        exit_price = price * (1 - self.slip_bps/10000)
-                        pnl_pct = (exit_price - entry_price) / entry_price
-                    else:
-                        # Short Exit (Buy to Cover)
-                        exit_price = price * (1 + self.slip_bps/10000)
-                        pnl_pct = (entry_price - exit_price) / entry_price
-
-                    pnl_pct -= (self.fee_bps/10000) * 2
-
-                    capital *= (1 + pnl_pct)
-
-                    trades.append(Trade(
-                        entry_date=entry_date,
-                        exit_date=dates[i],
-                        entry_price=entry_price,
-                        exit_price=exit_price,
-                        side=current_pos,
-                        pnl=pnl_pct * entry_price,
-                        pnl_pct=pnl_pct,
-                        exit_reason="Signal"
-                    ))
-
-                # Open new
-                if tgt != 0:
-                    current_pos = tgt
-                    if current_pos == 1:
-                        # Long Entry (Buy)
-                        entry_price = price * (1 + self.slip_bps/10000)
-                    else:
-                        # Short Entry (Sell)
-                        entry_price = price * (1 - self.slip_bps/10000)
-
-                    entry_date = dates[i]
-                else:
-                    current_pos = 0
-
-        return {
-            "trades": trades,
-            "equity_curve": [],
-            "final_capital": capital
-        }
-
-    def calculate_metrics(self, trades: List[Trade], initial_capital=100000.0) -> Dict[str, Any]:
-        if not trades:
-            return {"cagr": 0, "sharpe": 0, "max_dd": 0, "trades": 0, "total_return": 0}
-
-        df_trades = pd.DataFrame([vars(t) for t in trades])
-        df_trades['cum_pnl'] = (1 + df_trades['pnl_pct']).cumprod()
-
-        total_ret = df_trades['cum_pnl'].iloc[-1] - 1
-        n_years = (df_trades['exit_date'].max() - df_trades['entry_date'].min()).days / 365.25
-        cagr = (1 + total_ret) ** (1/n_years) - 1 if n_years > 0 else 0
-        # 2. Simulate P&L
-        # Note: We duplicate logic from generator.apply_risk_overlay because we need granular Trade P&L,
-        # whereas apply_risk_overlay returns only position state for Signal Generation.
-        # Ideally, we should unify this logic in a shared component.
-
-        return self._simulate_loop(self.df, raw_signals, strategy, instrument_type)
-
-    def _simulate_loop(self, df: pd.DataFrame, entry_signals: pd.Series, config: StrategyConfig, instrument_type: str):
-        # ... logic similar to apply_risk_overlay but recording P&L ...
-
-        # Setup
-        open_prices = df['open'].values
-        high_prices = df['high'].values
-        low_prices = df['low'].values
-        close_prices = df['close'].values
-        dates = df['datetime'].values # assuming datetime column exists
-
-        # Indicators needed for stops
-        atr = IndicatorsAdapter.atr(df, period=14)
-        # Ensure it's numpy array (adapter returns ndarray or Series depending on implementation details)
-        if isinstance(atr, pd.Series):
-            atr = atr.values
+        signal_arr = entry_signals.values
 
         n = len(df)
-        equity = np.zeros(n)
-        equity[0] = self.initial_capital
-        current_capital = self.initial_capital
-
         trades = []
 
+        # State
         in_trade = False
         entry_price = 0.0
         entry_idx = 0
-        entry_date = None
-        quantity = 0
-
         stop_loss = 0.0
         take_profit = 0.0
 
-        signal_values = entry_signals.values
+        # Convert exit time string to time object
+        exit_hour, exit_minute = map(int, config.exit_time.split(':'))
+        # We need to check time efficiently inside loop.
+        # Extract hours/minutes from datetime64 is slightly complex in pure numpy loop without conversion.
+        # But we can pre-compute "is_eod" boolean array.
+
+        # Pre-compute EOD exit bar
+        # If exit_time is 15:25, and bars are 5m.
+        # 15:25 bar starts at 15:25? Or 15:20?
+        # Assuming timestamp is bar open time?
+        # Usually standard is bar open time.
+        # So 15:25 bar (starts 15:25) is the last one?
+        # Core hard close is 15:25.
+        # So we must be flat by 15:25.
+        # Meaning if we are in trade at 15:25, we exit at Open of 15:25 bar? Or Close?
+        # If timestamp is Open time:
+        # Bar 15:20 -> Closes 15:25. We can exit at Close of 15:20.
+        # Bar 15:25 -> Closes 15:30. Too late?
+        # Let's say we force exit on the bar that starts >= exit_time (or close to it).
+
+        # Efficient way:
+        times_pd = df['datetime']
+        # Exit if time >= exit_time
+        # We can make a boolean array "force_exit"
+        # 15:25 is 15 * 60 + 25 = 925 minutes
+        minutes_of_day = times_pd.dt.hour * 60 + times_pd.dt.minute
+        exit_minutes = exit_hour * 60 + exit_minute
+        force_exit_mask = (minutes_of_day >= exit_minutes).values
 
         for i in range(1, n):
-            # Default: carry over capital
-            equity[i] = equity[i-1]
-
+            # Check Exit first
             if in_trade:
-                # Mark to market (Close)
-                # Unrealized PnL
-                curr_val = quantity * close_prices[i]
-                # equity[i] = cash + curr_val
-                # cash = current_capital - (quantity * entry_price) approx
-                # Let's track Portfolio Value directly
-
-                # Check Exits
-                exit_price = 0.0
-                exit_reason = ""
-                bars_held = i - entry_idx
-
-                # SL/TP logic on Low/High
-                if low_prices[i] <= stop_loss:
-                    exit_price = stop_loss # Assumes fill at SL
-                    # Gap check: if Open < SL, we fill at Open
-                    if open_prices[i] < stop_loss:
-                         exit_price = open_prices[i]
-                    exit_reason = "SL"
-                elif high_prices[i] >= take_profit:
-                    exit_price = take_profit
-                    # Gap check: if Open > TP, fill at Open
-                    if open_prices[i] > take_profit:
-                        exit_price = open_prices[i]
-                    exit_reason = "TP"
-                elif bars_held >= config.max_bars_hold:
-                    exit_price = open_prices[i] # Exit at Open of this bar?
-                    # Or Close? "Time stop" usually at close of max bar or open of next.
-                    # Let's say Open of this bar (after max bars passed).
-                    exit_reason = "TIME"
-
-                if exit_price > 0:
-                    # Execute Exit
-                    cost_est = self.costs_adapter.estimate_costs(instrument_type, exit_price, quantity)
-                    proceeds = (exit_price * quantity) - cost_est.total_fees - cost_est.slippage
-
-                    current_capital += proceeds
+                # 1. EOD Exit (Session Close)
+                if force_exit_mask[i]:
+                    # Exit at Open of this bar (Market on Open)
+                    # because we realized we need to flatten.
+                    # Or Close of previous?
+                    # "Execution: next bar open".
+                    # If we decide at i-1 to exit, we exit at Open i.
+                    # But force_exit is a time check.
+                    # If time[i] >= 15:25, we exit immediately at Open[i].
+                    exit_price = opens[i]
+                    self._record_trade(trades, entry_price, exit_price, entry_idx, i, "EOD")
                     in_trade = False
+                    continue
 
-                    trades.append({
-                        "entry_date": entry_date,
-                        "exit_date": dates[i],
-                        "entry_price": entry_price,
-                        "exit_price": exit_price,
-                        "quantity": quantity,
-                        "pnl": proceeds - (quantity * entry_price), # Gross PnL - Exit Costs. Entry costs already deducted.
-                        "reason": exit_reason
-                    })
+                # 2. Time Stop (Max Bars)
+                if (i - entry_idx) >= config.max_bars_hold:
+                    exit_price = opens[i]
+                    self._record_trade(trades, entry_price, exit_price, entry_idx, i, "Time")
+                    in_trade = False
+                    continue
 
-                    equity[i] = current_capital
-                    continue # Next bar
+                # 3. Stop Loss / Take Profit (Intra-bar)
+                # We check Low/High of current bar `i`.
+                # Assuming we are Long.
 
-                # Still in trade, update equity with Close price
-                # We need to account for what capital would be if liquidated now
-                # But we don't pay costs yet.
-                unrealized_val = quantity * close_prices[i]
-                equity[i] = current_capital + unrealized_val
-
-            if not in_trade:
-                # Check Entry (signal from i-1)
-                if signal_values[i-1] == 1:
-                    entry_price = open_prices[i]
-
-                    # Risk Management for Sizing
-                    # 1% risk
-                    current_atr = atr[i-1]
-                    if np.isnan(current_atr) or current_atr == 0:
-                        current_atr = entry_price * 0.01
-
-                    sl_dist = config.stop_loss_atr * current_atr
-                    risk_per_share = sl_dist
-
-                    # Capital to risk = 1% of current equity
-                    risk_capital = equity[i] * 0.01
-
-                    if risk_per_share > 0:
-                        qty = int(risk_capital / risk_per_share)
+                # Check SL (Hit Low)
+                if lows[i] <= stop_loss:
+                    # Slippage on SL?
+                    # We assume execution at stop_loss price (Stop Limit) or worse (Slippage).
+                    # Simple model: Exit at stop_loss - slippage (if gap, use Open).
+                    # If Open < stop_loss, we gapped down. Exit at Open.
+                    if opens[i] < stop_loss:
+                        executed_price = opens[i]
                     else:
-                        qty = 0
+                        executed_price = stop_loss
 
-                    if qty > 0:
-                        # Cost Check
-                        cost_est = self.costs_adapter.estimate_costs(instrument_type, entry_price, qty)
-                        total_cost = (entry_price * qty) + cost_est.total_fees + cost_est.slippage
+                    self._record_trade(trades, entry_price, executed_price, entry_idx, i, "SL")
+                    in_trade = False
+                    continue
 
-                        if total_cost < equity[i]:
-                            # Execute Entry
-                            current_capital = equity[i] - total_cost
-                            quantity = qty
-                            in_trade = True
-                            entry_idx = i
-                            entry_date = dates[i]
+                # Check TP (Hit High)
+                if highs[i] >= take_profit:
+                    # Limit order filled at TP
+                    # If Open > TP, we gapped up. Exit at Open.
+                    if opens[i] > take_profit:
+                        executed_price = opens[i]
+                    else:
+                        executed_price = take_profit
 
-                            stop_loss = entry_price - sl_dist
-                            take_profit = entry_price + (config.take_profit_atr * current_atr)
+                    self._record_trade(trades, entry_price, executed_price, entry_idx, i, "TP")
+                    in_trade = False
+                    continue
 
-                            # Update Equity (Mark to market at Open is Entry Price - Costs)
-                            # Actually usually MTM at Close
-                            unrealized_val = quantity * close_prices[i]
-                            equity[i] = current_capital + unrealized_val
+            # Check Entry
+            if not in_trade:
+                # If Signal at i-1 (completed bar), Enter Open i
+                # Check filter/mask? signal_arr already has filters applied.
 
-        # Use datetime index for equity curve if available
-        idx = df['datetime'] if 'datetime' in df.columns else df.index
+                if signal_arr[i-1] == 1 and not force_exit_mask[i]:
+                    # Enter Long
+                    in_trade = True
+                    entry_price = opens[i]
+                    entry_idx = i
 
-        return {
-            "equity_curve": pd.Series(equity, index=idx),
-            "trades": pd.DataFrame(trades)
-        }
+                    # Set Stops
+                    atr_val = atr_series[i-1] # Use ATR from signal bar
+                    if atr_val == 0 or np.isnan(atr_val):
+                         atr_val = entry_price * 0.01
+
+                    stop_loss = entry_price - (config.stop_loss_atr * atr_val)
+                    take_profit = entry_price + (config.take_profit_atr * atr_val)
+
+        return pd.DataFrame(trades)
+
+    def _record_trade(self, trades: List, entry_price: float, exit_price: float, entry_idx: int, exit_idx: int, reason: str):
+        # Calculate PnL with costs
+        # Long only for now
+
+        # Apply slippage
+        buy_price = self.cost_model.get_slippage_price(entry_price, 1)
+        sell_price = self.cost_model.get_slippage_price(exit_price, -1)
+
+        # Calculate Costs
+        entry_cost = self.cost_model.calculate_cost(entry_price, 1, 'BUY') # 1 unit
+        exit_cost = self.cost_model.calculate_cost(exit_price, 1, 'SELL')
+
+        # Gross PnL
+        gross_pnl = sell_price - buy_price
+        # Wait, get_slippage_price adds slippage.
+        # Buy at 100 -> pays 100.05
+        # Sell at 110 -> receives 109.95
+        # PnL = 109.95 - 100.05 = 9.9
+        # Correct.
+
+        # Net PnL (subtract brokerage/taxes approx)
+        # Cost model calculates absolute cost.
+        # But we are calculating per unit price difference?
+        # brokerage_per_order is flat. If we trade 1 unit, it's huge.
+        # We should calculate % return using "points" logic or assume notional.
+
+        # Let's stick to Points PnL and subtract spread_guard/bps costs.
+        # spread_guard is extra penalty.
+
+        # We return percentage return for metrics.
+        # return = (sell_price - buy_price) / buy_price
+
+        # Adjust for fixed costs?
+        # If we simulate 1 lot (e.g. Nifty 50 qty * 25000 = 12.5L).
+        # Brokerage 20 rs is negligible.
+        # Main cost is STT/Slippage (BPS).
+
+        # So we can ignore brokerage_per_order for % calculation or convert it to BPS approx.
+        # Let's ignore fixed brokerage for simplicity in metrics, rely on BPS.
+
+        net_pnl_points = sell_price - buy_price
+        pct_return = net_pnl_points / buy_price
+
+        # Subtract Tax BPS from return?
+        # cost_model includes tax_bps.
+        # calculate_cost returned absolute.
+        # Let's do:
+        # PnL = (Exit * (1 - slip - tax)) - (Entry * (1 + slip + tax))
+        # This double counts tax if tax is on turnover.
+        # STT is on Sell (0.025%) for Futures? Or 0.1% Equity?
+        # Let's use `slippage_bps` + `tax_bps` as total friction.
+
+        # My `get_slippage_price` only used `slippage_bps`.
+        # I should add `tax_bps` to friction.
+
+        total_friction_bps = self.cost_model.slippage_bps + self.cost_model.tax_bps
+
+        # Effective Entry = Price * (1 + friction)
+        eff_entry = entry_price * (1 + total_friction_bps/10000.0)
+        # Effective Exit = Price * (1 - friction)
+        eff_exit = exit_price * (1 - total_friction_bps/10000.0)
+
+        net_ret = (eff_exit - eff_entry) / eff_entry
+
+        trades.append({
+            "entry_idx": entry_idx,
+            "exit_idx": exit_idx,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "net_return": net_ret,
+            "reason": reason,
+            "bars_held": exit_idx - entry_idx
+        })
