@@ -83,3 +83,4 @@ If this command exits with status `1` (invalid session), the CI pipeline can tri
 *   **Token Storage**: `access_token` is stored in the `.env` file (local) or injected via secrets manager (cloud).
 *   **Logs**: The bootstrap script masks sensitive tokens in logs.
 *   **Live Safety**: `APP_MODE` defaults to `PAPER`. Live trading requires explicit configuration.
+*   **Order Blocking**: The execution engine explicitly blocks order placement in LIVE mode if a valid `access_token` is not present, preventing accidental unauthorized trading attempts.

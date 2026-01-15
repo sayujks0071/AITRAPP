@@ -28,6 +28,8 @@ async def kite_callback(request: Request):
         logger.error("No request_token provided in callback")
         return HTMLResponse(content="<h1>Auth Failed</h1><p>Missing request_token.</p>", status_code=400)
 
+    logger.info("Callback received with request_token.")
+
     try:
         auth = KiteAuth()
         access_token = auth.exchange_request_token(request_token)

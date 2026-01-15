@@ -355,6 +355,12 @@ class ExecutionEngine:
         """
         # Rate limiting
         await self._rate_limit()
+
+        # Explicit safety check: Block if not PAPER and no access token
+        if not self.is_paper_mode:
+            if not getattr(self.kite, "access_token", None):
+                logger.error("Order placement BLOCKED: Missing access token in LIVE mode")
+                return None
         
         # Paper mode
         if self.is_paper_mode:
