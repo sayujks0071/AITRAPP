@@ -275,26 +275,45 @@ class IndicatorCalculator:
         final_ub[0] = basic_ub[0]
         final_lb[0] = basic_lb[0]
 
-        for i in range(1, n):
-            if np.isnan(final_ub[i-1]):
-                final_ub[i] = basic_ub[i]
-            elif (basic_ub[i] < final_ub[i-1]) or (close[i-1] > final_ub[i-1]):
-                final_ub[i] = basic_ub[i]
-            else:
-                final_ub[i] = final_ub[i-1]
+        # Optimization: Use scalar variables to avoid array indexing overhead
+        # and pre-slice arrays to iterate faster.
+        curr_ub = final_ub[0]
+        curr_lb = final_lb[0]
 
-            if np.isnan(final_lb[i-1]):
-                final_lb[i] = basic_lb[i]
-            elif (basic_lb[i] > final_lb[i-1]) or (close[i-1] < final_lb[i-1]):
-                final_lb[i] = basic_lb[i]
-            else:
-                final_lb[i] = final_lb[i-1]
+        # Pre-slice arrays to avoid indexing inside loop
+        # We start from index 1, so we need arrays starting from 1
+        basic_ub_s = basic_ub[1:]
+        basic_lb_s = basic_lb[1:]
+        close_curr_s = close[1:]
+        close_prev_s = close[:-1]
 
-            if close[i] <= final_ub[i]:
-                supertrend[i] = final_ub[i]
+        # Using enumerate to keep track of index 'i' for writing back results
+        # start=1 because we sliced off the first element
+        for i, (b_ub, b_lb, c, prev_c) in enumerate(zip(basic_ub_s, basic_lb_s, close_curr_s, close_prev_s), 1):
+            # UB Logic
+            if curr_ub != curr_ub: # isnan check
+                curr_ub = b_ub
+            elif (b_ub < curr_ub) or (prev_c > curr_ub):
+                curr_ub = b_ub
+            # else: curr_ub remains same
+
+            final_ub[i] = curr_ub
+
+            # LB Logic
+            if curr_lb != curr_lb: # isnan check
+                curr_lb = b_lb
+            elif (b_lb > curr_lb) or (prev_c < curr_lb):
+                curr_lb = b_lb
+            # else: curr_lb remains same
+
+            final_lb[i] = curr_lb
+
+            # Trend Logic
+            if c <= curr_ub:
+                supertrend[i] = curr_ub
                 direction[i] = -1
             else:
-                supertrend[i] = final_lb[i]
+                supertrend[i] = curr_lb
                 direction[i] = 1
 
         return supertrend, direction
