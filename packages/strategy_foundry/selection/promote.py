@@ -1,77 +1,50 @@
+import logging
+from typing import Dict
 from packages.strategy_foundry.selection.champion_store import ChampionStore
-from packages.strategy_foundry.factory.grammar import StrategyConfig
-import numpy as np
+
+logger = logging.getLogger(__name__)
 
 class Promoter:
-    def __init__(self, instrument="NIFTY"):
-        self.store = ChampionStore(instrument)
+    def __init__(self, instrument: str, timeframe: str):
+        self.instrument = instrument
+        self.timeframe = timeframe
+        self.store = ChampionStore()
 
-    def check_and_promote(self, challenger_row: dict) -> bool:
+    def check_and_promote(self, challenger: Dict) -> bool:
         """
-        challenger_row: dict from Ranker (strategy_obj, score, metrics_list, max_dd)
+        Checks if challenger beats current champion.
+        challenger: Dict from Ranker (row of dataframe)
         """
-        current = self.store.load_current_champion()
-
-        challenger_strat = challenger_row['strategy_obj']
-        challenger_score = challenger_row['score']
-        challenger_metrics = challenger_row['metrics_list']
-
-        # Gates
-        # 1. Live Eligible?
-        # OOS Sharpe >= 1.0
-        avg_sharpe = np.mean([m.get('sharpe', 0) for m in challenger_metrics])
-        if avg_sharpe < 1.0:
-            return False
-
-        # MaxDD <= 25%
-        # max_dd in metrics is negative (e.g. -0.10).
-        worst_dd = np.min([m.get('max_dd', 0) for m in challenger_metrics])
-        if abs(worst_dd) > 0.25:
-             return False
-
-        # >= 3 positive OOS folds
-        # Or simpler: positive CAGR in X folds?
-        # Requirement: ">= 3 positive OOS folds"
-        # Since we use e.g. 3 folds, implies all positive? Or if >3 folds?
-        pos_folds = sum(1 for m in challenger_metrics if m.get('total_return', 0) > 0)
-        # If FAST_MODE (2 folds), we can't have 3.
-        # "FAST_MODE doesn’t promote" is handled by runner usually, but logic here:
-        if len(challenger_metrics) < 3:
-             # Can't satisfy condition
-             # Unless we relax for FAST_MODE?
-             # User said: "FAST_MODE doesn’t promote" in 6).
-             # So if folds < 3, return False.
-             if len(challenger_metrics) < 3:
-                 return False
-
-        if pos_folds < 3:
-            return False
+        current = self.store.get_current_champion(self.instrument, self.timeframe)
 
         if not current:
-            # No champion, promote immediately
-            self.store.save_new_champion(challenger_strat, challenger_score, challenger_metrics)
+            logger.info(f"No current champion for {self.instrument} {self.timeframe}. Promoting challenger.")
+            self.store.save_champion(self.instrument, self.timeframe, challenger)
             return True
 
-        # Compare with current
-        current_score = current['score']
-        current_metrics = current['metrics']
-        current_dd = np.min([m.get('max_dd', 0) for m in current_metrics])
+        # Comparison Logic
+        # 1. Score Improvement >= 10%
+        score_diff = (challenger['score'] - current['score']) / abs(current['score'])
 
-        # Rule: Exceed score by >= 10% OR lower MaxDD materially (5% absolute?)
-        # "materially" - let's say 5% better (e.g. -20% vs -25%)
+        # 2. DD Reduction >= 5% absolute (e.g. 0.20 -> 0.15)
+        dd_diff = current['avg_max_dd'] - challenger['avg_max_dd']
 
-        score_improv = (challenger_score - current_score) / abs(current_score) if current_score != 0 else 0.11
+        # 3. Sharpe Non-Degradation (within 5%)
+        sharpe_ratio = challenger['avg_sharpe'] / current['avg_sharpe'] if current['avg_sharpe'] != 0 else 1.0
 
-        dd_improv = abs(current_dd) - abs(worst_dd) # Positive if challenger is better (lower absolute DD)
+        should_promote = False
+        reason = ""
 
-        promote = False
-        if score_improv >= 0.10:
-            promote = True
-        elif dd_improv >= 0.05: # e.g. 0.25 - 0.20 = 0.05
-            promote = True
+        if score_diff >= 0.10:
+            should_promote = True
+            reason = f"Score improved by {score_diff:.2%}"
+        elif dd_diff >= 0.05 and sharpe_ratio >= 0.95:
+            should_promote = True
+            reason = f"Drawdown reduced by {dd_diff:.2%} without Sharpe degradation"
 
-        if promote:
-            self.store.save_new_champion(challenger_strat, challenger_score, challenger_metrics)
+        if should_promote:
+            logger.info(f"Promoting new champion for {self.instrument} {self.timeframe}: {reason}")
+            self.store.save_champion(self.instrument, self.timeframe, challenger)
             return True
 
         return False

@@ -1,112 +1,105 @@
 import pandas as pd
+import numpy as np
+from typing import List, Dict
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.metrics import MetricsCalculator
+from packages.strategy_foundry.backtest.metrics import MetricCalculator
 from packages.strategy_foundry.factory.grammar import StrategyConfig
+from packages.strategy_foundry.adapters.core_costs import CostModel
 
 class WalkForwardEvaluator:
-    def __init__(self, df: pd.DataFrame, folds=3):
+    def __init__(self, df: pd.DataFrame, folds: int = 4, cost_model: CostModel = None):
         self.df = df
         self.folds = folds
-        self.engine = BacktestEngine(df)
+        self.cost_model = cost_model
+        if self.cost_model is None:
+            # Default fallback if not provided
+            self.cost_model = CostModel(slippage_bps=5.0, brokerage_per_order=20.0, tax_bps=3.0, spread_guard_bps=2.0)
+        self.engine = BacktestEngine(self.cost_model)
 
-    def evaluate(self, strategy: StrategyConfig, instrument_type='EQUITY'):
+    def evaluate(self, config: StrategyConfig, instrument_type: str = 'FUTURE') -> List[Dict]:
         """
-        Performs walk-forward evaluation.
-        We split data into N folds.
-        Usually WF involves optimizing on In-Sample and testing on Out-of-Sample.
-        Since we are *evaluating* a generated strategy (fixed params), we treat the folds as multiple OOS tests?
-        Or do we just want to see consistency across time?
-
-        The requirement says: "3–5 folds... Ranking uses OUT-OF-SAMPLE metrics only."
-
-        If strategy parameters are fixed (generated), the whole history is effectively OOS if we didn't train on it.
-        But we generated 50 candidates. We pick the best. That IS training (selection bias).
-
-        So we should split data:
-        Fold 1: Train (Generate/Select) | Test
-        Fold 2: ...
-
-        But the "Generator" generates random parameters.
-        So the standard approach here is:
-        1. Split data into N chunks.
-        2. For each strategy:
-           - Run on all chunks?
-
-        Actually, usually "Walk Forward" implies re-optimization.
-        Here we have "Self-generating strategy lab".
-
-        Let's interpret "Walk-forward evaluation" for fixed strategies as "K-Fold Cross Validation"
-        or simply splitting time into blocks to measure stability.
-
-        However, to prevent overfitting the "Selection" process:
-        We should rank based on the OOS portion of the folds?
-
-        Let's assume "Anchored Walk Forward":
-        Train on [0..T], Test on [T..T+k].
-        Expand window.
-
-        But since we generate random strategies, we can just evaluate them on the *entire* history
-        BUT split the history into "IS" and "OOS" segments for the sake of the 'Ranking' score.
-
-        Or better:
-        Split history into N blocks.
-        Block 1..N-1: In Sample (Used to pass basic filters?)
-        Block N: Out of Sample (Used for ranking?)
-
-        The requirement says: "Ranking uses OUT-OF-SAMPLE metrics only."
-        And "3-5 folds".
-
-        Let's implement a simple K-Fold time-series split.
-        We will return metrics for each fold.
-        And the caller (Ranker) will decide how to aggregate (e.g. average OOS scores).
-
-        Actually, "Walk Forward" usually means:
-        Train 2020, Test 2021.
-        Train 2020-2021, Test 2022.
-
-        Since we are not optimizing parameters of a *specific* strategy logic but picking *random* strategies:
-        The "Train" phase is implicitly "Did this strategy survive the filter on IS data?".
-
-        Let's do this:
-        Divide data into Folds.
-        For each fold:
-           Run Backtest.
-           Collect Metrics.
-
-        The "OOS" metrics usually refer to the test segments concatenated, or average of test segments.
-
-        Let's simply run backtest on the *entire* period, but also compute metrics for sub-periods (folds).
-        This allows the ranker to say "It performed well in 2023, 2024, and 2025".
-
-        If we strictly separate IS/OOS:
-        We could say: First 70% is IS. Last 30% is OOS.
-
-        Let's implement `evaluate` returning a list of metrics for each fold.
-        We split the dataframe into `self.folds` equal chunks.
+        Splits data into K folds and evaluates strategy on each.
+        Returns list of metrics dictionaries (one per fold).
         """
         n = len(self.df)
-        chunk_size = n // self.folds
+        fold_size = n // self.folds
 
-        fold_metrics = []
+        results = []
+
+        # Calculate time span of whole DF for annualized metrics?
+        # Or calculate per fold.
 
         for i in range(self.folds):
-            start = i * chunk_size
-            end = (i + 1) * chunk_size if i < self.folds - 1 else n
+            start_idx = i * fold_size
+            end_idx = (i + 1) * fold_size if i < self.folds - 1 else n
 
-            sub_df = self.df.iloc[start:end].copy() # Copy to avoid SettingWithCopy
+            fold_df = self.df.iloc[start_idx:end_idx].copy()
 
-            # Need to handle indicators warmup?
-            # Engine will compute indicators on sub_df.
-            # This resets indicators (EMA etc) at start of each fold.
-            # This is strict/conservative (good).
+            # Run Engine
+            trades = self.engine.run(fold_df, config)
 
-            engine = BacktestEngine(sub_df, initial_capital=self.engine.initial_capital)
-            res = engine.run(strategy, instrument_type)
+            # Calculate Metrics
+            # Time span in years
+            start_date = fold_df['datetime'].iloc[0]
+            end_date = fold_df['datetime'].iloc[-1]
+            days = (end_date - start_date).days
+            years = days / 365.25
+            if years < 0.01: years = 0.01 # Avoid div by zero
 
-            m = MetricsCalculator.calculate(res['equity_curve'], res['trades'])
-            m['start_date'] = sub_df['datetime'].iloc[0]
-            m['end_date'] = sub_df['datetime'].iloc[-1]
-            fold_metrics.append(m)
+            metrics = MetricCalculator.compute(trades, years)
+            metrics['fold'] = i + 1
+            metrics['start_date'] = start_date
+            metrics['end_date'] = end_date
 
-        return fold_metrics
+            # Sanity Checks (Intraday specific)
+            # Late-day dependence
+            # Overtrade penalty
+            self._apply_sanity_penalties(metrics, trades, fold_df)
 
+            results.append(metrics)
+
+        return results
+
+    def _apply_sanity_penalties(self, metrics: Dict, trades: pd.DataFrame, df: pd.DataFrame):
+        # 1. Overtrade Penalty
+        # Count trades per day
+        if trades.empty:
+            return
+
+        if 'datetime' in df.columns:
+            # Match trades to dates?
+            # Trades has indices entry_idx.
+            # We can map entry_idx to date.
+            entry_indices = trades['entry_idx'].values
+            trade_dates = df['datetime'].iloc[entry_indices].dt.date
+            trades_per_day = pd.Series(trade_dates).value_counts()
+            avg_trades_per_day = trades_per_day.mean()
+
+            metrics['avg_trades_per_day'] = avg_trades_per_day
+
+            # If > 10 trades per day?
+            if avg_trades_per_day > 10:
+                metrics['sharpe'] *= 0.5 # Penalize
+                metrics['reason'] = metrics.get('reason', "") + "HighTurnover;"
+
+        # 2. Late Day Dependence
+        # If > 70% of profit comes from trades closing after 15:00
+        # Need exit times.
+        exit_indices = trades['exit_idx'].values
+        # Ensure indices are within bounds (engine handles it, but safety)
+        valid_exits = exit_indices < len(df)
+        exit_indices = exit_indices[valid_exits]
+
+        if len(exit_indices) > 0:
+            exit_times = df['datetime'].iloc[exit_indices].dt.time
+            # 15:00
+            cutoff = pd.Timestamp("15:00").time()
+
+            is_late = np.array([t >= cutoff for t in exit_times])
+
+            late_pnl = trades.loc[valid_exits][is_late]['net_return'].sum()
+            total_pnl = trades['net_return'].sum()
+
+            if total_pnl > 0 and late_pnl / total_pnl > 0.7:
+                metrics['sharpe'] *= 0.7
+                metrics['reason'] = metrics.get('reason', "") + "LateDayDependence;"

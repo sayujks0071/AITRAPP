@@ -1,64 +1,93 @@
 import pandas as pd
 import numpy as np
 
-class MetricsCalculator:
+class MetricCalculator:
     @staticmethod
-    def calculate(equity_curve: pd.Series, trades: pd.DataFrame) -> dict:
-        """
-        Calculates performance metrics.
-        """
-        if equity_curve.empty or len(equity_curve) < 2:
-            return {}
+    def compute(trades: pd.DataFrame, time_span_years: float) -> dict:
+        if trades.empty:
+            return {
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "avg_return": 0.0,
+                "sharpe": -99.9,
+                "sortino": -99.9,
+                "max_dd": 1.0, # 100% DD
+                "cagr": 0.0,
+                "calmar": 0.0,
+                "stability": 0.0,
+                "avg_bars_held": 0.0
+            }
 
-        returns = equity_curve.pct_change().dropna()
+        returns = trades['net_return']
+
+        # Basic Counts
+        total_trades = len(trades)
+        wins = returns[returns > 0]
+        losses = returns[returns <= 0]
+
+        win_rate = len(wins) / total_trades
+
+        gross_profit = wins.sum()
+        gross_loss = abs(losses.sum())
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else 99.9
+
+        avg_return = returns.mean()
+
+        # Risk Metrics
+        # Assume these are per-trade returns.
+        # Sharpe per trade? Or annualized?
+        # Sharpe = (Mean per trade / Std per trade) * sqrt(Trades per year)
+        # Trades per year = Total Trades / Years
+
+        trades_per_year = total_trades / time_span_years if time_span_years > 0 else total_trades
+
+        std_return = returns.std()
+        if std_return == 0:
+             sharpe = 0.0
+        else:
+             sharpe = (avg_return / std_return) * np.sqrt(trades_per_year)
+
+        # Sortino (std of downside)
+        downside = returns[returns < 0]
+        std_downside = downside.std()
+        if std_downside == 0 or len(downside) < 2:
+            sortino = sharpe # fallback
+        else:
+            sortino = (avg_return / std_downside) * np.sqrt(trades_per_year)
+
+        # Drawdown (Equity Curve)
+        # Cumulative Compounded
+        equity = (1 + returns).cumprod()
+        peak = equity.cummax()
+        drawdown = (equity - peak) / peak
+        max_dd = abs(drawdown.min())
 
         # CAGR
-        days = (equity_curve.index[-1] - equity_curve.index[0]).days
-        years = days / 365.25
-        total_ret = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
-        cagr = (1 + total_ret) ** (1 / years) - 1 if years > 0 else 0
-
-        # Volatility (Annualized)
-        vol = returns.std() * np.sqrt(252)
-
-        # Sharpe
-        sharpe = (cagr / vol) if vol > 0 else 0
-
-        # Max Drawdown
-        peak = equity_curve.cummax()
-        dd = (equity_curve - peak) / peak
-        max_dd = dd.min()
+        # Final Equity
+        final_eq = equity.iloc[-1]
+        cagr = (final_eq ** (1 / time_span_years)) - 1 if time_span_years > 0 and final_eq > 0 else 0.0
 
         # Calmar
-        calmar = (cagr / abs(max_dd)) if max_dd != 0 else 0
+        calmar = cagr / max_dd if max_dd > 0 else 0.0
 
-        # Trade Stats
-        num_trades = len(trades)
-        win_rate = 0.0
-        profit_factor = 0.0
-        avg_trade = 0.0
+        # Stability (Rolling Sharpe Volatility?)
+        # Or simple R-squared of equity curve?
+        # Let's use fold variance (handled in Walkforward).
+        # Here we can compute R-squared of log equity.
 
-        if num_trades > 0:
-            wins = trades[trades['pnl'] > 0]
-            losses = trades[trades['pnl'] <= 0]
-            win_rate = len(wins) / num_trades
-
-            gross_profit = wins['pnl'].sum()
-            gross_loss = abs(losses['pnl'].sum())
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-
-            avg_trade = trades['pnl'].mean()
+        # Late Day Dependence
+        # Not implemented here yet, needs timestamps in trades DF.
 
         return {
-            "cagr": cagr,
-            "volatility": vol,
-            "sharpe": sharpe,
-            "max_dd": max_dd,
-            "calmar": calmar,
-            "trades": num_trades,
+            "total_trades": total_trades,
             "win_rate": win_rate,
             "profit_factor": profit_factor,
-            "avg_trade_pnl": avg_trade,
-            "total_return": total_ret
+            "avg_return": avg_return,
+            "sharpe": sharpe,
+            "sortino": sortino,
+            "max_dd": max_dd,
+            "cagr": cagr,
+            "calmar": calmar,
+            "avg_bars_held": trades['bars_held'].mean()
         }
-

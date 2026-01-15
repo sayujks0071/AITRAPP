@@ -1,16 +1,58 @@
-class SanityCheck:
-    def __init__(self, min_trades=30, max_dd_pct=35.0):
-        self.min_trades = min_trades
-        self.max_dd_pct = max_dd_pct
+import pandas as pd
+import logging
+from typing import Dict
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.backtest.metrics import MetricCalculator
+from packages.strategy_foundry.factory.grammar import StrategyConfig
+from packages.strategy_foundry.adapters.core_costs import CostModel
 
-    def check(self, metrics: dict) -> tuple[bool, str]:
-        if metrics.get('trades', 0) < self.min_trades:
-            return False, f"Not enough trades: {metrics.get('trades', 0)} < {self.min_trades}"
+logger = logging.getLogger(__name__)
 
-        if abs(metrics.get('max_dd', 0)) * 100 > self.max_dd_pct:
-             return False, f"Max DD too high: {metrics.get('max_dd', 0)*100:.1f}% > {self.max_dd_pct}%"
+class SanityChecker:
+    def __init__(self, df_daily: pd.DataFrame, cost_model: CostModel):
+        self.df_daily = df_daily
+        self.cost_model = cost_model
+        self.engine = BacktestEngine(self.cost_model)
 
-        if metrics.get('cagr', 0) <= 0:
-            return False, "Negative CAGR"
+    def check(self, config: StrategyConfig) -> Dict:
+        """
+        Runs the strategy on Daily data and checks for catastrophic failure.
+        Returns metrics and a 'passed' boolean.
+        """
+        if self.df_daily is None or self.df_daily.empty:
+            logger.warning("No daily data for sanity check. Skipping.")
+            return {"passed": True, "reason": "NoData"}
 
-        return True, "OK"
+        # Run on Daily
+        trades = self.engine.run(self.df_daily, config)
+
+        # Calculate Metrics (Full history)
+        start_date = self.df_daily['datetime'].iloc[0]
+        end_date = self.df_daily['datetime'].iloc[-1]
+        years = (end_date - start_date).days / 365.25
+        if years < 0.01: years = 0.01
+
+        metrics = MetricCalculator.compute(trades, years)
+
+        # Check Thresholds
+        passed = True
+        reason = ""
+
+        # Thresholds
+        # Sharpe < -0.5 (Aligned with foundry.yaml)
+        # MaxDD > 45%
+
+        if metrics['sharpe'] < -0.5:
+            passed = False
+            reason += "DailySharpeTooLow;"
+
+        if metrics['max_dd'] > 0.45:
+            passed = False
+            reason += "DailyDDTooHigh;"
+
+        return {
+            "passed": passed,
+            "reason": reason,
+            "daily_sharpe": metrics['sharpe'],
+            "daily_max_dd": metrics['max_dd']
+        }

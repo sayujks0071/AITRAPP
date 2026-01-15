@@ -1,18 +1,17 @@
 import json
 import os
-from packages.strategy_foundry.factory.grammar import StrategyConfig, Rule
+from typing import List
+from packages.strategy_foundry.factory.grammar import StrategyConfig, Rule, Filter
 
 class CandidateRegistry:
     @staticmethod
-    def save_candidates(candidates: list[StrategyConfig], filepath: str):
-        """Saves candidates to JSON file."""
+    def save_candidates(candidates: List[StrategyConfig], filepath: str):
         data = [c.to_dict() for c in candidates]
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2)
 
     @staticmethod
-    def load_candidates(filepath: str) -> list[StrategyConfig]:
-        """Loads candidates from JSON file."""
+    def load_candidates(filepath: str) -> List[StrategyConfig]:
         if not os.path.exists(filepath):
             return []
 
@@ -20,19 +19,19 @@ class CandidateRegistry:
             data = json.load(f)
 
         candidates = []
-        for d in data:
-            # Reconstruct objects
-            # Needed: parsing dictionaries back to Rule objects
-            entry_rules = [Rule(**r) for r in d['entry_rules']]
-            exit_rules = [Rule(**r) for r in d['exit_rules']]
+        for item in data:
+            entry_rules = [Rule(**r) for r in item['entry_rules']]
+            filters = [Filter(**f) for f in item.get('filters', [])]
 
             c = StrategyConfig(
-                strategy_id=d['strategy_id'],
+                strategy_id=item['strategy_id'],
                 entry_rules=entry_rules,
-                exit_rules=exit_rules,
-                stop_loss_atr=d['stop_loss_atr'],
-                take_profit_atr=d['take_profit_atr'],
-                max_bars_hold=d['max_bars_hold']
+                filters=filters,
+                stop_loss_atr=item['stop_loss_atr'],
+                take_profit_atr=item['take_profit_atr'],
+                trailing_stop_atr=item.get('trailing_stop_atr'),
+                max_bars_hold=item['max_bars_hold'],
+                exit_time=item.get('exit_time', "15:25")
             )
             candidates.append(c)
         return candidates

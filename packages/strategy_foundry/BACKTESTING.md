@@ -1,31 +1,33 @@
-# Backtesting Methodology
+# Backtesting Protocol
 
-## Engine
-- **Timeframe**: Daily (1D).
-- **Execution**: Signal generated at Close (t), Entry at Open (t+1).
-- **Type**: Vectorized with loop-based risk overlay.
-- **Costs**:
-  - Slippage: 5 bps (default).
-  - Fees: Estimated brokerage + taxes (STT, GST, etc.) via `core` adapter.
+## Intraday Assumptions
+- **Execution**: Signal calculated on Bar Close (T), Executed at Open (T+1).
+- **Session**: Market Open 09:15, Close 15:30 IST.
+- **Forced Exit**: All positions are closed at 15:25 IST (Hard Close).
+- **Data**: Yahoo Finance 5m/15m (approx 60 days history). Daily (10 years).
+
+## Costs & Slippage
+- **Slippage**: 5 bps per side.
+- **Tax/Charges**: 3 bps per side.
+- **Brokerage**: Fixed Rs 20 per order (ignored in % return calculation, relied on bps friction).
+- **Spread Guard**: Additional penalty for choppy markets.
 
 ## Walk-Forward Evaluation
-- The dataset is split into `N` folds (Default 3).
-- Strategies are evaluated on each fold.
-- Ranking uses the aggregate metrics across folds.
-- **Anti-Overfitting**:
-  - Strategies are randomly generated (no parameter optimization on In-Sample data).
-  - Selection is based on stability across folds.
-  - Champions must beat incumbents by significant margin (10% score or 5% MaxDD).
+- **Method**: K-Fold Time-Series Split.
+- **Folds**: 4 (Full Mode), 2 (Fast Mode).
+- **Metric**: OOS Performance (Sharpe, Calmar, Return).
+- **Stability**: Variance of Sharpe Ratio across folds.
 
-## Metrics
-- **Sharpe Ratio**: Risk-adjusted return (rf=0).
-- **Calmar Ratio**: CAGR / MaxDD.
-- **Stability**: Inverse of Sharpe standard deviation across folds.
-- **Sanity Checks**:
-  - Min Trades: 30
-  - Max DD: 35%
+## Rejection Criteria
+Strategies are rejected if:
+- **Trades**: < 60 (5m) or < 30 (15m).
+- **Drawdown**: > 30%.
+- **Profit Factor**: < 1.1.
+- **Win Rate**: < 35%.
+- **Sanity**: Daily (1D) Sharpe < -0.2 or MaxDD > 45%.
+- **Late Day Dependence**: > 70% of profit comes from trades closing after 15:00.
+- **Overtrading**: > 10 trades/day avg.
 
-## Caveats
-- Yahoo Finance data may have gaps or adjustments.
-- Daily timeframe ignores intraday volatility (though Risk Overlay checks Low/High for stops).
-- "Next Open" execution assumes liquidity at Open price.
+## Ranking
+- **Blended Score**: `0.6 * Score_15m + 0.4 * Score_5m`.
+- **Promotion**: Challenger must beat Champion Score by 10% OR Reduce MaxDD by 5% (with Sharpe parity).
