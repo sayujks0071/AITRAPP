@@ -274,7 +274,6 @@ class BacktestEngine:
         self,
         strategy: Strategy,
         instrument: "Instrument",
-        instrument: 'Instrument',
         date: datetime,
         bars: List,
         tick: Optional,

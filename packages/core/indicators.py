@@ -75,7 +75,7 @@ class IndicatorCalculator:
 
             # Pre-calculate TR once (used by ATR, ADX, Supertrend)
             # This avoids redundant expensive calculations (3x speedup for TR)
-            tr = self._calculate_tr(df)
+            tr = self.calculate_tr(df)
 
             # VWAP (reset daily in production)
             indicators["vwap"] = self._vwap(df)
