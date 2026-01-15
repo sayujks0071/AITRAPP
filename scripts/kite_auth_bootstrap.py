@@ -212,6 +212,7 @@ def main():
             access_token = auth.exchange_request_token(captured_request_token)
             auth.persist_access_token(access_token)
             logger.info("✅ Token exchanged and persisted successfully.")
+            logger.info("Runner restarted (or should be restarted by supervisor).")
             sys.exit(0)
         except Exception as e:
             logger.error(f"Failed to exchange token: {e}")

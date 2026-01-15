@@ -10,6 +10,7 @@ class KiteAuth:
     """
     Dedicated Auth module for Zerodha Kite Connect.
     Handles session validation, login URL generation, and token exchange.
+    Implements the daily manual login flow as per Kite Trade regulations.
     """
     def __init__(self):
         # Support both standard naming and the specific env var from instructions
