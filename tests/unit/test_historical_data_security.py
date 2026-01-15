@@ -39,7 +39,7 @@ def test_historical_data_loader_path_traversal_check():
     with pytest.raises(ValueError) as excinfo:
         loader.load_file(symbol=symbol_with_traversal, option_type="CE")
 
-    assert "Invalid symbol format" in str(excinfo.value)
+    assert "Invalid input" in str(excinfo.value)
 
 def test_backtest_request_validation_invalid():
     """

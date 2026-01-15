@@ -47,7 +47,7 @@ def test_atr_correctness(sample_data):
     # or implement the expected logic here.
     # Logic: Rolling mean of TR.
 
-    tr_calc = calc._calculate_tr(sample_data)
+    tr_calc = calc.calculate_tr(sample_data)
     expected = pd.Series(tr_calc).rolling(window=14).mean().iloc[-1]
 
     assert np.isclose(res, expected)
@@ -81,7 +81,7 @@ def test_adx_correctness(sample_data):
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
     minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-    tr = calc._calculate_tr(sample_data)
+    tr = calc.calculate_tr(sample_data)
 
     atr = pd.Series(tr).rolling(window=14).mean()
     plus_di = 100 * pd.Series(plus_dm).rolling(window=14).mean() / atr
