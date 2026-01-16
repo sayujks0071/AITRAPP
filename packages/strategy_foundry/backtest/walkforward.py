@@ -1,105 +1,64 @@
+"""Walk-Forward Evaluation"""
 import pandas as pd
 import numpy as np
-from typing import List, Dict
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.metrics import MetricCalculator
-from packages.strategy_foundry.factory.grammar import StrategyConfig
-from packages.strategy_foundry.adapters.core_costs import CostModel
+from typing import List, Dict, Any
+from .engine import BacktestEngine
+from ..factory.generator import StrategyCandidate
 
 class WalkForwardEvaluator:
-    def __init__(self, df: pd.DataFrame, folds: int = 4, cost_model: CostModel = None):
-        self.df = df
+    def __init__(self, folds: int = 3):
         self.folds = folds
-        self.cost_model = cost_model
-        if self.cost_model is None:
-            # Default fallback if not provided
-            self.cost_model = CostModel(slippage_bps=5.0, brokerage_per_order=20.0, tax_bps=3.0, spread_guard_bps=2.0)
-        self.engine = BacktestEngine(self.cost_model)
+        self.engine = BacktestEngine() # Default config
 
-    def evaluate(self, config: StrategyConfig, instrument_type: str = 'FUTURE') -> List[Dict]:
+    def evaluate(self, df: pd.DataFrame, strategy: StrategyCandidate) -> Dict[str, Any]:
         """
-        Splits data into K folds and evaluates strategy on each.
-        Returns list of metrics dictionaries (one per fold).
+        Performs Walk-Forward Validation.
+        Returns aggregated OOS metrics.
         """
-        n = len(self.df)
-        fold_size = n // self.folds
+        # Split data into k folds
+        n = len(df)
+        fold_size = n // (self.folds + 1)
 
-        results = []
+        oos_metrics = []
+        equity_curves = []
 
-        # Calculate time span of whole DF for annualized metrics?
-        # Or calculate per fold.
+        # We use an expanding window or sliding window?
+        # Standard WF: Train on [0, k], Test on [k, k+1]
+        # Here we just run backtest on OOS segments to verify stability.
+        # We don't "optimize" parameters on In-Sample (IS) because our candidates are fixed.
+        # So this is strictly OOS cross-validation to see if it holds up in different regimes.
 
-        for i in range(self.folds):
+        for i in range(1, self.folds + 1):
+            # OOS Segment
             start_idx = i * fold_size
-            end_idx = (i + 1) * fold_size if i < self.folds - 1 else n
+            end_idx = (i + 1) * fold_size if i < self.folds else n
 
-            fold_df = self.df.iloc[start_idx:end_idx].copy()
+            oos_df = df.iloc[start_idx:end_idx]
 
-            # Run Engine
-            trades = self.engine.run(fold_df, config)
+            if len(oos_df) < 50: continue # Skip tiny folds
 
-            # Calculate Metrics
-            # Time span in years
-            start_date = fold_df['datetime'].iloc[0]
-            end_date = fold_df['datetime'].iloc[-1]
-            days = (end_date - start_date).days
-            years = days / 365.25
-            if years < 0.01: years = 0.01 # Avoid div by zero
+            res = self.engine.run(oos_df, strategy)
+            m = res['metrics']
+            if m:
+                oos_metrics.append(m)
+                equity_curves.append(res['equity'])
 
-            metrics = MetricCalculator.compute(trades, years)
-            metrics['fold'] = i + 1
-            metrics['start_date'] = start_date
-            metrics['end_date'] = end_date
+        # Aggregate Results
+        if not oos_metrics:
+            return {}
 
-            # Sanity Checks (Intraday specific)
-            # Late-day dependence
-            # Overtrade penalty
-            self._apply_sanity_penalties(metrics, trades, fold_df)
+        avg_sharpe = np.mean([m['sharpe'] for m in oos_metrics])
+        avg_cagr = np.mean([m['cagr'] for m in oos_metrics])
+        avg_dd = np.mean([m['max_drawdown'] for m in oos_metrics])
 
-            results.append(metrics)
+        # Count positive folds
+        positive_folds = sum(1 for m in oos_metrics if m['total_return'] > 0)
 
-        return results
-
-    def _apply_sanity_penalties(self, metrics: Dict, trades: pd.DataFrame, df: pd.DataFrame):
-        # 1. Overtrade Penalty
-        # Count trades per day
-        if trades.empty:
-            return
-
-        if 'datetime' in df.columns:
-            # Match trades to dates?
-            # Trades has indices entry_idx.
-            # We can map entry_idx to date.
-            entry_indices = trades['entry_idx'].values
-            trade_dates = df['datetime'].iloc[entry_indices].dt.date
-            trades_per_day = pd.Series(trade_dates).value_counts()
-            avg_trades_per_day = trades_per_day.mean()
-
-            metrics['avg_trades_per_day'] = avg_trades_per_day
-
-            # If > 10 trades per day?
-            if avg_trades_per_day > 10:
-                metrics['sharpe'] *= 0.5 # Penalize
-                metrics['reason'] = metrics.get('reason', "") + "HighTurnover;"
-
-        # 2. Late Day Dependence
-        # If > 70% of profit comes from trades closing after 15:00
-        # Need exit times.
-        exit_indices = trades['exit_idx'].values
-        # Ensure indices are within bounds (engine handles it, but safety)
-        valid_exits = exit_indices < len(df)
-        exit_indices = exit_indices[valid_exits]
-
-        if len(exit_indices) > 0:
-            exit_times = df['datetime'].iloc[exit_indices].dt.time
-            # 15:00
-            cutoff = pd.Timestamp("15:00").time()
-
-            is_late = np.array([t >= cutoff for t in exit_times])
-
-            late_pnl = trades.loc[valid_exits][is_late]['net_return'].sum()
-            total_pnl = trades['net_return'].sum()
-
-            if total_pnl > 0 and late_pnl / total_pnl > 0.7:
-                metrics['sharpe'] *= 0.7
-                metrics['reason'] = metrics.get('reason', "") + "LateDayDependence;"
+        return {
+            "oos_sharpe": float(avg_sharpe),
+            "oos_cagr": float(avg_cagr),
+            "oos_max_dd": float(avg_dd),
+            "positive_folds": int(positive_folds),
+            "total_folds": len(oos_metrics),
+            "fold_metrics": oos_metrics
+        }
