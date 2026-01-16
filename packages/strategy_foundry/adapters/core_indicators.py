@@ -118,34 +118,62 @@ class VectorIndicatorCalculator(IndicatorCalculator if IndicatorCalculator else 
         supertrend = np.zeros(len(df))
         direction = np.ones(len(df)) # 1: UP, -1: DOWN
 
-        for i in range(1, len(df)):
-            if basic_upper[i] < final_upper[i-1] or close[i-1] > final_upper[i-1]:
-                final_upper[i] = basic_upper[i]
-            else:
-                final_upper[i] = final_upper[i-1]
+        # Initialize current values
+        curr_upper = basic_upper[0]
+        curr_lower = basic_lower[0]
+        curr_dir = 1.0
 
-            if basic_lower[i] > final_lower[i-1] or close[i-1] < final_lower[i-1]:
-                final_lower[i] = basic_lower[i]
-            else:
-                final_lower[i] = final_lower[i-1]
+        # Optimization: Use scalar variables and zip to avoid indexing overhead
+        # Slicing arrays to iterate (starting from index 1)
+        basic_upper_s = basic_upper[1:]
+        basic_lower_s = basic_lower[1:]
+        close_curr_s = close[1:]
+        close_prev_s = close[:-1]
 
-            if direction[i-1] == 1:
-                if close[i] <= final_upper[i]:
-                    direction[i] = -1
-                    supertrend[i] = final_upper[i]
+        # First element initialization (handle NaN case for start)
+        final_upper[0] = basic_upper[0] if not np.isnan(basic_upper[0]) else 0
+        final_lower[0] = basic_lower[0] if not np.isnan(basic_lower[0]) else 0
+
+        for i, (b_ub, b_lb, c, prev_c) in enumerate(zip(basic_upper_s, basic_lower_s, close_curr_s, close_prev_s), 1):
+            # Upper Band
+            # Logic: If current is NaN, take new value.
+            # Else check conditions.
+            if curr_upper != curr_upper: # isnan
+                curr_upper = b_ub
+            elif b_ub < curr_upper or prev_c > curr_upper:
+                curr_upper = b_ub
+            # else keep curr_upper
+
+            final_upper[i] = curr_upper
+
+            # Lower Band
+            if curr_lower != curr_lower: # isnan
+                curr_lower = b_lb
+            elif b_lb > curr_lower or prev_c < curr_lower:
+                curr_lower = b_lb
+            # else keep curr_lower
+
+            final_lower[i] = curr_lower
+
+            # Direction
+            if curr_dir == 1:
+                if c <= curr_upper: # If curr_upper NaN, False.
+                    curr_dir = -1
+                    supertrend[i] = curr_upper
                 else:
-                    direction[i] = 1
-                    supertrend[i] = final_lower[i]
+                    curr_dir = 1
+                    supertrend[i] = curr_lower
             else:
-                if close[i] >= final_lower[i]:
-                    direction[i] = 1
-                    supertrend[i] = final_lower[i]
+                if c >= curr_lower: # If curr_lower NaN, False.
+                    curr_dir = 1
+                    supertrend[i] = curr_lower
                 else:
-                    direction[i] = -1
-                    supertrend[i] = final_upper[i]
+                    curr_dir = -1
+                    supertrend[i] = curr_upper
+
+            direction[i] = curr_dir
 
         return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
 
     def donchian(self, df: pd.DataFrame, period: int = 20) -> tuple[pd.Series, pd.Series]:
          return df["high"].rolling(window=period).max(), df["low"].rolling(window=period).min()
-
