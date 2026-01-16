@@ -95,7 +95,6 @@ echo ""
 # Start in background and capture PID
 mkdir -p logs
 (
-    cd /Users/mac/AITRAPP
     export APP_MODE=PAPER
     export PORT=${PORT}
     nohup python3 -m uvicorn apps.api.main:app --host 0.0.0.0 --port ${PORT} > logs/api_${PORT}.log 2>&1 &
