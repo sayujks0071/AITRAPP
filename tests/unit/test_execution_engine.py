@@ -250,3 +250,109 @@ async def test_place_order_blocked_no_token_live(execution_engine):
     assert order is None
     # Verify place_order was NOT called
     execution_engine.kite.place_order.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_tp2_partial_coverage_bug(execution_engine, mock_signal):
+    """
+    Test that if TP1 is missing, TP2 covers the FULL quantity.
+    """
+    quantity = 100
+
+    # Set TP1 to None for this test
+    mock_signal.take_profit_1 = None
+    mock_signal.take_profit_2 = 120.0
+
+    # Mock entry order
+    entry_order = Order(
+        order_id="ENTRY_1",
+        client_order_id="CO_ENTRY_1",
+        timestamp=datetime.now(),
+        instrument=mock_signal.instrument,
+        side="BUY",
+        quantity=quantity,
+        price=100.0,
+        order_type="MARKET",
+        product="MIS",
+        status=OrderStatus.COMPLETE,
+        filled_quantity=quantity
+    )
+
+    # We mock _place_order to capture calls
+    with patch.object(execution_engine, '_place_order', new_callable=AsyncMock) as mock_place:
+        # Return a dummy order for each call so it succeeds
+        mock_place.side_effect = lambda **kwargs: Order(
+            order_id=f"ORD_{kwargs.get('client_order_id')}",
+            client_order_id=kwargs.get('client_order_id'),
+            timestamp=datetime.now(),
+            instrument=mock_signal.instrument,
+            side=kwargs.get('transaction_type'),
+            quantity=kwargs.get('quantity'),
+            price=kwargs.get('price') or 0.0,
+            order_type=kwargs.get('order_type'),
+            product=kwargs.get('product'),
+            status=OrderStatus.OPEN
+        )
+
+        await execution_engine._place_exit_orders(mock_signal, entry_order, quantity)
+
+        # Verify calls
+        # We expect:
+        # 1. SL for 100
+        # 2. TP2 for 100 (because TP1 is None)
+
+        # Check SL
+        sl_calls = [c for c in mock_place.call_args_list if c.kwargs.get('is_stop_loss')]
+        assert len(sl_calls) == 1
+        assert sl_calls[0].kwargs['quantity'] == 100
+
+        # Check TP2
+        tp_calls = [c for c in mock_place.call_args_list if c.kwargs.get('is_take_profit')]
+        assert len(tp_calls) == 1
+        assert tp_calls[0].kwargs['quantity'] == 100, f"Expected TP2 quantity 100, got {tp_calls[0].kwargs['quantity']}"
+
+@pytest.mark.asyncio
+async def test_small_quantity_rounding(execution_engine, mock_signal):
+    """
+    Test that for quantity=1:
+    - TP1 (50%) becomes 0 -> Skipped (no order placed)
+    - TP2 takes remaining -> 1 (order placed)
+    """
+    quantity = 1
+
+    # Modify signal to HAVE TP1
+    mock_signal.take_profit_1 = 110.0
+    mock_signal.take_profit_2 = 120.0
+
+    # Mock _place_order
+    with patch.object(execution_engine, '_place_order', new_callable=AsyncMock) as mock_place:
+        mock_place.side_effect = lambda **kwargs: Order(
+            order_id=f"ORD_{kwargs.get('client_order_id')}",
+            client_order_id=kwargs.get('client_order_id'),
+            timestamp=datetime.now(),
+            instrument=mock_signal.instrument,
+            side=kwargs.get('transaction_type'),
+            quantity=kwargs.get('quantity'),
+            price=kwargs.get('price') or 0.0,
+            order_type=kwargs.get('order_type'),
+            product=kwargs.get('product'),
+            status=OrderStatus.OPEN
+        )
+
+        entry_order = MagicMock(order_id="ENTRY_SMALL")
+
+        await execution_engine._place_exit_orders(mock_signal, entry_order, quantity)
+
+        # Verify calls
+        # 1. SL (1)
+        sl_calls = [c for c in mock_place.call_args_list if c.kwargs.get('is_stop_loss')]
+        assert len(sl_calls) == 1
+        assert sl_calls[0].kwargs['quantity'] == 1
+
+        # 2. TP1 should NOT be called (quantity 0)
+        tp1_calls = [c for c in mock_place.call_args_list if c.kwargs.get('client_order_id', '').endswith('_TP1')]
+        assert len(tp1_calls) == 0, "TP1 should be skipped for quantity=1"
+
+        # 3. TP2 should be called (quantity 1)
+        tp2_calls = [c for c in mock_place.call_args_list if c.kwargs.get('client_order_id', '').endswith('_TP2')]
+        assert len(tp2_calls) == 1
+        assert tp2_calls[0].kwargs['quantity'] == 1
