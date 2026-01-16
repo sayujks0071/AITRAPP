@@ -1,54 +1,42 @@
 
 import time
-import pandas as pd
 import numpy as np
+import pandas as pd
+import sys
+import os
+
+# Add repo root to path
+sys.path.append(os.getcwd())
+
 from packages.strategy_foundry.adapters.core_indicators import VectorIndicatorCalculator
 
-def run_benchmark():
-    # Setup Data
-    N = 100000 # 100k candles
-    np.random.seed(42)
-
-    # Generate random OHLC
-    close = np.cumsum(np.random.randn(N)) + 10000
-    high = close + np.random.rand(N) * 10
-    low = close - np.random.rand(N) * 10
-    open_ = (high + low) / 2 # Approx
-
+def bench_supertrend():
+    # Setup data
+    N = 10000
     df = pd.DataFrame({
-        "open": open_,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": np.random.randint(100, 10000, N)
+        'high': np.random.rand(N) * 100 + 100,
+        'low': np.random.rand(N) * 100,
+        'close': np.random.rand(N) * 100 + 50,
+        'open': np.random.rand(N) * 100 + 50,
     })
 
     calc = VectorIndicatorCalculator()
 
-    # Set params
-    calc.supertrend_period = 10
-    calc.supertrend_multiplier = 3.0
+    # Warmup with fallback params
+    calc.supertrend(df, 11, 3.0)
 
-    print(f"Benchmarking Supertrend calculation with {N} candles...")
-
-    # Warmup
-    calc.supertrend_series(df.iloc[:1000])
-
+    iterations = 100
     start_time = time.time()
-    iterations = 5
 
     for _ in range(iterations):
-        st, direction = calc.supertrend_series(df)
+        # Use non-default period to ensure fallback is used
+        calc.supertrend(df, 11, 3.0)
 
     end_time = time.time()
     avg_time = (end_time - start_time) / iterations
 
-    print(f"Average time over {iterations} runs: {avg_time:.4f}s")
-
-    # Verification of output (checksum)
-    # Use nansum to ignore initial NaNs
-    print(f"Checksum (ST sum): {np.nansum(st):.2f}")
-    print(f"Checksum (Dir sum): {direction.sum()}")
+    print(f"Average time per call: {avg_time*1000:.4f} ms")
+    print(f"Total time for {iterations} iterations: {end_time - start_time:.4f} s")
 
 if __name__ == "__main__":
-    run_benchmark()
+    bench_supertrend()
