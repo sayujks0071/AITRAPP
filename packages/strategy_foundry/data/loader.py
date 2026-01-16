@@ -1,136 +1,120 @@
+"""Data Loader for Strategy Foundry"""
 import os
 import pandas as pd
-import yaml
-import logging
+import requests
+import time
 from datetime import datetime, timedelta
-import pytz
-from typing import Optional, Dict
+from pathlib import Path
+from io import StringIO
+import structlog
+import yaml
 
-from packages.strategy_foundry.data.sources import YahooSource
+logger = structlog.get_logger(__name__)
 
-logger = logging.getLogger(__name__)
+CACHE_DIR = Path(__file__).parent / "cache"
+CONFIG_DIR = Path(__file__).parent.parent / "configs"
+INSTRUMENT_MAP_PATH = CONFIG_DIR / "instrument_map.yaml"
 
-# Paths
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(BASE_DIR, 'configs', 'foundry.yaml')
-INSTRUMENT_MAP_PATH = os.path.join(BASE_DIR, 'configs', 'instrument_map.yaml')
-CACHE_DIR = os.path.join(BASE_DIR, 'data', 'cache')
-
-IST = pytz.timezone('Asia/Kolkata')
+# Default config if file missing
+DEFAULT_INSTRUMENT_MAP = {
+    "NIFTY": {"research": "^NSEI", "proxy": "NIFTYBEES.NS"},
+    "SENSEX": {"research": "^BSESN", "proxy": "SENSEXBEES.NS"} # Fallback examples
+}
 
 class DataLoader:
-    def __init__(self):
-        self.source = YahooSource()
-        self.cache_dir = CACHE_DIR
-        os.makedirs(self.cache_dir, exist_ok=True)
+    def __init__(self, cache_dir: Path = CACHE_DIR):
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.instrument_map = self._load_map()
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
+        }
 
-        # Load configs
-        self.foundry_config = self._load_yaml(CONFIG_PATH).get('foundry', {})
-        self.instrument_map = self._load_yaml(INSTRUMENT_MAP_PATH)
+    def _load_map(self):
+        if INSTRUMENT_MAP_PATH.exists():
+             with open(INSTRUMENT_MAP_PATH) as f:
+                return yaml.safe_load(f)
+        return DEFAULT_INSTRUMENT_MAP
 
-        self.proxies = self.instrument_map.get('paper_proxy', {}) # Use paper proxy as fallback source
-
-    def _load_yaml(self, path):
-        if not os.path.exists(path):
-            return {}
-        with open(path, 'r') as f:
-            return yaml.safe_load(f)
-
-    def _get_cache_path(self, symbol: str, interval: str) -> str:
-        # Sanitize symbol for filename
-        safe_symbol = symbol.replace('^', '').replace('.', '_')
-        return os.path.join(self.cache_dir, f"{safe_symbol}_{interval}.csv")
-
-    def _is_cache_valid(self, path: str) -> bool:
-        if not os.path.exists(path):
-            return False
-
-        mtime = datetime.fromtimestamp(os.path.getmtime(path))
-        # Valid if less than 4 hours old (for hourly runs)
-        # Or maybe just "today"?
-        # Intraday data updates frequently. 1 hour validity?
-        # The prompt says "hourly".
-        if datetime.now() - mtime < timedelta(minutes=55):
-            return True
-        return False
-
-    def get_data(self, instrument: str, interval: str = "1d", force_download: bool = False) -> Optional[pd.DataFrame]:
+    def get_data(self, symbol: str, lookback_days: int = 2000) -> pd.DataFrame:
         """
-        Get data for an instrument (e.g. 'NIFTY').
-        Handles mapping to symbol (^NSEI), caching, and fallback to proxy.
+        Get daily OHLCV data for a symbol.
+        1. Check cache
+        2. If stale/missing, download
         """
-        # 1. Resolve primary symbol
-        research_map = self.instrument_map.get('research', {})
-        symbol = research_map.get(instrument, instrument)
+        mapping = self.instrument_map.get(symbol)
+        if not mapping:
+             raise ValueError(f"Unknown symbol: {symbol}")
 
-        df = self._get_data_for_symbol(symbol, interval, force_download)
+        research_symbol = mapping["research"]
+        file_path = self.cache_dir / f"{symbol}.csv"
 
-        # 2. Fallback if failed and we have a proxy
-        if (df is None or df.empty) and instrument in self.proxies:
-            proxy_symbol = self.proxies[instrument]
-            # Need to append extension for Yahoo if not present (e.g. NIFTYBEES -> NIFTYBEES.NS)
-            if not proxy_symbol.endswith('.NS') and not proxy_symbol.startswith('^'):
-                proxy_symbol += '.NS'
-
-            logger.warning(f"Falling back to proxy {proxy_symbol} for {instrument} {interval}")
-            df = self._get_data_for_symbol(proxy_symbol, interval, force_download)
-
-        if df is not None and not df.empty:
-            # Normalize to IST
-            if df['datetime'].dt.tz is None:
-                df['datetime'] = df['datetime'].dt.tz_localize('UTC') # Assume UTC if naive
-
-            df['datetime'] = df['datetime'].dt.tz_convert(IST)
-
-            # Filter Market Hours?
-            # 5m/15m might have pre-market data? Yahoo usually includes it?
-            # We filter 09:15 to 15:30
-            if interval in ['5m', '15m']:
-                df = df[
-                    (df['datetime'].dt.time >= datetime.strptime("09:15", "%H:%M").time()) &
-                    (df['datetime'].dt.time <= datetime.strptime("15:30", "%H:%M").time())
-                ]
-
-            df.reset_index(drop=True, inplace=True)
-
-        return df
-
-    def _get_data_for_symbol(self, symbol: str, interval: str, force_download: bool) -> Optional[pd.DataFrame]:
-        cache_path = self._get_cache_path(symbol, interval)
-
-        if not force_download and self._is_cache_valid(cache_path):
-            try:
-                logger.info(f"Loading {symbol} ({interval}) from cache")
-                df = pd.read_csv(cache_path)
-                df['datetime'] = pd.to_datetime(df['datetime']) # UTC aware usually from read_csv if saved that way?
-                # pd.to_datetime might lose tz if not careful.
-                # When we save, we should use iso format.
-                return df
-            except Exception as e:
-                logger.error(f"Cache read error for {symbol}: {e}")
+        if self._is_cache_valid(file_path):
+            df = pd.read_csv(file_path, parse_dates=["Date"], index_col="Date")
+            logger.info("Loaded from cache", symbol=symbol, rows=len(df))
+            return df
 
         # Download
-        days = self.foundry_config.get('data_days_intraday', 59) if interval in ['5m', '15m'] else self.foundry_config.get('data_days_daily', 3650)
+        logger.info("Downloading data", symbol=symbol, ticker=research_symbol)
+        df = self._download_yahoo(research_symbol, lookback_days)
 
-        df = self.source.download(symbol, interval, days)
+        if df.empty and "proxy" in mapping:
+            logger.warning("Primary download failed, trying proxy", symbol=symbol, proxy=mapping["proxy"])
+            df = self._download_yahoo(mapping["proxy"], lookback_days)
 
-        if df is not None:
-            # Save to cache
-            df.to_csv(cache_path, index=False)
-        elif os.path.exists(cache_path):
-            # Fallback to stale cache
-            logger.warning(f"Download failed for {symbol}, using stale cache")
+        if not df.empty:
+            df.to_csv(file_path)
+            # Try parquet if available (optional)
             try:
-                df = pd.read_csv(cache_path)
-                df['datetime'] = pd.to_datetime(df['datetime'])
-            except:
+                import pyarrow
+                df.to_parquet(file_path.with_suffix(".parquet"))
+            except ImportError:
                 pass
 
         return df
 
-if __name__ == "__main__":
-    loader = DataLoader()
-    df = loader.get_data("NIFTY", "5m")
-    if df is not None:
-        print(df.head())
-        print(df.tail())
+    def _is_cache_valid(self, path: Path) -> bool:
+        if not path.exists():
+            return False
+
+        # Check if modified today (simple check)
+        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+        return mtime.date() == datetime.now().date()
+
+    def _download_yahoo(self, ticker: str, days: int) -> pd.DataFrame:
+        """Download from Yahoo Finance query1 endpoint"""
+        end = int(time.time())
+        start = int((datetime.now() - timedelta(days=days)).timestamp())
+
+        url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={start}&period2={end}&interval=1d&events=history"
+
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=10)
+            if resp.status_code != 200:
+                logger.error("Download failed", code=resp.status_code, text=resp.text[:100])
+                return pd.DataFrame()
+
+            df = pd.read_csv(StringIO(resp.text))
+
+            # Normalize
+            df["Date"] = pd.to_datetime(df["Date"])
+            df.set_index("Date", inplace=True)
+            df.sort_index(inplace=True)
+
+            # Rename cols to lowercase
+            df.rename(columns={
+                "Open": "open", "High": "high", "Low": "low",
+                "Close": "close", "Volume": "volume", "Adj Close": "adj_close"
+            }, inplace=True)
+
+            # Drop NaNs
+            df.dropna(inplace=True)
+
+            # Ensure unique index
+            df = df[~df.index.duplicated(keep='first')]
+
+            return df[["open", "high", "low", "close", "volume"]]
+
+        except Exception as e:
+            logger.error("Download exception", error=str(e))
+            return pd.DataFrame()
