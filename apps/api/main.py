@@ -31,6 +31,7 @@ import re
 
 from packages.core.config import app_config, settings
 from apps.api.auth import APIKeyMiddleware
+from apps.api.middleware import SecurityHeadersMiddleware
 from packages.core.execution import ExecutionEngine
 from packages.core.exits import ExitManager, ExitSignal
 from packages.core.instruments import InstrumentManager
@@ -361,6 +362,9 @@ app.add_middleware(APIKeyMiddleware, public_paths=[
     "/redoc",
     "/auth/kite/callback"
 ])
+
+# Add Security Headers (outermost to cover auth errors)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount Prometheus metrics
 if settings.enable_metrics:
