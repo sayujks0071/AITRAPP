@@ -1,42 +1,30 @@
-# Strategy Foundry: Aggressive Intraday Lab
+# Strategy Foundry
 
-A self-generating strategy lab that runs hourly to discover, backtest, and promote intraday trading strategies for NIFTY and SENSEX.
+## Overview
+The Strategy Foundry is an automated lab that generates, backtests, and selects aggressive intraday trading strategies for NIFTY and SENSEX. It runs hourly, evolving the "Champion" strategy based on Walk-Forward Analysis.
 
-## Architecture
+## Schedule
+- **Runs:** Hourly (via GitHub Actions)
+- **Market Hours:** 09:15 - 15:30 IST
+- **Artifacts:** `packages/strategy_foundry/results/`
 
-- **Timeframes**: 5m (Primary), 15m (Secondary), 1D (Sanity).
-- **Data**: Fetches Intraday OHLC from Yahoo Finance (cached), with fallback to Daily.
-- **Factory**: Generates random strategies using a grammar of:
-  - **Entry**: Breakout (Donchian/BB), Trend (EMA/Supertrend), Mean Reversion (RSI/BB).
-  - **Filters**: ADX, Regime.
-  - **Risk**: Dynamic ATR-based Stops, Time Stops, Intraday Session Exit (15:25).
-- **Backtest**: Vectorized engine with Walk-Forward Evaluation (4 folds).
-- **Selection**: Ranks by Blended Score (60% 15m + 40% 5m). Promotes champions that beat incumbents.
-- **Live**: Publishes a JSON signal file (`live_signal.json`) if the market is open and a valid champion exists.
+## Components
+1. **Generator:** Creates random strategies using a grammar of blocks (Breakout, Trend, Reversion).
+2. **Backtester:** Vectorized engine with realistic costs (Slippage, Spread Guard, Tax).
+3. **Evaluator:** Walk-Forward Optimization (4 folds) to prevent overfitting.
+4. **Ranker:** Selects champions based on Blended Score (Sharpe, Calmar, Stability).
+5. **Publisher:** Emits `live_signal.json` if the champion is robust and market is open.
 
-## Running Locally
+## Key Files
+- `run_hourly.py`: Orchestrator.
+- `configs/foundry.yaml`: Thresholds and settings.
+- `results/live_signal.json`: Current trade signal (NO execution by default).
 
+## Usage
+Run manually:
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run (Full Mode: N=80, 4 Folds)
-python -m packages.strategy_foundry.run_hourly
-
-# Run Fast Mode (N=15, 2 Folds)
-FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
+export PYTHONPATH=$PYTHONPATH:.
+python packages/strategy_foundry/run_hourly.py
 ```
 
-## Outputs
-
-Results are stored in `packages/strategy_foundry/results/`:
-- `runs/<timestamp>/`: Artifacts of each run (candidates, rankings).
-- `champions/`: JSON files of current and past champions.
-- `live_signal.json`: The latest trading signal (if market open).
-- `leaderboard.md`: History of top performers.
-
-## Intraday Constraints
-
-- **Session Exit**: All positions forced flat at 15:25 IST.
-- **Costs**: 5bps Slippage + Taxes + Brokerage.
-- **Sanity**: Daily 1D check to prevent catastrophic failure.
+Set `FAST_MODE=1` for quick checks (fewer candidates).

@@ -13,7 +13,7 @@ class StrategyGenerator:
         """Generates a random strategy configuration using grammar blocks."""
 
         # 1. Choose Entry Logic (1-2 blocks)
-        entry_logic_type = random.choice(['breakout', 'trend', 'reversion'])
+        entry_logic_type = random.choice(['breakout', 'trend', 'reversion', 'volatility_expansion'])
         entry_rules = []
 
         if entry_logic_type == 'breakout':
@@ -30,20 +30,14 @@ class StrategyGenerator:
         elif entry_logic_type == 'trend':
             # EMA Cross or Supertrend
             if random.random() < 0.5:
-                # Price > EMA
+                # Price > EMA (Trend Long)
                 params = ParameterSpace.get_random_params('ema')
-                entry_rules.append(Rule('trend', 'ema', params, '>', 'close')) # close > ema
-                # Wait, Rule structure: indicator vs value.
-                # If indicator=ema, val=close -> ema > close (Bearish).
-                # We want close > ema. So indicator='close', val='ema'.
-                # But my Rule def has indicator, operator, value.
-                # Let's say: indicator 'ema' > 'close' means EMA > Close.
-                # For Trend Long: Close > EMA. -> EMA < Close.
+                # Condition: EMA < Close (Price is above EMA)
                 entry_rules.append(Rule('trend', 'ema', params, '<', 'close'))
             else:
                 # Supertrend Bullish
                 params = ParameterSpace.get_random_params('supertrend')
-                entry_rules.append(Rule('trend', 'supertrend', params, '==', 1)) # direction == 1
+                entry_rules.append(Rule('trend', 'supertrend', params, '==', 1)) # direction == 1 (Bullish)
 
         elif entry_logic_type == 'reversion':
             # RSI Oversold or BB Lower bounce
@@ -55,6 +49,18 @@ class StrategyGenerator:
                 params = ParameterSpace.get_random_params('bollinger')
                 entry_rules.append(Rule('reversion', 'bollinger', params, '<', 'lower')) # Close < Lower
 
+        elif entry_logic_type == 'volatility_expansion':
+             # ATR Channel Break or Range Expansion?
+             # Let's say Close > Open + ATR * X (Big Bullish Candle)
+             # Or simply Volatility Breakout (Close > EMA + ATR)
+             # Let's implement Keltner-like: Close > EMA + 2*ATR
+             # Simpler: Range Expansion: High - Low > ATR(14) * 1.5
+             # But our Rule system is simpler.
+             # Let's do: Close > Donchian Upper (20) AND ADX > 25
+             entry_rules.append(Rule('breakout', 'donchian', {'period': 20}, '>', 'upper'))
+             entry_rules.append(Rule('volatility', 'adx', {'period': 14}, '>', 25))
+
+
         # 2. Add Filters (0-2)
         filters = []
         if random.random() < 0.5:
@@ -63,10 +69,21 @@ class StrategyGenerator:
             thresh = random.choice([20, 25])
             filters.append(Filter('volatility', 'adx', params, '>', thresh))
 
+        if random.random() < 0.3:
+            # Higher Timeframe Trend Filter
+            # Since we only have current timeframe data in backtest engine usually,
+            # this is "derived" HTF (e.g. 50 EMA on 5x period).
+            # e.g. 5m -> 1h (x12). 20 EMA on 1h ~= 240 EMA on 5m.
+            # Let's just add a long EMA filter.
+            filters.append(Filter('regime', 'ema', {'period': 200}, '<', 'close'))
+
         # 3. Risk Params
         sl = random.choice([1.0, 1.5, 2.0, 3.0])
         tp = random.choice([2.0, 3.0, 4.0, 5.0])
-        max_bars = random.choice([12, 24, 36, 75]) # Intraday horizons (e.g. 5m bars: 12=1h)
+
+        # Intraday horizons: 5m bars.
+        # 12 bars = 1h. 75 bars = 6.25h (Full day).
+        max_bars = random.choice([12, 24, 36, 75])
 
         # Generate ID
         config_dict = {
@@ -91,7 +108,6 @@ class StrategyGenerator:
     def generate_signal(self, df: pd.DataFrame, config: StrategyConfig) -> pd.Series:
         """
         Generates Entry Signal (1 = Buy, 0 = None).
-        Does NOT handle exits (Backtest engine handles exits).
         """
         # Base Signal
         signal = pd.Series(True, index=df.index)
@@ -107,13 +123,6 @@ class StrategyGenerator:
             signal = signal & cond
 
         # Convert boolean to integer signal (1)
-        # Usually strategies trigger on crossover (False -> True)
-        # But some might be "State" based (Close > EMA).
-        # If we return "State", the engine will enter on first 0->1 transition.
-        # If we return "State", we might re-enter immediately after exit if condition persists?
-        # Standard: Return State. Engine handles re-entry logic (usually "wait for new signal" or "re-enter allowed").
-        # Requirements says "No pyramiding by default".
-
         return signal.astype(int)
 
     def _evaluate_condition(self, df: pd.DataFrame, indicator: str, operator: str, threshold: Any, params: Dict) -> pd.Series:

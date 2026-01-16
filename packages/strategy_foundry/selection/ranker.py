@@ -1,13 +1,12 @@
 import pandas as pd
-import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Any
 
 class Ranker:
     @staticmethod
-    def rank(results: List[Dict], timeframe_weights: Dict = None) -> pd.DataFrame:
+    def rank(results: List[Dict[str, Any]]) -> pd.DataFrame:
         """
-        Ranks candidates based on OOS metrics.
-        results: List of dicts, each containing 'strategy' (Config) and 'metrics' (List of fold metrics).
+        Ranks strategies based on weighted score.
+        results: list of {strategy: Config, metrics: {overall:..., stability:...}}
         """
         if not results:
             return pd.DataFrame()
@@ -15,63 +14,57 @@ class Ranker:
         rows = []
         for res in results:
             strat = res['strategy']
-            fold_metrics = res['metrics']
+            m = res['metrics']
+            ov = m['overall']
+            stab = m['stability']
 
-            # Aggregate Fold Metrics
-            avg_sharpe = np.mean([m['sharpe'] for m in fold_metrics])
-            avg_calmar = np.mean([m['calmar'] for m in fold_metrics])
-            avg_return = np.mean([m['avg_return'] for m in fold_metrics])
-            avg_max_dd = np.mean([m['max_dd'] for m in fold_metrics])
+            # Score Components
+            # 1. Sharpe (25%)
+            # Cap Sharpe at 3.0 to avoid outliers domination
+            sharpe_score = min(max(ov['sharpe'], 0), 3.0) / 3.0
 
-            # Stability (Variance of Sharpe)
-            sharpes = [m['sharpe'] for m in fold_metrics]
-            stability = 1.0 / (np.std(sharpes) + 0.1) # Higher is better
+            # 2. Calmar (25%)
+            # Cap Calmar at 10
+            calmar_score = min(max(ov['calmar'], 0), 10.0) / 10.0
 
-            # Count Positive Folds
-            positive_folds = sum(1 for m in fold_metrics if m['avg_return'] > 0)
+            # 3. Net Return (20%)
+            # Log return? Or simple cap?
+            # Assume 100% return is great.
+            ret_score = min(max(ov['net_return'], 0), 1.0)
 
-            # Score Calculation
-            # Normalize? Or raw sum?
-            # Raw sum is easier for relative ranking.
-            # Weights: 25% Sharpe, 25% Calmar, 20% Return, 15% Stability
+            # 4. Stability (15%)
+            # Low variance is good.
+            # 1 - (std / 2.0) capped
+            stab_score = max(0, 1 - (stab['sharpe_std'] / 2.0))
 
-            score = (0.25 * avg_sharpe) + (0.25 * avg_calmar) + (20.0 * avg_return) + (0.15 * stability)
+            # 5. Low Turnover / Efficiency (10%)
+            # We want efficiency but not excessive trading.
+            # Maybe Profit Factor is better proxy for efficiency?
+            # Let's use Profit Factor / 3.0
+            eff_score = min(max(ov['profit_factor'], 0), 3.0) / 3.0
 
-            # Sanity Bonus/Penalty (already applied to Sharpe in WF, but explicit here)
-            # Intraday Sanity: 5% (handled via Sharpe penalty in WF)
+            # Total Score
+            score = (0.25 * sharpe_score +
+                     0.25 * calmar_score +
+                     0.20 * ret_score +
+                     0.15 * stab_score +
+                     0.15 * eff_score) * 100.0
 
-            row = {
+            rows.append({
                 "strategy_id": strat.strategy_id,
                 "score": score,
-                "avg_sharpe": avg_sharpe,
-                "avg_calmar": avg_calmar,
-                "avg_return": avg_return,
-                "avg_max_dd": avg_max_dd,
-                "stability": stability,
-                "positive_folds": positive_folds,
-                "total_trades": sum(m['total_trades'] for m in fold_metrics),
-                "strategy_config": strat.to_dict()
-            }
-            rows.append(row)
+                "net_return": ov['net_return'],
+                "sharpe": ov['sharpe'],
+                "max_dd": ov['max_drawdown'],
+                "calmar": ov['calmar'],
+                "trades": ov['total_trades'],
+                "profit_factor": ov['profit_factor'],
+                "sharpe_std": stab['sharpe_std'],
+                "positive_folds": stab['positive_folds']
+            })
 
         df = pd.DataFrame(rows)
+        if not df.empty:
+            df.sort_values('score', ascending=False, inplace=True)
 
-        # Sort by Score
-        df.sort_values('score', ascending=False, inplace=True)
         return df
-
-    @staticmethod
-    def filter_candidates(df: pd.DataFrame, min_trades: int = 50, min_folds: int = 3) -> pd.DataFrame:
-        """
-        Applies gating criteria.
-        """
-        if df.empty:
-            return df
-
-        mask = (
-            (df['total_trades'] >= min_trades) &
-            (df['positive_folds'] >= min_folds) &
-            (df['avg_max_dd'] <= 0.30) &
-            (df['avg_sharpe'] > 0.5) # Basic quality
-        )
-        return df[mask]

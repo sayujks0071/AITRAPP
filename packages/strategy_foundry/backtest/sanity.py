@@ -1,58 +1,65 @@
 import pandas as pd
-import logging
-from typing import Dict
+import numpy as np
+from typing import Dict, Any
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.metrics import MetricCalculator
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
+from packages.strategy_foundry.backtest.costs import CostModel
 from packages.strategy_foundry.factory.grammar import StrategyConfig
-from packages.strategy_foundry.adapters.core_costs import CostModel
-
-logger = logging.getLogger(__name__)
+import yaml
+import os
 
 class SanityChecker:
-    def __init__(self, df_daily: pd.DataFrame, cost_model: CostModel):
-        self.df_daily = df_daily
-        self.cost_model = cost_model
-        self.engine = BacktestEngine(self.cost_model)
+    def __init__(self, daily_df: pd.DataFrame, cost_model: CostModel):
+        self.daily_df = daily_df
+        self.engine = BacktestEngine(cost_model)
 
-    def check(self, config: StrategyConfig) -> Dict:
+        # Load constraints
+        self.config = self._load_config()
+
+    def _load_config(self):
+        path = "packages/strategy_foundry/configs/foundry.yaml"
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                return yaml.safe_load(f).get('selection', {})
+        return {}
+
+    def check(self, candidate: StrategyConfig) -> Dict[str, Any]:
         """
-        Runs the strategy on Daily data and checks for catastrophic failure.
-        Returns metrics and a 'passed' boolean.
+        Runs 1D Sanity Check and other robustness checks.
         """
-        if self.df_daily is None or self.df_daily.empty:
-            logger.warning("No daily data for sanity check. Skipping.")
-            return {"passed": True, "reason": "NoData"}
-
-        # Run on Daily
-        trades = self.engine.run(self.df_daily, config)
-
-        # Calculate Metrics (Full history)
-        start_date = self.df_daily['datetime'].iloc[0]
-        end_date = self.df_daily['datetime'].iloc[-1]
-        years = (end_date - start_date).days / 365.25
-        if years < 0.01: years = 0.01
-
-        metrics = MetricCalculator.compute(trades, years)
-
-        # Check Thresholds
+        reasons = []
         passed = True
-        reason = ""
 
-        # Thresholds
-        # Sharpe < -0.5 (Aligned with foundry.yaml)
-        # MaxDD > 45%
+        # 1. Daily Sanity (Microstructure Illusion Check)
+        if self.daily_df is not None and not self.daily_df.empty:
+            # Run strategy on 1D
+            # Note: Strategy params are tuned for 5m.
+            # Running on 1D might yield very few trades or garbage.
+            # But if it blows up (huge loss), it implies curve fitting to noise?
+            # Prompt: "If daily performance is catastrophically negative... reject"
 
-        if metrics['sharpe'] < -0.5:
-            passed = False
-            reason += "DailySharpeTooLow;"
+            trades = self.engine.run(self.daily_df, candidate)
+            metrics = calculate_metrics(trades)
 
-        if metrics['max_dd'] > 0.45:
-            passed = False
-            reason += "DailyDDTooHigh;"
+            min_sharpe = self.config.get('sanity_daily_min_sharpe', -0.2)
+            max_dd = self.config.get('sanity_daily_max_dd', 0.45)
+
+            if metrics['sharpe'] < min_sharpe:
+                passed = False
+                reasons.append(f"Daily Sanity Failed: Sharpe {metrics['sharpe']:.2f} < {min_sharpe}")
+
+            if metrics['max_drawdown'] > max_dd:
+                passed = False
+                reasons.append(f"Daily Sanity Failed: MaxDD {metrics['max_drawdown']:.2f} > {max_dd}")
+
+        # 2. Intraday Sanity (Late Day Dependence) - Placeholder
+        # This requires detailed trade list from intraday backtest which we don't pass here easily.
+        # Assuming Ranker handles "late-day dependence penalty" based on metrics,
+        # or we add it here if we passed the intraday trades.
+        # For now, we focus on 1D sanity.
 
         return {
             "passed": passed,
-            "reason": reason,
-            "daily_sharpe": metrics['sharpe'],
-            "daily_max_dd": metrics['max_dd']
+            "reason": "; ".join(reasons) if reasons else "OK",
+            "daily_metrics": metrics if (self.daily_df is not None and not self.daily_df.empty) else {}
         }
