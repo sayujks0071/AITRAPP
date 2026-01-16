@@ -1,6 +1,8 @@
+import os
+import json
 import logging
-from typing import Dict
-from packages.strategy_foundry.selection.champion_store import ChampionStore
+from datetime import datetime
+from packages.strategy_foundry.factory.grammar import StrategyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -8,43 +10,74 @@ class Promoter:
     def __init__(self, instrument: str, timeframe: str):
         self.instrument = instrument
         self.timeframe = timeframe
-        self.store = ChampionStore()
+        self.champions_dir = "packages/strategy_foundry/results/champions"
+        os.makedirs(self.champions_dir, exist_ok=True)
 
-    def check_and_promote(self, challenger: Dict) -> bool:
+        # Current champion file: e.g. NIFTY_blended_current.json
+        self.current_path = os.path.join(self.champions_dir, f"{instrument}_{timeframe}_current.json")
+
+    def check_and_promote(self, candidate_row: dict) -> bool:
         """
-        Checks if challenger beats current champion.
-        challenger: Dict from Ranker (row of dataframe)
+        Check if candidate beats current champion.
+        candidate_row: contains 'score', 'sharpe', 'max_dd', 'strategy_config'
         """
-        current = self.store.get_current_champion(self.instrument, self.timeframe)
+        new_score = candidate_row['score']
+        new_sharpe = candidate_row.get('sharpe', 0) # Avg sharpe
+        new_dd = candidate_row.get('avg_max_dd', candidate_row.get('max_dd', 1.0))
 
-        if not current:
-            logger.info(f"No current champion for {self.instrument} {self.timeframe}. Promoting challenger.")
-            self.store.save_champion(self.instrument, self.timeframe, challenger)
-            return True
+        # Load current
+        current = self._load_current()
 
-        # Comparison Logic
-        # 1. Score Improvement >= 10%
-        score_diff = (challenger['score'] - current['score']) / abs(current['score'])
-
-        # 2. DD Reduction >= 5% absolute (e.g. 0.20 -> 0.15)
-        dd_diff = current['avg_max_dd'] - challenger['avg_max_dd']
-
-        # 3. Sharpe Non-Degradation (within 5%)
-        sharpe_ratio = challenger['avg_sharpe'] / current['avg_sharpe'] if current['avg_sharpe'] != 0 else 1.0
-
-        should_promote = False
+        promote = False
         reason = ""
 
-        if score_diff >= 0.10:
-            should_promote = True
-            reason = f"Score improved by {score_diff:.2%}"
-        elif dd_diff >= 0.05 and sharpe_ratio >= 0.95:
-            should_promote = True
-            reason = f"Drawdown reduced by {dd_diff:.2%} without Sharpe degradation"
+        if not current:
+            promote = True
+            reason = "No existing champion"
+        else:
+            curr_score = current.get('score', 0)
+            curr_dd = current.get('max_dd', 1.0)
 
-        if should_promote:
+            # Rule 1: Beat Score by 10%
+            if new_score >= curr_score * 1.10:
+                promote = True
+                reason = f"Score improved > 10% ({curr_score:.2f} -> {new_score:.2f})"
+
+            # Rule 2: Reduce MaxDD by 5% absolute (e.g. 0.20 -> 0.15)
+            # while not degrading Sharpe meaningfully (say, not < 90% of current)
+            elif (curr_dd - new_dd) >= 0.05:
+                curr_sharpe = current.get('sharpe', 0)
+                if new_sharpe >= curr_sharpe * 0.9:
+                    promote = True
+                    reason = f"DD reduced by > 5% ({curr_dd:.2f} -> {new_dd:.2f})"
+
+        if promote:
             logger.info(f"Promoting new champion for {self.instrument} {self.timeframe}: {reason}")
-            self.store.save_champion(self.instrument, self.timeframe, challenger)
+            self._save_champion(candidate_row)
             return True
 
         return False
+
+    def _load_current(self):
+        if not os.path.exists(self.current_path):
+            return None
+        try:
+            with open(self.current_path, 'r') as f:
+                return json.load(f)
+        except:
+            return None
+
+    def _save_champion(self, data: dict):
+        # Add timestamp
+        data['promoted_at'] = datetime.now().isoformat()
+
+        # Save as current
+        with open(self.current_path, 'w') as f:
+            json.dump(data, f, indent=2)
+
+        # Versioned
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        sid = data.get('strategy_id', 'unknown')
+        v_path = os.path.join(self.champions_dir, f"{self.instrument}_{self.timeframe}_{ts}_{sid}.json")
+        with open(v_path, 'w') as f:
+            json.dump(data, f, indent=2)

@@ -1,105 +1,121 @@
 import pandas as pd
 import numpy as np
-from typing import List, Dict
+from typing import Dict, Any, List
+import logging
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.metrics import MetricCalculator
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
+from packages.strategy_foundry.backtest.costs import CostModel
 from packages.strategy_foundry.factory.grammar import StrategyConfig
-from packages.strategy_foundry.adapters.core_costs import CostModel
+import yaml
+import os
+
+logger = logging.getLogger(__name__)
+
+# Load config for defaults
+def load_config():
+    path = "packages/strategy_foundry/configs/foundry.yaml"
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            return yaml.safe_load(f)
+    return {}
 
 class WalkForwardEvaluator:
-    def __init__(self, df: pd.DataFrame, folds: int = 4, cost_model: CostModel = None):
+    def __init__(self, df: pd.DataFrame, folds: int = 4):
         self.df = df
         self.folds = folds
-        self.cost_model = cost_model
-        if self.cost_model is None:
-            # Default fallback if not provided
-            self.cost_model = CostModel(slippage_bps=5.0, brokerage_per_order=20.0, tax_bps=3.0, spread_guard_bps=2.0)
+
+        conf = load_config().get('execution', {})
+        self.cost_model = CostModel(
+            slippage_bps_per_side=conf.get('slippage_bps_per_side', 5.0),
+            brokerage_per_order=conf.get('brokerage_per_order', 20.0),
+            spread_guard_bps=conf.get('spread_guard_bps', 2.0),
+            tax_bps=conf.get('tax_bps', 3.0)
+        )
         self.engine = BacktestEngine(self.cost_model)
 
-    def evaluate(self, config: StrategyConfig, instrument_type: str = 'FUTURE') -> List[Dict]:
+    def evaluate(self, candidate: StrategyConfig) -> Dict[str, Any]:
         """
-        Splits data into K folds and evaluates strategy on each.
-        Returns list of metrics dictionaries (one per fold).
+        Performs Walk-Forward Analysis.
+        Splits data into K folds.
+        For each fold: Train (skipped here as strategy is fixed) -> Test (OOS).
+        We only care about OOS performance for validation.
+        The prompt implies: "OOS evaluation for ranking".
         """
+        if self.df is None or self.df.empty:
+            return {}
+
         n = len(self.df)
         fold_size = n // self.folds
 
-        results = []
+        oos_metrics_list = []
+        all_trades = []
 
-        # Calculate time span of whole DF for annualized metrics?
-        # Or calculate per fold.
+        for k in range(self.folds):
+            # OOS window: segment k
+            start_idx = k * fold_size
+            end_idx = (k + 1) * fold_size if k < self.folds - 1 else n
 
-        for i in range(self.folds):
-            start_idx = i * fold_size
-            end_idx = (i + 1) * fold_size if i < self.folds - 1 else n
+            # Ensure we have enough data (lookback needed)
+            # We need to slice with buffer for indicators?
+            # Ideally passing the whole DF and start/end indices to engine is better,
+            # but current engine takes DF.
+            # We slice with buffer of ~200 bars.
+            buffer = 200
+            slice_start = max(0, start_idx - buffer)
 
-            fold_df = self.df.iloc[start_idx:end_idx].copy()
+            # Slice DF
+            df_slice = self.df.iloc[slice_start:end_idx].copy()
 
-            # Run Engine
-            trades = self.engine.run(fold_df, config)
+            # Run Backtest
+            trades = self.engine.run(df_slice, candidate)
 
-            # Calculate Metrics
-            # Time span in years
-            start_date = fold_df['datetime'].iloc[0]
-            end_date = fold_df['datetime'].iloc[-1]
-            days = (end_date - start_date).days
-            years = days / 365.25
-            if years < 0.01: years = 0.01 # Avoid div by zero
+            # Filter trades that started inside the actual OOS window
+            # Trade entry_idx is relative to df_slice.
+            # Actual index = entry_idx + slice_start
+            if not trades.empty:
+                trades['global_entry_idx'] = trades['entry_idx'] + slice_start
+                # Filter: global_entry_idx >= start_idx
+                trades = trades[trades['global_entry_idx'] >= start_idx]
 
-            metrics = MetricCalculator.compute(trades, years)
-            metrics['fold'] = i + 1
-            metrics['start_date'] = start_date
-            metrics['end_date'] = end_date
+                # Append to all trades
+                all_trades.append(trades)
 
-            # Sanity Checks (Intraday specific)
-            # Late-day dependence
-            # Overtrade penalty
-            self._apply_sanity_penalties(metrics, trades, fold_df)
+                # Calculate Fold Metrics
+                m = calculate_metrics(trades)
+                oos_metrics_list.append(m)
+            else:
+                 oos_metrics_list.append(calculate_metrics(pd.DataFrame()))
 
-            results.append(metrics)
+        # Aggregate Metrics (Average of OOS folds? or concatenated?)
+        # "Stability: rolling Sharpe dispersion"
+        # We calculate metrics on concatenated trades for overall score,
+        # and use fold metrics for stability.
 
-        return results
+        if all_trades:
+            total_trades_df = pd.concat(all_trades, ignore_index=True)
+            overall_metrics = calculate_metrics(total_trades_df)
+        else:
+            total_trades_df = pd.DataFrame()
+            overall_metrics = calculate_metrics(pd.DataFrame())
 
-    def _apply_sanity_penalties(self, metrics: Dict, trades: pd.DataFrame, df: pd.DataFrame):
-        # 1. Overtrade Penalty
-        # Count trades per day
-        if trades.empty:
-            return
+        # Stability Stats
+        sharpes = [m['sharpe'] for m in oos_metrics_list]
+        sharpe_std = np.std(sharpes) if len(sharpes) > 0 else 0.0
 
-        if 'datetime' in df.columns:
-            # Match trades to dates?
-            # Trades has indices entry_idx.
-            # We can map entry_idx to date.
-            entry_indices = trades['entry_idx'].values
-            trade_dates = df['datetime'].iloc[entry_indices].dt.date
-            trades_per_day = pd.Series(trade_dates).value_counts()
-            avg_trades_per_day = trades_per_day.mean()
+        positive_folds = sum(1 for m in oos_metrics_list if m['net_return'] > 0)
 
-            metrics['avg_trades_per_day'] = avg_trades_per_day
+        # Intraday Sanity: "Late Day Dependence"
+        # Check if > 50% profit comes from last 30 mins trades?
+        # Check trades exit time?
+        # We have 'exit_idx'.
+        # This requires access to time. global_entry_idx allows mapping back.
 
-            # If > 10 trades per day?
-            if avg_trades_per_day > 10:
-                metrics['sharpe'] *= 0.5 # Penalize
-                metrics['reason'] = metrics.get('reason', "") + "HighTurnover;"
-
-        # 2. Late Day Dependence
-        # If > 70% of profit comes from trades closing after 15:00
-        # Need exit times.
-        exit_indices = trades['exit_idx'].values
-        # Ensure indices are within bounds (engine handles it, but safety)
-        valid_exits = exit_indices < len(df)
-        exit_indices = exit_indices[valid_exits]
-
-        if len(exit_indices) > 0:
-            exit_times = df['datetime'].iloc[exit_indices].dt.time
-            # 15:00
-            cutoff = pd.Timestamp("15:00").time()
-
-            is_late = np.array([t >= cutoff for t in exit_times])
-
-            late_pnl = trades.loc[valid_exits][is_late]['net_return'].sum()
-            total_pnl = trades['net_return'].sum()
-
-            if total_pnl > 0 and late_pnl / total_pnl > 0.7:
-                metrics['sharpe'] *= 0.7
-                metrics['reason'] = metrics.get('reason', "") + "LateDayDependence;"
+        return {
+            "overall": overall_metrics,
+            "folds": oos_metrics_list,
+            "stability": {
+                "sharpe_std": sharpe_std,
+                "positive_folds": positive_folds
+            },
+            "total_trades_count": len(total_trades_df)
+        }

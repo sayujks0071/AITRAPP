@@ -3,11 +3,11 @@ from typing import List, Dict, Any, Optional
 
 @dataclass
 class Rule:
-    block_type: str # 'breakout', 'trend', 'mean_reversion', 'volatility'
+    block_type: str # 'breakout', 'trend', 'reversion', 'volatility'
     indicator: str
     params: Dict[str, Any]
-    operator: str # '>', '<', 'cross_above', 'cross_below'
-    threshold: Any # Value or another indicator
+    operator: str # '>', '<', '==', 'cross_above', 'cross_below'
+    threshold: Any # Value or another indicator name ('close', 'upper', etc.)
 
 @dataclass
 class Filter:
@@ -43,3 +43,16 @@ class StrategyConfig:
             "max_bars_hold": self.max_bars_hold,
             "exit_time": self.exit_time
         }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            strategy_id=data['strategy_id'],
+            entry_rules=[Rule(**r) for r in data['entry_rules']],
+            filters=[Filter(**f) for f in data['filters']],
+            stop_loss_atr=data['stop_loss_atr'],
+            take_profit_atr=data['take_profit_atr'],
+            trailing_stop_atr=data.get('trailing_stop_atr'),
+            max_bars_hold=data['max_bars_hold'],
+            exit_time=data.get('exit_time', "15:25")
+        )

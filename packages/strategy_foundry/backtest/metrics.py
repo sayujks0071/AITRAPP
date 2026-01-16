@@ -1,93 +1,93 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+from typing import Dict, List, Any
 
-class MetricCalculator:
-    @staticmethod
-    def compute(trades: pd.DataFrame, time_span_years: float) -> dict:
-        if trades.empty:
-            return {
-                "total_trades": 0,
-                "win_rate": 0.0,
-                "profit_factor": 0.0,
-                "avg_return": 0.0,
-                "sharpe": -99.9,
-                "sortino": -99.9,
-                "max_dd": 1.0, # 100% DD
-                "cagr": 0.0,
-                "calmar": 0.0,
-                "stability": 0.0,
-                "avg_bars_held": 0.0
-            }
-
-        returns = trades['net_return']
-
-        # Basic Counts
-        total_trades = len(trades)
-        wins = returns[returns > 0]
-        losses = returns[returns <= 0]
-
-        win_rate = len(wins) / total_trades
-
-        gross_profit = wins.sum()
-        gross_loss = abs(losses.sum())
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else 99.9
-
-        avg_return = returns.mean()
-
-        # Risk Metrics
-        # Assume these are per-trade returns.
-        # Sharpe per trade? Or annualized?
-        # Sharpe = (Mean per trade / Std per trade) * sqrt(Trades per year)
-        # Trades per year = Total Trades / Years
-
-        trades_per_year = total_trades / time_span_years if time_span_years > 0 else total_trades
-
-        std_return = returns.std()
-        if std_return == 0:
-             sharpe = 0.0
-        else:
-             sharpe = (avg_return / std_return) * np.sqrt(trades_per_year)
-
-        # Sortino (std of downside)
-        downside = returns[returns < 0]
-        std_downside = downside.std()
-        if std_downside == 0 or len(downside) < 2:
-            sortino = sharpe # fallback
-        else:
-            sortino = (avg_return / std_downside) * np.sqrt(trades_per_year)
-
-        # Drawdown (Equity Curve)
-        # Cumulative Compounded
-        equity = (1 + returns).cumprod()
-        peak = equity.cummax()
-        drawdown = (equity - peak) / peak
-        max_dd = abs(drawdown.min())
-
-        # CAGR
-        # Final Equity
-        final_eq = equity.iloc[-1]
-        cagr = (final_eq ** (1 / time_span_years)) - 1 if time_span_years > 0 and final_eq > 0 else 0.0
-
-        # Calmar
-        calmar = cagr / max_dd if max_dd > 0 else 0.0
-
-        # Stability (Rolling Sharpe Volatility?)
-        # Or simple R-squared of equity curve?
-        # Let's use fold variance (handled in Walkforward).
-        # Here we can compute R-squared of log equity.
-
-        # Late Day Dependence
-        # Not implemented here yet, needs timestamps in trades DF.
-
+def calculate_metrics(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> Dict[str, Any]:
+    if trades_df.empty:
         return {
-            "total_trades": total_trades,
-            "win_rate": win_rate,
-            "profit_factor": profit_factor,
-            "avg_return": avg_return,
-            "sharpe": sharpe,
-            "sortino": sortino,
-            "max_dd": max_dd,
-            "cagr": cagr,
-            "calmar": calmar,
-            "avg_bars_held": trades['bars_held'].mean()
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0,
+            "net_return": 0.0,
+            "cagr": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "max_drawdown": 0.0,
+            "calmar": 0.0,
+            "avg_trade_return": 0.0,
+            "avg_bars_held": 0.0
         }
+
+    # Net Return
+    # trades_df['net_return'] is % return per trade.
+    # Cumulative return: prod(1 + r) - 1
+    equity_curve = (1 + trades_df['net_return']).cumprod()
+    total_return = equity_curve.iloc[-1] - 1
+
+    # Win Rate
+    wins = trades_df[trades_df['net_return'] > 0]
+    losses = trades_df[trades_df['net_return'] <= 0]
+    win_rate = len(wins) / len(trades_df)
+
+    # Profit Factor
+    gross_win = wins['net_return'].sum()
+    gross_loss = abs(losses['net_return'].sum())
+    profit_factor = gross_win / gross_loss if gross_loss > 0 else 999.0
+
+    # Sharpe / Sortino
+    # We need time series of returns? Or just trade returns?
+    # Trade-based Sharpe is less accurate than Time-based.
+    # But usually sufficient for relative ranking.
+    # Let's use Trade-based for now.
+    returns = trades_df['net_return']
+    avg_ret = returns.mean()
+    std_ret = returns.std()
+
+    # Annualize? N trades per year?
+    # We don't know duration exactly here.
+    # Let's assume standard Sharpe based on sqrt(Trades) if we treat each trade as a period?
+    # No, that's wrong.
+    # Proper way: Resample Equity Curve to daily/hourly.
+    # But we don't have equity curve over time here easily without replaying.
+    # Proxy: Sharpe = mean / std (per trade) * sqrt(Trades per Year)
+    # This is rough.
+
+    # Let's stick to simple mean/std for ranking stability.
+    if std_ret == 0:
+        sharpe = 0.0
+    else:
+        sharpe = avg_ret / std_ret
+        # Note: This is "Per Trade Sharpe". Not annualized.
+
+    # Sortino
+    downside = returns[returns < 0]
+    if len(downside) == 0:
+        sortino = 999.0
+    else:
+        downside_std = downside.std()
+        if downside_std == 0:
+            sortino = 999.0
+        else:
+            sortino = avg_ret / downside_std
+
+    # Max Drawdown
+    # From trade equity curve
+    running_max = equity_curve.cummax()
+    drawdown = (equity_curve - running_max) / running_max
+    max_dd = abs(drawdown.min())
+
+    # Calmar
+    calmar = total_return / max_dd if max_dd > 0 else 999.0
+
+    return {
+        "total_trades": len(trades_df),
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "net_return": total_return,
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "max_drawdown": max_dd,
+        "calmar": calmar,
+        "avg_trade_return": avg_ret,
+        "avg_bars_held": trades_df['bars_held'].mean()
+    }

@@ -1,7 +1,7 @@
 import json
 import os
 from typing import List
-from packages.strategy_foundry.factory.grammar import StrategyConfig, Rule, Filter
+from packages.strategy_foundry.factory.grammar import StrategyConfig
 
 class CandidateRegistry:
     @staticmethod
@@ -14,24 +14,6 @@ class CandidateRegistry:
     def load_candidates(filepath: str) -> List[StrategyConfig]:
         if not os.path.exists(filepath):
             return []
-
         with open(filepath, 'r') as f:
             data = json.load(f)
-
-        candidates = []
-        for item in data:
-            entry_rules = [Rule(**r) for r in item['entry_rules']]
-            filters = [Filter(**f) for f in item.get('filters', [])]
-
-            c = StrategyConfig(
-                strategy_id=item['strategy_id'],
-                entry_rules=entry_rules,
-                filters=filters,
-                stop_loss_atr=item['stop_loss_atr'],
-                take_profit_atr=item['take_profit_atr'],
-                trailing_stop_atr=item.get('trailing_stop_atr'),
-                max_bars_hold=item['max_bars_hold'],
-                exit_time=item.get('exit_time', "15:25")
-            )
-            candidates.append(c)
-        return candidates
+        return [StrategyConfig.from_dict(d) for d in data]
