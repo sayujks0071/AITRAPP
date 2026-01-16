@@ -21,7 +21,6 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.getcwd())
 
 from src.auth.kite_auth import KiteAuth
-from packages.core.config import settings
 
 
 class KiteTrader:
@@ -225,8 +224,9 @@ class KiteTrader:
             print("🎫 Access Token: Not set")
 
         # User ID
-        if settings.kite_user_id:
-            print(f"👤 User ID: {settings.kite_user_id}")
+        user_id = os.getenv("KITE_USER_ID")
+        if user_id:
+            print(f"👤 User ID: {user_id}")
 
         print("\n" + "=" * 70)
 
