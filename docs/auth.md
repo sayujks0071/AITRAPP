@@ -1,48 +1,21 @@
 # Kite Authentication Guide
 
-This document outlines the daily authentication process for the AITRAPP trading system using Zerodha Kite Connect.
+This document describes the authentication flow for Zerodha Kite Connect, ensuring secure and compliant session management.
 
 ## Overview
 
-Kite Connect requires a valid `access_token` to interact with the API. This token expires daily.
-Due to Zerodha's security policies and [Kite Trade guidelines](https://kite.trade/docs/connect/v3/exceptions/), automated login (using Selenium/headless browsers) is **strictly prohibited**.
+The authentication system is designed to:
+1.  **Validate Session**: Automatically check if the current `access_token` is valid.
+2.  **Manual Login**: Prompt the user for manual login (as per [Kite Trade regulations](https://kite.trade/docs/connect/v3/user/#login-flow)) if the session is invalid.
+3.  **Secure Exchange**: Automatically exchange the `request_token` for an `access_token`.
+4.  **Persistence**: Store the `access_token` securely in the `.env` file for the application to use.
+5.  **Safety**: Default to `PAPER` trading mode and block live orders if authentication is missing.
 
-Therefore, we implement a **Daily Manual Login Flow** facilitated by a bootstrap script.
+## Daily Auth Bootstrap (8:00 AM IST)
 
-## Daily Schedule (8:00 AM IST)
+A dedicated script `scripts/kite_auth_bootstrap.py` handles the daily authentication ritual.
 
-The system is designed to be bootstrapped every morning at 08:00 AM IST.
-
-### Automation vs Manual Action
-
-1.  **Automation**: The `kite_auth_bootstrap.py` script runs automatically via cron or CI.
-2.  **Manual Action**: The user must click the generated login URL and complete the 2FA process on Zerodha's website.
-3.  **Automation**: The script captures the callback, exchanges the token, and updates the secure storage.
-
-## Setup
-
-### 1. Environment Variables
-
-Ensure your `.env` file contains your Kite API credentials:
-
-```env
-KITE_API_KEY=your_api_key
-KITE_API_SECRET=your_api_secret
-KITE_USER_ID=your_user_id
-APP_MODE=PAPER  # Default to PAPER for safety
-```
-
-### 2. Redirect URI
-
-For the bootstrap script to work locally, set your Kite Connect App's **Redirect URI** to:
-`http://localhost:8000/auth/kite/callback`
-
-If you are running the API server in production, point it to your domain:
-`https://your-domain.com/auth/kite/callback`
-
-## Usage
-
-### Local / VPS (Interactive)
+### Usage
 
 Run the bootstrap script:
 
@@ -50,37 +23,57 @@ Run the bootstrap script:
 python scripts/kite_auth_bootstrap.py
 ```
 
-1.  The script checks if the current session is valid.
-2.  If invalid, it starts a local server on port 8000.
-3.  It prints a Login URL.
-4.  Open the URL in your browser, log in to Zerodha.
-5.  The browser redirects to `localhost:8000`, the script captures the token, saves it to `.env`, and exits.
+### Options
 
-### Cron Job (Example)
+*   `--check-only`: Only checks if the session is valid and exits with 0 (valid) or 1 (invalid). Does not prompt for login.
+*   `--port PORT`: Specify the port for the local callback receiver (default: 8000).
 
-To automate the check (and prompt if needed):
+### Workflow
+
+1.  **Check**: The script checks if `KITE_ACCESS_TOKEN` in `.env` is valid.
+2.  **Prompt**: If invalid, it prints a login URL.
+3.  **Login**: Open the URL in your browser and log in to Zerodha.
+4.  **Callback**:
+    *   **If API Server is running**: The API server receiving the callback at `/auth/kite/callback` will exchange and store the token. The script detects this via polling.
+    *   **If API Server is NOT running**: The script starts a temporary local server to capture the callback directly.
+5.  **Success**: The `.env` file is updated with the new `KITE_ACCESS_TOKEN`.
+
+## Setup & Configuration
+
+### Prerequisites
+
+Ensure your `.env` file has the following Kite credentials:
 
 ```bash
-# Run at 8:00 AM daily
-0 8 * * * cd /path/to/repo && TRADING_MODE=paper /usr/bin/python3 scripts/kite_auth_bootstrap.py >> /var/log/kite_auth.log 2>&1
+KITE_API_KEY=your_api_key
+KITE_API_SECRET=your_api_secret
+KITE_ACCESS_TOKEN=  # Will be populated automatically
+KITE_USER_ID=your_user_id
 ```
 
-*Note: Since the login is manual, the cron job will hang waiting for the callback if the session is invalid. It is recommended to run this in a terminal or use a notification system to alert you to login.*
+### Callback URL
 
-### CI / GitHub Actions
+In your [Kite Developer Console](https://developers.kite.trade/apps), set the **Redirect URL** to:
 
-In CI environments, we cannot perform interactive login. The workflow should check for validity and alert if action is needed.
+```
+http://localhost:8000/auth/kite/callback
+```
+
+(Or your production domain if applicable).
+
+## Automation (Cron)
+
+To automate the daily check, add a cron job on your server (run `crontab -e`):
 
 ```bash
-python scripts/kite_auth_bootstrap.py --check-only
+# Run Auth Bootstrap at 8:00 AM IST daily
+0 8 * * * cd /path/to/repo && /path/to/venv/bin/python scripts/kite_auth_bootstrap.py >> logs/auth_bootstrap.log 2>&1
 ```
 
-If this command exits with status `1` (invalid session), the CI pipeline can trigger an alert (Email, Slack, GitHub Issue) containing the login URL.
+*Note: Since manual login is required, this script will mostly serve to notify you or wait for your action if the token is expired.*
 
-## Security
+## Safety Rails
 
-*   **No Password Storage**: We never store Zerodha passwords or TOTP secrets.
-*   **Token Storage**: `access_token` is stored in the `.env` file (local) or injected via secrets manager (cloud).
-*   **Logs**: The bootstrap script masks sensitive tokens in logs.
-*   **Live Safety**: `APP_MODE` defaults to `PAPER`. Live trading requires explicit configuration.
-*   **Order Blocking**: The execution engine explicitly blocks order placement in LIVE mode if a valid `access_token` is not present, preventing accidental unauthorized trading attempts.
+*   **Trading Mode**: The system defaults to `PAPER` mode. `LIVE` mode must be explicitly enabled.
+*   **Order Blocking**: In `LIVE` mode, order placement is blocked if the `access_token` is missing or invalid.
+*   **Secrets**: `request_token` is masked in logs. Access tokens are never printed to console.
