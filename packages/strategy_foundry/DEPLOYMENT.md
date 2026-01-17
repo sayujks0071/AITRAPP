@@ -1,29 +1,22 @@
-# Deployment & Live Operation
+# Deployment Guide
 
-## Philosophy
-**"Paper First, Live Later"**
-This module defaults to safe mode. It does NOT place orders.
+## Prerequisites
+- Python 3.10+
+- Dependencies: `pandas`, `numpy`, `requests`, `pyyaml`, `structlog`, `pytz`.
 
-## Signal Artifact
-The output `live_signal.json` looks like:
-```json
-{
-  "signal": 1,
-  "instrument": "NIFTY",
-  "status": "OK",
-  ...
-}
-```
-- `signal`: 1 (Long), -1 (Short), 0 (Neutral).
-- `status`: OK or SKIPPED (Market closed, etc).
+## Configuration
+- Adjust `configs/foundry.yaml` for risk limits and capital.
+- Update `configs/instrument_map.yaml` for symbol mappings.
 
-## Gating for Live Trading (Future)
-To enable actual execution in `packages/core`:
-1. `ENABLE_LIVE=true` environment variable must be set.
-2. `approvals/ALLOW_LIVE.txt` file must exist.
-3. Core bridge reads `live_signal.json` and places orders via `ExecutionEngine`.
+## Automation
+- The `run_hourly.py` script is designed to run via Cron or GitHub Actions.
+- Ensure the runner has internet access to fetch data.
 
-## CI/CD
-Runs hourly via GitHub Actions.
-- **PRs**: Runs in `FAST_MODE` to verify code.
-- **Schedule**: Runs full generation cycle hourly.
+## Consuming Signals
+- The system outputs `packages/strategy_foundry/results/live_signal.json`.
+- Downstream systems should poll this file or trigger off its update.
+- The signal contains `champion_id`, `instrument`, `signal` (1=Long, 0=Flat/Short depending on logic), and `timestamp`.
+
+## Safety
+- **Gate**: High performance thresholds required for a strategy to be "Live Eligible".
+- **Failsafe**: If data is stale or market is closed, `status` will be `SKIPPED`.

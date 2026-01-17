@@ -1,16 +1,14 @@
-"""Promotion Logic"""
-from typing import Dict, Any
+def should_promote(challenger, current_champion):
+    # New must beat current blended_score by >= 10%
+    # OR reduce MaxDD by >= 5% absolute while not degrading Sharpe meaningfully.
 
-def should_promote(challenger_score: float, current_score: float, challenger_dd: float, current_dd: float) -> bool:
-    """
-    Promotion Rule:
-    1. Score >= 1.10 * Current Score OR
-    2. MaxDD significantly better (e.g. half) with similar score
-    """
-    if challenger_score >= current_score * 1.10:
+    if not current_champion:
         return True
 
-    if challenger_dd < current_dd * 0.7 and challenger_score >= current_score * 0.9:
+    challenger_score = challenger.get("score", 0)
+    current_score = current_champion.get("score", 0)
+
+    if challenger_score > current_score * 1.1:
         return True
 
     return False

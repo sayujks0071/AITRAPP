@@ -1,32 +1,51 @@
-"""Tests for Backtest Engine"""
 import unittest
 import pandas as pd
 import numpy as np
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.generator import StrategyCandidate
-from packages.strategy_foundry.factory.grammar import Rule, StopLossRule
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, StrategyRule, Condition, IndicatorDef, Operator
 
-class MockRule(Rule):
-    def generate_signal(self, df, ind):
-        return pd.Series(1, index=df.index) # Always Long
-    def description(self): return "Mock"
-
-class TestEngine(unittest.TestCase):
+class TestBacktestEngine(unittest.TestCase):
     def setUp(self):
-        dates = pd.date_range("2023-01-01", periods=100)
-        self.df = pd.DataFrame({
-            "open": 100 + np.random.randn(100),
-            "high": 105 + np.random.randn(100),
-            "low": 95 + np.random.randn(100),
-            "close": 102 + np.random.randn(100),
-            "volume": 1000
+        # Create dummy data
+        dates = pd.date_range("2023-01-01", periods=200, freq="5min", tz="Asia/Kolkata")
+        # Ensure we span enough time and have price movement to trigger trades
+        # Need to be within market hours: 9:15 to 15:30.
+        # "2023-01-01" is Sunday. Let's pick a Monday.
+        dates = pd.date_range("2023-01-02 09:15", periods=75, freq="5min", tz="Asia/Kolkata") # One day
+
+        self.data = pd.DataFrame({
+            "open": np.linspace(100, 200, 75),
+            "high": np.linspace(101, 201, 75),
+            "low": np.linspace(99, 199, 75),
+            "close": np.linspace(100.5, 200.5, 75),
+            "volume": np.ones(75) * 1000
         }, index=dates)
-        self.engine = BacktestEngine()
 
-    def test_run_simple(self):
-        strat = StrategyCandidate(MockRule(), MockRule(), StopLossRule(14, 2.0))
-        res = self.engine.run(self.df, strat)
+        self.engine = BacktestEngine(self.data)
 
-        self.assertIn('metrics', res)
-        self.assertIn('equity', res)
-        self.assertEqual(len(res['equity']), len(self.df))
+    def test_simple_strategy(self):
+        # Strategy: Close > 0 (Always True)
+        cond = Condition(
+            indicator_a=IndicatorDef("close", {}),
+            operator=Operator.GT,
+            indicator_b=0
+        )
+        rule = StrategyRule(
+            entry_conditions=[cond],
+            exit_conditions=[],
+            risk_params={"sl_atr": 1.0, "tp_atr": 1.0, "trailing": False},
+            description="Test"
+        )
+        cand = StrategyCandidate("test_id", rule, "5m")
+
+        res = self.engine.run(cand)
+        self.assertIn("trades", res)
+        trades = res["trades"]
+
+        # It should trade because market is open and condition is true.
+        # The data starts at 9:15.
+        self.assertFalse(trades.empty)
+        self.assertIn("pnl", trades.columns)
+
+if __name__ == '__main__':
+    unittest.main()

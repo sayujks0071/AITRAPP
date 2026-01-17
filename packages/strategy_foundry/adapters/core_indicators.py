@@ -1,179 +1,44 @@
-"""Adapter for Core Indicators"""
-import pandas as pd
 import numpy as np
-from typing import Optional
+import pandas as pd
+from packages.core.indicators import IndicatorCalculator
 
-try:
-    from packages.core.indicators import IndicatorCalculator
-except ImportError:
-    IndicatorCalculator = None
-
-class VectorIndicatorCalculator(IndicatorCalculator if IndicatorCalculator else object):
+class VectorIndicatorCalculator(IndicatorCalculator):
     """
-    Extends or implements indicator calculation for vectorized backtesting.
-    Exposes full series instead of just the last value.
+    Extends Core IndicatorCalculator to expose public methods returning full arrays.
+    This is necessary for vectorized backtesting where we need the entire series,
+    not just the last value.
     """
     def __init__(self, **kwargs):
-        if IndicatorCalculator:
-            super().__init__(**kwargs)
-        else:
-            # Fallback if core not available (should not happen in this repo)
-            self.atr_period = kwargs.get('atr_period', 14)
-            self.rsi_period = kwargs.get('rsi_period', 14)
-            self.adx_period = kwargs.get('adx_period', 14)
-            self.ema_fast = kwargs.get('ema_fast', 34)
-            self.ema_slow = kwargs.get('ema_slow', 89)
-            self.supertrend_period = kwargs.get('supertrend_period', 10)
-            self.supertrend_multiplier = kwargs.get('supertrend_multiplier', 3.0)
-            self.bb_period = kwargs.get('bb_period', 20)
-            self.bb_std = kwargs.get('bb_std', 2.0)
+        # Allow dynamic override of defaults
+        super().__init__(**kwargs)
 
-    # Note: The core IndicatorCalculator already has some *_series methods.
-    # We will ensure all needed methods are available here.
+    def sma_series(self, series: pd.Series, period: int) -> pd.Series:
+        return series.rolling(window=period).mean()
 
-    def calculate_tr(self, df: pd.DataFrame) -> np.ndarray:
-        if hasattr(super(), 'calculate_tr'):
-            return super().calculate_tr(df)
+    def tr_series(self, df: pd.DataFrame) -> np.ndarray:
+        return self.calculate_tr(df)
 
-        # Fallback implementation
-        high = df["high"].values
-        low = df["low"].values
-        close = df["close"].values
-        prev_close = np.roll(close, 1)
-        prev_close[0] = close[0] # Approximation for first element
+    # Exposing internal methods as public if needed, though they are already accessible.
+    # The parent class has methods like atr_series, rsi_series, etc.
+    # We just ensure they are available and work as expected.
 
-        tr1 = high - low
-        tr2 = np.abs(high - prev_close)
-        tr3 = np.abs(low - prev_close)
+    def supertrend(self, df: pd.DataFrame, period: int = None, multiplier: float = None) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Public wrapper for supertrend series with optional param overrides.
+        """
+        # Temporarily override params if provided
+        orig_p = self.supertrend_period
+        orig_m = self.supertrend_multiplier
 
-        return np.maximum(tr1, np.maximum(tr2, tr3))
+        if period:
+            self.supertrend_period = period
+        if multiplier:
+            self.supertrend_multiplier = multiplier
 
-    def ema(self, series: pd.Series, period: int) -> pd.Series:
-        return series.ewm(span=period, adjust=False).mean()
-
-    def rsi(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        if hasattr(super(), 'rsi_series') and period == self.rsi_period:
-            return pd.Series(super().rsi_series(df), index=df.index)
-
-        # Standalone calc if period differs or method missing
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).fillna(0)
-        loss = (-delta.where(delta < 0, 0)).fillna(0)
-
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
-
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
-
-    def atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        if hasattr(super(), 'atr_series') and period == self.atr_period:
-             return pd.Series(super().atr_series(df), index=df.index)
-
-        tr = self.calculate_tr(df)
-        return pd.Series(tr, index=df.index).rolling(window=period).mean()
-
-    def adx(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        if hasattr(super(), 'adx_series') and period == self.adx_period:
-            return pd.Series(super().adx_series(df), index=df.index)
-
-        # Fallback logic omitted for brevity, assuming core is present
-        # But if we need custom period support:
-        tr = self.calculate_tr(df)
-        plus_dm = df['high'].diff()
-        minus_dm = df['low'].diff()
-
-        plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0)
-        minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), -minus_dm, 0) # Note logic check
-
-        atr = pd.Series(tr).rolling(period).mean()
-        plus_di = 100 * pd.Series(plus_dm).rolling(period).mean() / atr
-        minus_di = 100 * pd.Series(minus_dm).rolling(period).mean() / atr
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-        return dx.rolling(period).mean()
-
-    def supertrend(self, df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> tuple[pd.Series, pd.Series]:
-        # If parameters match core, try reuse
-        if (hasattr(super(), 'supertrend_series') and
-            period == self.supertrend_period and
-            multiplier == self.supertrend_multiplier):
-            st, direction = super().supertrend_series(df)
-            return pd.Series(st, index=df.index), pd.Series(direction, index=df.index)
-
-        # Custom implementation matching core logic
-        high = df['high'].values
-        low = df['low'].values
-        close = df['close'].values
-
-        # Calculate ATR
-        tr = self.calculate_tr(df)
-        atr = pd.Series(tr).rolling(period).mean().values
-
-        hl2 = (high + low) / 2
-        basic_upper = hl2 + (multiplier * atr)
-        basic_lower = hl2 - (multiplier * atr)
-
-        final_upper = np.zeros(len(df))
-        final_lower = np.zeros(len(df))
-        supertrend = np.zeros(len(df))
-        direction = np.ones(len(df)) # 1: UP, -1: DOWN
-
-        # Initialize current values
-        curr_upper = basic_upper[0]
-        curr_lower = basic_lower[0]
-        curr_dir = 1.0
-
-        # Optimization: Use scalar variables and zip to avoid indexing overhead
-        # Slicing arrays to iterate (starting from index 1)
-        basic_upper_s = basic_upper[1:]
-        basic_lower_s = basic_lower[1:]
-        close_curr_s = close[1:]
-        close_prev_s = close[:-1]
-
-        # First element initialization (handle NaN case for start)
-        final_upper[0] = basic_upper[0] if not np.isnan(basic_upper[0]) else 0
-        final_lower[0] = basic_lower[0] if not np.isnan(basic_lower[0]) else 0
-
-        for i, (b_ub, b_lb, c, prev_c) in enumerate(zip(basic_upper_s, basic_lower_s, close_curr_s, close_prev_s), 1):
-            # Upper Band
-            # Logic: If current is NaN, take new value.
-            # Else check conditions.
-            if curr_upper != curr_upper: # isnan
-                curr_upper = b_ub
-            elif b_ub < curr_upper or prev_c > curr_upper:
-                curr_upper = b_ub
-            # else keep curr_upper
-
-            final_upper[i] = curr_upper
-
-            # Lower Band
-            if curr_lower != curr_lower: # isnan
-                curr_lower = b_lb
-            elif b_lb > curr_lower or prev_c < curr_lower:
-                curr_lower = b_lb
-            # else keep curr_lower
-
-            final_lower[i] = curr_lower
-
-            # Direction
-            if curr_dir == 1:
-                if c <= curr_upper: # If curr_upper NaN, False.
-                    curr_dir = -1
-                    supertrend[i] = curr_upper
-                else:
-                    curr_dir = 1
-                    supertrend[i] = curr_lower
-            else:
-                if c >= curr_lower: # If curr_lower NaN, False.
-                    curr_dir = 1
-                    supertrend[i] = curr_lower
-                else:
-                    curr_dir = -1
-                    supertrend[i] = curr_upper
-
-            direction[i] = curr_dir
-
-        return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
-
-    def donchian(self, df: pd.DataFrame, period: int = 20) -> tuple[pd.Series, pd.Series]:
-         return df["high"].rolling(window=period).max(), df["low"].rolling(window=period).min()
+        try:
+            st, direction = self.supertrend_series(df)
+            return st, direction
+        finally:
+            # Restore defaults
+            self.supertrend_period = orig_p
+            self.supertrend_multiplier = orig_m

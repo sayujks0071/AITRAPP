@@ -1,120 +1,109 @@
-"""Data Loader for Strategy Foundry"""
 import os
 import pandas as pd
-import requests
-import time
-from datetime import datetime, timedelta
-from pathlib import Path
-from io import StringIO
 import structlog
+from datetime import datetime, timedelta
 import yaml
+from pathlib import Path
+from packages.strategy_foundry.data.sources import DataSourceRegistry
+from packages.strategy_foundry.adapters.core_market_hours import IST
 
 logger = structlog.get_logger(__name__)
 
-CACHE_DIR = Path(__file__).parent / "cache"
-CONFIG_DIR = Path(__file__).parent.parent / "configs"
-INSTRUMENT_MAP_PATH = CONFIG_DIR / "instrument_map.yaml"
-
-# Default config if file missing
-DEFAULT_INSTRUMENT_MAP = {
-    "NIFTY": {"research": "^NSEI", "proxy": "NIFTYBEES.NS"},
-    "SENSEX": {"research": "^BSESN", "proxy": "SENSEXBEES.NS"} # Fallback examples
-}
-
 class DataLoader:
-    def __init__(self, cache_dir: Path = CACHE_DIR):
-        self.cache_dir = cache_dir
+    """
+    Orchestrates data loading, caching, and fallback logic.
+    """
+    def __init__(self, config_path: str = "packages/strategy_foundry/configs/foundry.yaml",
+                 map_path: str = "packages/strategy_foundry/configs/instrument_map.yaml"):
+
+        self.config = self._load_yaml(config_path)
+        self.instrument_map = self._load_yaml(map_path)
+        self.sources = DataSourceRegistry()
+        self.cache_dir = Path(self.config.get("data", {}).get("cache_dir", "packages/strategy_foundry/data/cache"))
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.instrument_map = self._load_map()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
+
+    def _load_yaml(self, path: str) -> dict:
+        try:
+            with open(path, "r") as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            logger.error(f"Failed to load config {path}", error=str(e))
+            return {}
+
+    def get_data(self, symbol_key: str, timeframe: str, refresh: bool = False) -> pd.DataFrame:
+        """
+        Get OHLCV data for a symbol key (e.g., NIFTY) and timeframe (e.g., 5m, 15m, 1d).
+
+        1. Check cache.
+        2. If cache miss or refresh needed, fetch from source.
+        3. Fallback if primary source fails.
+        """
+        # Resolve symbol
+        research_symbol = self.instrument_map.get("research", {}).get(symbol_key)
+        if not research_symbol:
+            logger.error(f"Unknown symbol key: {symbol_key}")
+            return pd.DataFrame()
+
+        # Check cache
+        cache_file = self.cache_dir / f"{symbol_key}_{timeframe}.csv"
+
+        if not refresh and cache_file.exists():
+            # Basic staleness check (e.g. if file is older than 1 hour for intraday)
+            # For now, we rely on the 'refresh' flag primarily.
+            try:
+                df = pd.read_csv(cache_file, parse_dates=["timestamp"], index_col="timestamp")
+                # Ensure timezone
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+                return df
+            except Exception as e:
+                logger.warning(f"Corrupt cache for {symbol_key} {timeframe}, re-fetching.", error=str(e))
+
+        # Fetch
+        df = self._fetch_from_source(research_symbol, timeframe)
+
+        if df.empty:
+            # Fallback to proxy if research symbol fails
+            proxy_symbol = self.instrument_map.get("paper_proxy", {}).get(symbol_key)
+            # But wait, paper_proxy might be a broker symbol or logic, which Yahoo won't understand usually.
+            # Assuming instrument_map might have alternative Yahoo symbols if needed, or we just fail.
+            # For now, we stick to research symbol.
+            logger.error(f"Failed to fetch data for {symbol_key} ({research_symbol})")
+            return pd.DataFrame()
+
+        # Save to cache
+        df.to_csv(cache_file)
+        return df
+
+    def _fetch_from_source(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        # Map timeframe to Yahoo interval/range
+        interval_map = {
+            "5m": "5m",
+            "15m": "15m",
+            "1d": "1d"
         }
 
-    def _load_map(self):
-        if INSTRUMENT_MAP_PATH.exists():
-             with open(INSTRUMENT_MAP_PATH) as f:
-                return yaml.safe_load(f)
-        return DEFAULT_INSTRUMENT_MAP
+        # Dynamic range based on config
+        # Yahoo limits: 5m -> 60d, 15m -> 60d, 1d -> max
+        range_map = {
+            "5m": "60d",
+            "15m": "60d", # Yahoo limitation for intraday is often 60d
+            "1d": "5y"
+        }
 
-    def get_data(self, symbol: str, lookback_days: int = 2000) -> pd.DataFrame:
-        """
-        Get daily OHLCV data for a symbol.
-        1. Check cache
-        2. If stale/missing, download
-        """
-        mapping = self.instrument_map.get(symbol)
-        if not mapping:
-             raise ValueError(f"Unknown symbol: {symbol}")
+        interval = interval_map.get(timeframe)
+        if not interval:
+            logger.error(f"Unsupported timeframe {timeframe}")
+            return pd.DataFrame()
 
-        research_symbol = mapping["research"]
-        file_path = self.cache_dir / f"{symbol}.csv"
+        range_str = range_map.get(timeframe, "1mo")
 
-        if self._is_cache_valid(file_path):
-            df = pd.read_csv(file_path, parse_dates=["Date"], index_col="Date")
-            logger.info("Loaded from cache", symbol=symbol, rows=len(df))
-            return df
-
-        # Download
-        logger.info("Downloading data", symbol=symbol, ticker=research_symbol)
-        df = self._download_yahoo(research_symbol, lookback_days)
-
-        if df.empty and "proxy" in mapping:
-            logger.warning("Primary download failed, trying proxy", symbol=symbol, proxy=mapping["proxy"])
-            df = self._download_yahoo(mapping["proxy"], lookback_days)
-
-        if not df.empty:
-            df.to_csv(file_path)
-            # Try parquet if available (optional)
-            try:
-                import pyarrow
-                df.to_parquet(file_path.with_suffix(".parquet"))
-            except ImportError:
-                pass
+        # Try fetching
+        df = self.sources.get_yahoo().fetch_ohlcv(symbol, interval, range_str)
 
         return df
 
-    def _is_cache_valid(self, path: Path) -> bool:
-        if not path.exists():
-            return False
-
-        # Check if modified today (simple check)
-        mtime = datetime.fromtimestamp(path.stat().st_mtime)
-        return mtime.date() == datetime.now().date()
-
-    def _download_yahoo(self, ticker: str, days: int) -> pd.DataFrame:
-        """Download from Yahoo Finance query1 endpoint"""
-        end = int(time.time())
-        start = int((datetime.now() - timedelta(days=days)).timestamp())
-
-        url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={start}&period2={end}&interval=1d&events=history"
-
-        try:
-            resp = requests.get(url, headers=self.headers, timeout=10)
-            if resp.status_code != 200:
-                logger.error("Download failed", code=resp.status_code, text=resp.text[:100])
-                return pd.DataFrame()
-
-            df = pd.read_csv(StringIO(resp.text))
-
-            # Normalize
-            df["Date"] = pd.to_datetime(df["Date"])
-            df.set_index("Date", inplace=True)
-            df.sort_index(inplace=True)
-
-            # Rename cols to lowercase
-            df.rename(columns={
-                "Open": "open", "High": "high", "Low": "low",
-                "Close": "close", "Volume": "volume", "Adj Close": "adj_close"
-            }, inplace=True)
-
-            # Drop NaNs
-            df.dropna(inplace=True)
-
-            # Ensure unique index
-            df = df[~df.index.duplicated(keep='first')]
-
-            return df[["open", "high", "low", "close", "volume"]]
-
-        except Exception as e:
-            logger.error("Download exception", error=str(e))
-            return pd.DataFrame()
+    def clean_cache(self):
+        """Remove all cached files"""
+        for f in self.cache_dir.glob("*.csv"):
+            f.unlink()

@@ -1,30 +1,40 @@
 # Strategy Foundry
-A self-generating strategy lab for NIFTY/SENSEX.
 
-## Overview
-This module runs hourly to:
-1. Fetch latest daily OHLC data (cached).
-2. Generate random trading strategies (Trend, Mean Reversion).
-3. Backtest them on Daily timeframe.
-4. Perform Walk-Forward Evaluation to prevent overfitting.
-5. Select a "Champion" based on OOS metrics.
-6. Publish a signal JSON if market is open.
+An automated lab for generating, backtesting, and selecting intraday trading strategies for Indian markets.
+
+## Structure
+
+- `configs/`: Configuration files (`foundry.yaml`, `instrument_map.yaml`).
+- `data/`: Data loading and caching.
+- `factory/`: Strategy grammar and generation.
+- `backtest/`: Vectorized backtesting engine.
+- `selection/`: Ranking and champion promotion logic.
+- `live/`: Signal publishing.
 
 ## Usage
-### Run Locally
+
+### Run Manually
+
 ```bash
-# Fast mode (fewer candidates, faster run)
-export FAST_MODE=1
+# Fast mode (fewer candidates, faster)
+python -m packages.strategy_foundry.run_hourly --fast
+
+# Full mode
 python -m packages.strategy_foundry.run_hourly
 ```
 
-### Output
-Artifacts are stored in `results/`:
-- `runs/<timestamp>/`: Leaderboard, metrics.
-- `champions/`: JSON files of promoted strategies.
-- `live_signal.json`: The latest signal from the current champion.
+### Outputs
 
-## Architecture
-- **Hybrid**: Reuses `packages.core` indicators/hours but owns its research logic.
-- **Safe**: No real order placement. Only outputs JSON.
-- **Deterministic**: Seeded randomness (where applicable) and stable token IDs.
+Results are stored in `packages/strategy_foundry/results/`:
+- `runs/`: Execution logs and candidate metrics.
+- `champions/`: JSON definitions of selected strategies.
+- `live_signal.json`: The latest trading signal (if market is open).
+
+## Live Trading
+
+Live trading is **OFF** by default. To enable:
+1. Set `ENABLE_LIVE=true` environment variable.
+2. Ensure `approvals/ALLOW_LIVE.txt` exists.
+3. Verify core kill-switches are inactive.
+
+Even then, this module only produces a JSON signal. The core execution system must consume it.

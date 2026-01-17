@@ -1,27 +1,31 @@
-"""Tests for Data Loader"""
 import unittest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 import pandas as pd
 from packages.strategy_foundry.data.loader import DataLoader
 
-class TestDataLoader(unittest.TestCase):
+class TestLoader(unittest.TestCase):
     def setUp(self):
-        self.loader = DataLoader(cache_dir=Path("/tmp/test_cache"))
+        self.loader = DataLoader()
+        self.loader.sources.get_yahoo = MagicMock()
 
-    @patch('requests.get')
-    def test_download_yahoo(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "Date,Open,High,Low,Close,Adj Close,Volume\n2023-01-01,100,110,90,105,105,1000"
-        mock_get.return_value = mock_resp
+    def test_get_data_cache_miss(self):
+        # Mock Yahoo return
+        mock_df = pd.DataFrame({
+            "open": [100], "high": [110], "low": [90], "close": [105], "volume": [1000]
+        }, index=pd.to_datetime(["2023-01-01 10:00:00"]).tz_localize("Asia/Kolkata"))
 
-        df = self.loader._download_yahoo("TEST", 10)
+        self.loader.sources.get_yahoo().fetch_ohlcv.return_value = mock_df
+
+        # Call
+        df = self.loader.get_data("NIFTY", "5m", refresh=True)
+
         self.assertFalse(df.empty)
-        self.assertIn('close', df.columns)
-        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["close"], 105)
+        self.loader.sources.get_yahoo().fetch_ohlcv.assert_called()
 
-    def test_cache_validation(self):
-        p = Path("/tmp/test_cache/test.csv")
-        if p.exists(): p.unlink()
-        self.assertFalse(self.loader._is_cache_valid(p))
+    def test_get_data_unknown_symbol(self):
+        df = self.loader.get_data("UNKNOWN", "5m")
+        self.assertTrue(df.empty)
+
+if __name__ == '__main__':
+    unittest.main()

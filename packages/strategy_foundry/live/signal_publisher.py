@@ -1,45 +1,35 @@
-"""Signal Publisher"""
 import json
-import pandas as pd
+import os
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any
+import structlog
+from packages.strategy_foundry.adapters.core_market_hours import IST
 
-RESULTS_DIR = Path(__file__).parent.parent / "results"
-SIGNAL_FILE = RESULTS_DIR / "live_signal.json"
+logger = structlog.get_logger(__name__)
 
 class SignalPublisher:
-    def __init__(self):
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    def __init__(self, output_path: str = "packages/strategy_foundry/results/live_signal.json"):
+        self.output_path = output_path
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    def publish(self,
-                signal: int,
-                instrument: str,
-                champion: Dict[str, Any],
-                status: str = "OK",
-                reason: str = ""):
+    def publish(self, signal_data: dict):
+        """
+        Publish signal artifact.
+        """
+        try:
+            # Enforce timestamp
+            signal_data["timestamp_ist"] = datetime.now(IST).isoformat()
 
-        output = {
-            "timestamp_ist": datetime.now().isoformat(),
-            "champion_id": champion.get('id'),
-            "instrument": instrument,
-            "signal": int(signal),
-            "rule_summary": champion.get('rules', {}).get('entry', 'Unknown'),
-            "risk": {
-                "stop_loss_atr": champion.get('rules', {}).get('stop', 'Unknown')
-            },
-            "status": status,
-            "reason": reason
-        }
+            with open(self.output_path, "w") as f:
+                json.dump(signal_data, f, indent=2)
 
-        with open(SIGNAL_FILE, 'w') as f:
-            json.dump(output, f, indent=2)
+            logger.info("Published live signal", path=self.output_path, signal=signal_data.get("signal"))
+
+        except Exception as e:
+            logger.error("Failed to publish signal", error=str(e))
 
     def publish_skipped(self, reason: str):
-        output = {
-            "timestamp_ist": datetime.now().isoformat(),
+        self.publish({
             "status": "SKIPPED",
-            "reason": reason
-        }
-        with open(SIGNAL_FILE, 'w') as f:
-            json.dump(output, f, indent=2)
+            "reason": reason,
+            "signal": 0
+        })

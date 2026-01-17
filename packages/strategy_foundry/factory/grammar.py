@@ -1,107 +1,91 @@
-"""Strategy Grammar and Rules"""
-import abc
-import numpy as np
-import pandas as pd
-from typing import Dict, Any, List
+from enum import Enum
+from typing import List, Dict, Any
+from dataclasses import dataclass, field, asdict
 
-class Rule(abc.ABC):
-    @abc.abstractmethod
-    def generate_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        """Returns series of -1, 0, 1"""
-        pass
+class Operator(str, Enum):
+    GT = ">"
+    LT = "<"
+    CROSS_UP = "cross_up"
+    CROSS_DOWN = "cross_down"
+    BETWEEN = "between"
 
-    @abc.abstractmethod
-    def description(self) -> str:
-        pass
+@dataclass
+class IndicatorDef:
+    name: str
+    params: Dict[str, Any]
 
-class TrendFollowingRule(Rule):
-    def __init__(self, fast_period: int, slow_period: int):
-        self.fast_period = fast_period
-        self.slow_period = slow_period
+    def to_dict(self):
+        return asdict(self)
 
-    def generate_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        # Assuming indicators calculated outside or calc here
-        # For simplicity, we assume indicators dict might contain pre-calc series
-        # BUT to be safe and self-contained, we might use the adapter
-        # Actually, let's keep it simple: passed indicators dict has raw series from adapter
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
 
-        # We'll use the df directly with adapter mostly
-        # But here we define logic.
+@dataclass
+class Condition:
+    indicator_a: IndicatorDef
+    operator: Operator
+    indicator_b: Any  # IndicatorDef or scalar
+    param_override: Dict[str, Any] = field(default_factory=dict)
 
-        # Check if we have pre-calced EMAs
-        key_fast = f"ema_{self.fast_period}"
-        key_slow = f"ema_{self.slow_period}"
+    def to_dict(self):
+        d = {
+            "indicator_a": self.indicator_a.to_dict(),
+            "operator": self.operator.value,
+            "param_override": self.param_override
+        }
+        if isinstance(self.indicator_b, IndicatorDef):
+            d["indicator_b"] = self.indicator_b.to_dict()
+            d["indicator_b_type"] = "indicator"
+        else:
+            d["indicator_b"] = self.indicator_b
+            d["indicator_b_type"] = "scalar"
+        return d
 
-        fast = indicators.get(key_fast)
-        slow = indicators.get(key_slow)
+    @classmethod
+    def from_dict(cls, data):
+        ind_a = IndicatorDef.from_dict(data["indicator_a"])
+        op = Operator(data["operator"])
 
-        if fast is None or slow is None:
-            # Fallback (should be handled by generator/engine pre-calc)
-            fast = df['close'].ewm(span=self.fast_period).mean()
-            slow = df['close'].ewm(span=self.slow_period).mean()
+        if data.get("indicator_b_type") == "indicator":
+            ind_b = IndicatorDef.from_dict(data["indicator_b"])
+        else:
+            ind_b = data["indicator_b"]
 
-        signal = np.where(fast > slow, 1, -1)
-        return pd.Series(signal, index=df.index)
+        return cls(
+            indicator_a=ind_a,
+            operator=op,
+            indicator_b=ind_b,
+            param_override=data.get("param_override", {})
+        )
 
-    def description(self) -> str:
-        return f"EMA Crossover ({self.fast_period}, {self.slow_period})"
+@dataclass
+class StrategyRule:
+    entry_conditions: List[Condition]
+    exit_conditions: List[Condition]
+    risk_params: Dict[str, Any]
+    description: str = ""
 
-class SupertrendRule(Rule):
-    def __init__(self, period: int, multiplier: float):
-        self.period = period
-        self.multiplier = multiplier
+    def to_dict(self):
+        return {
+            "entry_conditions": [c.to_dict() for c in self.entry_conditions],
+            "exit_conditions": [c.to_dict() for c in self.exit_conditions],
+            "risk_params": self.risk_params,
+            "description": self.description
+        }
 
-    def generate_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        key_dir = f"st_dir_{self.period}_{self.multiplier}"
-        direction = indicators.get(key_dir)
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            entry_conditions=[Condition.from_dict(c) for c in data.get("entry_conditions", [])],
+            exit_conditions=[Condition.from_dict(c) for c in data.get("exit_conditions", [])],
+            risk_params=data.get("risk_params", {}),
+            description=data.get("description", "")
+        )
 
-        if direction is None:
-            # Should have been pre-calculated
-            # We return 0 if missing to avoid crash, but log warning in real system
-            return pd.Series(0, index=df.index)
-
-        return direction # -1 for downtrend (short), 1 for uptrend (long)
-
-    def description(self) -> str:
-        return f"Supertrend ({self.period}, {self.multiplier})"
-
-class RSIReversionRule(Rule):
-    def __init__(self, period: int, lower: int, upper: int):
-        self.period = period
-        self.lower = lower
-        self.upper = upper
-
-    def generate_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        key_rsi = f"rsi_{self.period}"
-        rsi = indicators.get(key_rsi)
-
-        if rsi is None: return pd.Series(0, index=df.index)
-
-        signal = pd.Series(0, index=df.index)
-        signal[rsi < self.lower] = 1
-        signal[rsi > self.upper] = -1
-
-        # This is a stateful rule usually (enter on cross, exit on mean),
-        # but for simple grammar we might treat it as "be long if oversold"
-        # Better: Signal only on trigger.
-        # Let's make it simple state: Long if < Lower, Short if > Upper, else 0 (Hold/Flat?)
-        # For a pure signal generator:
-        return signal
-
-    def description(self) -> str:
-        return f"RSI Reversion ({self.period}: <{self.lower} buy, >{self.upper} sell)"
-
-class StopLossRule(Rule):
-    def __init__(self, atr_period: int, multiplier: float):
-        self.atr_period = atr_period
-        self.multiplier = multiplier
-
-    def generate_signal(self, df: pd.DataFrame, indicators: Dict[str, Any]) -> pd.Series:
-        # Stop loss is an exit rule, usually applied ON TOP of entry signals.
-        # In this grammar, we might return a "mask" or this might be applied by the engine.
-        # For now, let's treat it as a placeholder that the engine uses.
-        return pd.Series(0, index=df.index) # Logic is in engine
-
-    def description(self) -> str:
-        return f"ATR Stop ({self.atr_period}, {self.multiplier}x)"
-
+@dataclass
+class StrategyCandidate:
+    id: str
+    rule: StrategyRule
+    timeframe: str
+    source_code: str = ""

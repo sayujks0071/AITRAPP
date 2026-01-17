@@ -1,0 +1,21 @@
+{
+  "id": "b171b9f091b1",
+  "timestamp": "2026-01-17T01:29:56.863619",
+  "rule": {
+    "description": "breakout strategy",
+    "risk": {
+      "sl_atr": 2.0,
+      "tp_atr": 3.0,
+      "trailing": true
+    }
+  },
+  "metrics": {
+    "id": "b171b9f091b1",
+    "total_return": 0.0,
+    "sharpe": 0.0,
+    "trades": 0,
+    "win_rate": 0.0,
+    "score": 0.0
+  },
+  "status": "ACTIVE"
+}

@@ -1,23 +1,41 @@
-foundry:
-  max_candidates: 80
+# Strategy Foundry Configuration
+
+market:
+  timezone: "Asia/Kolkata"
+  open: "09:15"
+  close: "15:30"
+  flat_time: "15:25"
+
+data:
+  cache_dir: "packages/strategy_foundry/data/cache"
+  history_days_5m: 60
+  history_days_15m: 180
+  history_days_1d: 3650
+  force_refresh_intraday: false
+
+backtest:
+  commission_bps_per_side: 3.0  # e.g., broker + exchange + tax approx
+  slippage_bps_per_side: 2.0
+  spread_guard_bps: 1.0
+  initial_capital: 100000.0
+
+training:
+  candidates_per_run: 80
   fast_mode_candidates: 15
-  timeframes: ["5m", "15m", "1d"]
-  data_days_intraday: 59
-  data_days_daily: 3650
-  folds: 4
+  folds_5m: 4
+  folds_15m: 4
   fast_mode_folds: 2
 
-execution:
-  slippage_bps_per_side: 5.0
-  brokerage_per_order: 20.0
-  spread_guard_bps: 2.0
-  tax_bps: 3.0 # Approx STT + GST etc.
-
-selection:
-  min_trades_5m: 60
-  min_trades_15m: 30
-  max_drawdown: 0.30
+ranking:
+  min_trades_5m: 80
+  min_trades_15m: 40
+  max_dd_pct: 30.0
   min_profit_factor: 1.1
-  min_win_rate: 0.35
-  sanity_daily_min_sharpe: -0.5 # Lenient check for daily sanity
-  sanity_daily_max_dd: 0.45
+  min_oos_sharpe: 1.2
+  min_oos_calmar: 1.0
+
+live_gate:
+  enable: false  # Main switch, overridden by env ENABLE_LIVE
+  blended_sharpe_min: 1.2
+  max_dd_pct: 20.0
+  max_trades_per_day: 5

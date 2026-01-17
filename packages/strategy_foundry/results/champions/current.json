@@ -1,0 +1,59 @@
+{
+  "id": "5512e4895abe",
+  "timestamp": "2026-01-17T01:36:35.022460",
+  "rule": {
+    "entry_conditions": [
+      {
+        "indicator_a": {
+          "name": "ema",
+          "params": {
+            "period": 10
+          }
+        },
+        "operator": ">",
+        "param_override": {},
+        "indicator_b": {
+          "name": "ema",
+          "params": {
+            "period": 100
+          }
+        },
+        "indicator_b_type": "indicator"
+      },
+      {
+        "indicator_a": {
+          "name": "adx",
+          "params": {
+            "period": 14
+          }
+        },
+        "operator": ">",
+        "param_override": {},
+        "indicator_b": 20,
+        "indicator_b_type": "scalar"
+      }
+    ],
+    "exit_conditions": [],
+    "risk_params": {
+      "sl_atr": 3.0,
+      "tp_atr": 2.0,
+      "trailing": true
+    },
+    "description": "trend_following strategy"
+  },
+  "metrics": {
+    "id": "5512e4895abe",
+    "cagr": 0.0,
+    "max_dd": 0.003340773278756621,
+    "sharpe": 0.1596366539497207,
+    "calmar": 0.0,
+    "win_rate": 0.6136363636363636,
+    "profit_factor": 1.0577651441564266,
+    "trades": 44,
+    "fold_sharpe_std": 0.0,
+    "positive_folds": 0,
+    "score": 0.31263643621470294
+  },
+  "status": "ACTIVE",
+  "timeframe": "5m"
+}

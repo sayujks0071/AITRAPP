@@ -1,86 +1,121 @@
-"""Strategy Generator"""
 import random
 import hashlib
 import json
-from typing import List, Dict, Any
-from .grammar import Rule, TrendFollowingRule, SupertrendRule, RSIReversionRule, StopLossRule
-from .parameter_space import ParameterSpace
-
-class StrategyCandidate:
-    def __init__(self, entry_rule: Rule, exit_rule: Rule, stop_loss: StopLossRule):
-        self.entry_rule = entry_rule
-        self.exit_rule = exit_rule # Can be same as entry (reversal)
-        self.stop_loss = stop_loss
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "entry": self.entry_rule.description(),
-            "exit": self.exit_rule.description(),
-            "stop": self.stop_loss.description()
-        }
-
-    @property
-    def id(self) -> str:
-        s = json.dumps(self.to_dict(), sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()
-
-    def generate_positions(self, df, indicators):
-        # 1. Entry Signal
-        entry_sig = self.entry_rule.generate_signal(df, indicators)
-
-        # 2. Apply SL (handled in backtest engine usually, but we can simulate signal cut here if we had state)
-        # For vector backtest, we just pass the raw entry signal and let engine handle stops/exits.
-
-        # If exit rule is different, we combine.
-        # Simple mode: If entry != 0, take it.
-        # If exit != 0, take it (usually 0 to flatten).
-
-        # We return the raw signal series to be processed by engine
-        return entry_sig
+from typing import List
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, StrategyRule, Condition, IndicatorDef, Operator
+from packages.strategy_foundry.factory.parameter_space import ParameterSpace
 
 class StrategyGenerator:
-    def __init__(self):
-        self.params = ParameterSpace()
+    """
+    Generates random strategies based on the defined grammar and parameter space.
+    """
 
-    def generate(self, n: int = 10) -> List[StrategyCandidate]:
+    def generate_candidates(self, count: int, timeframe: str) -> List[StrategyCandidate]:
         candidates = []
-        seen = set()
+        seen_ids = set()
 
-        while len(candidates) < n:
-            strat = self._create_random_strategy()
-            if strat.id not in seen:
-                seen.add(strat.id)
-                candidates.append(strat)
+        while len(candidates) < count:
+            strategy = self._generate_single_strategy()
+            strat_id = self._generate_id(strategy, timeframe)
+
+            if strat_id not in seen_ids:
+                seen_ids.add(strat_id)
+                candidates.append(StrategyCandidate(
+                    id=strat_id,
+                    rule=strategy,
+                    timeframe=timeframe,
+                    source_code=self._to_string(strategy)
+                ))
 
         return candidates
 
-    def _create_random_strategy(self) -> StrategyCandidate:
-        # Pick strategy type
-        type_ = random.choice(["trend_ema", "trend_supertrend", "mean_rsi"])
+    def _generate_single_strategy(self) -> StrategyRule:
+        entry_type = random.choice(ParameterSpace.ENTRY_TYPES)
 
-        if type_ == "trend_ema":
-            # Exclude the last element for fast, to ensure slow has options
-            fast = random.choice(self.params.EMA_PERIODS[:-1])
-            slow = random.choice([p for p in self.params.EMA_PERIODS if p > fast])
-            entry = TrendFollowingRule(fast, slow)
-            # For trend, exit is usually reverse signal
-            exit_rule = entry
+        if entry_type == "trend_following":
+            entry_conds = self._gen_trend_following()
+        elif entry_type == "mean_reversion":
+            entry_conds = self._gen_mean_reversion()
+        else: # breakout
+            entry_conds = self._gen_breakout()
 
-        elif type_ == "trend_supertrend":
-            per = random.choice(self.params.SUPERTREND_PERIODS)
-            mul = random.choice(self.params.SUPERTREND_MULTIPLIERS)
-            entry = SupertrendRule(per, mul)
-            exit_rule = entry
+        # Add a filter sometimes
+        if random.random() < 0.5:
+            entry_conds.append(self._gen_filter())
 
-        else: # mean_rsi
-            per = random.choice(self.params.RSI_PERIODS)
-            b = random.choice(self.params.RSI_BOUNDS)
-            entry = RSIReversionRule(per, b[0], b[1])
-            exit_rule = entry # Simple reversal
+        # Exits are usually standard risk based, but maybe an indicator exit too
+        exit_conds = []
+        # For now, relying on Risk Params for main exit, and EOD.
+        # Maybe add a reversal exit?
 
-        # Stop Loss
-        atr_p = random.choice(self.params.ATR_PERIODS)
-        atr_m = random.choice(self.params.ATR_SL_MULTIPLIERS)
-        sl = StopLossRule(atr_p, atr_m)
+        risk = {
+            "sl_atr": random.choice(ParameterSpace.RISK_MODELS["stop_loss_atr"]),
+            "tp_atr": random.choice(ParameterSpace.RISK_MODELS["take_profit_atr"]),
+            "trailing": random.choice(ParameterSpace.RISK_MODELS["trailing_stop"])
+        }
 
-        return StrategyCandidate(entry, exit_rule, sl)
+        return StrategyRule(
+            entry_conditions=entry_conds,
+            exit_conditions=exit_conds,
+            risk_params=risk,
+            description=f"{entry_type} strategy"
+        )
+
+    def _gen_trend_following(self) -> List[Condition]:
+        # Example: EMA crossover
+        fast = random.choice([5, 10, 20])
+        slow = random.choice([20, 50, 100])
+        if fast >= slow: fast, slow = 10, 50
+
+        c1 = Condition(
+            indicator_a=IndicatorDef("ema", {"period": fast}),
+            operator=Operator.GT,
+            indicator_b=IndicatorDef("ema", {"period": slow})
+        )
+        return [c1]
+
+    def _gen_mean_reversion(self) -> List[Condition]:
+        # Example: RSI < 30
+        period = 14
+        thresh = random.choice([30, 40])
+
+        c1 = Condition(
+            indicator_a=IndicatorDef("rsi", {"period": period}),
+            operator=Operator.LT,
+            indicator_b=thresh
+        )
+        return [c1]
+
+    def _gen_breakout(self) -> List[Condition]:
+        # Example: Close > Donchian Upper
+        period = random.choice([20, 50])
+
+        c1 = Condition(
+            indicator_a=IndicatorDef("close", {}),
+            operator=Operator.GT,
+            indicator_b=IndicatorDef("donchian_upper", {"period": period})
+        )
+        return [c1]
+
+    def _gen_filter(self) -> Condition:
+        # Example: ADX > 20
+        return Condition(
+            indicator_a=IndicatorDef("adx", {"period": 14}),
+            operator=Operator.GT,
+            indicator_b=20
+        )
+
+    def _generate_id(self, rule: StrategyRule, timeframe: str) -> str:
+        # Stable ID based on rule definition
+        s = json.dumps(self._rule_to_dict(rule), sort_keys=True) + timeframe
+        return hashlib.md5(s.encode()).hexdigest()[:12]
+
+    def _rule_to_dict(self, rule: StrategyRule) -> dict:
+        # simplified serialization for hashing
+        return {
+            "entry": [str(c) for c in rule.entry_conditions],
+            "risk": rule.risk_params
+        }
+
+    def _to_string(self, rule: StrategyRule) -> str:
+        return f"{rule.description} | Risk: {rule.risk_params}"

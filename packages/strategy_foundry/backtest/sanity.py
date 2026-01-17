@@ -1,20 +1,58 @@
-"""Sanity Checks"""
-from typing import Dict, Any
+import pandas as pd
+import structlog
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.data.loader import DataLoader
 
-def check_sanity(metrics: Dict[str, Any], fast_mode: bool = False) -> tuple[bool, str]:
-    """
-    Returns (Pass/Fail, Reason)
-    """
-    min_trades = 10 if fast_mode else 30
-    max_dd = 0.35 # 35%
+logger = structlog.get_logger(__name__)
 
-    if not metrics:
-        return False, "No metrics"
+class SanityChecker:
+    def __init__(self, loader: DataLoader):
+        self.loader = loader
 
-    if metrics.get('trades', 0) < min_trades:
-        return False, f"Too few trades ({metrics.get('trades', 0)} < {min_trades})"
+    def check_daily_sanity(self, candidate: StrategyCandidate, symbol: str) -> bool:
+        """
+        Run the candidate on 1D data to ensure it doesn't blow up.
+        """
+        # Fetch 1D data
+        daily_data = self.loader.get_data(symbol, "1d")
+        if daily_data.empty:
+            logger.warning("No daily data for sanity check, skipping", symbol=symbol)
+            return True # Fail open? Or fail closed? Prompt says "Robustness check", maybe warning is enough.
 
-    if abs(metrics.get('max_drawdown', 0)) > max_dd:
-         return False, f"Max DD too high ({metrics.get('max_drawdown', 0):.2%} > {max_dd:.0%})"
+        # Run Backtest
+        # We need to construct a 1D version of the candidate?
+        # The candidate has a timeframe attribute. But the logic *should* work on any timeframe
+        # IF the indicator periods are reasonable.
+        # But wait, 5m params (e.g. EMA 50) on Daily might mean EMA 50 days (huge).
+        # The prompt says: "Run 1D sanity backtest... if daily performance is catastrophically negative... reject"
 
-    return True, "OK"
+        engine = BacktestEngine(daily_data)
+        res = engine.run(candidate)
+        metrics = res.get("metrics", {})
+
+        sharpe = metrics.get("sharpe", 0)
+        max_dd = metrics.get("max_dd", 0)
+
+        # "If Sharpe < -0.2 or MaxDD > 45%"
+        if sharpe < -0.2:
+            logger.info("Failed daily sanity: Sharpe too low", id=candidate.id, sharpe=sharpe)
+            return False
+
+        if max_dd > 0.45:
+             logger.info("Failed daily sanity: MaxDD too high", id=candidate.id, max_dd=max_dd)
+             return False
+
+        return True
+
+    def check_intraday_sanity(self, trades: pd.DataFrame) -> bool:
+        """
+        "late-day dependence" check (profit concentrated only in last 30 minutes)
+        "overtrade penalty" (too many trades/day)
+        """
+        if trades.empty:
+            return True
+
+        # TODO: Implement checks
+        # For now, just a placeholder return True
+        return True

@@ -1,0 +1,27 @@
+{
+  "id": "a1062e9aeddc",
+  "timestamp": "2026-01-17T01:33:36.609769",
+  "rule": {
+    "description": "trend_following strategy",
+    "risk": {
+      "sl_atr": 2.0,
+      "tp_atr": 4.0,
+      "trailing": true
+    }
+  },
+  "metrics": {
+    "id": "a1062e9aeddc",
+    "cagr": 0.0,
+    "max_dd": 0.002185934585899483,
+    "sharpe": 0.5526198239015142,
+    "calmar": 0.0,
+    "win_rate": 0.4642857142857143,
+    "profit_factor": 1.2743959185551474,
+    "trades": 28,
+    "fold_sharpe_std": 0.0,
+    "positive_folds": 0,
+    "score": 0.3810120988325214
+  },
+  "status": "ACTIVE",
+  "timeframe": "5m"
+}

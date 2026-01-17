@@ -5,36 +5,30 @@ on:
     - cron: "0 * * * *"
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'packages/strategy_foundry/**'
 
 jobs:
-  run-foundry:
+  research:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
-          pip install pandas numpy requests structlog pyyaml
-          # Install core if needed or minimal reqs
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pandas numpy pytz structlog requests pyyaml pydantic pydantic-settings
 
-      - name: Run Strategy Foundry
+      - name: Run Hourly Pipeline
         env:
-          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
+          FAST_MODE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
           PYTHONPATH: .
-        run: |
-          python -m packages.strategy_foundry.run_hourly
+        run: python -m packages.strategy_foundry.run_hourly
 
       - name: Upload Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: foundry-results
           path: packages/strategy_foundry/results/
