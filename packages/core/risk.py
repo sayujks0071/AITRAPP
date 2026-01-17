@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import structlog
 
-from packages.core.config import RiskConfig
+from packages.core.config import RiskConfig, TaxConfig
 from packages.core.models import (
     Instrument,
     Position,
@@ -324,51 +324,41 @@ class RiskManager:
             # Note: Unlike the previous implementation, fees_per_option_leg is not added here
             # as brokerage is usually flat per order for F&O. If multi-leg order costs are needed,
             # they should be modeled as multiple orders.
-        # Tax Rates (2024-2025)
-        # TODO: Move to config or constants
-        STT_EQUITY_INTRADAY_SELL = 0.00025  # 0.025%
-        STT_FUTURES_SELL = 0.000125         # 0.0125%
-        STT_OPTIONS_SELL = 0.000625         # 0.0625% (on premium)
         
-        TXN_NSE_EQUITY = 0.0000325          # 0.00325%
-        TXN_NSE_FUTURES = 0.000019          # 0.0019%
-        TXN_NSE_OPTIONS = 0.0005            # 0.05% (on premium)
-
         # Exchange Transaction Charges
         txn_charges = 0.0
         if instrument.exchange in ["NSE", "BSE", "NFO"]:
             if instrument.is_equity:
-                txn_charges = turnover * TXN_NSE_EQUITY
+                txn_charges = turnover * TaxConfig.TXN_NSE_EQUITY
             elif instrument.is_future:
-                txn_charges = turnover * TXN_NSE_FUTURES
+                txn_charges = turnover * TaxConfig.TXN_NSE_FUTURES
             elif instrument.is_option:
-                txn_charges = turnover * TXN_NSE_OPTIONS
+                txn_charges = turnover * TaxConfig.TXN_NSE_OPTIONS
         else:
             txn_charges = turnover * 0.00002  # Default fallback
         
         fees += txn_charges
 
-        # GST on brokerage and transaction charges: 18%
-        # Note: GST is NOT applied on STT or Stamp Duty
-        fees *= 1.18
+        # GST on brokerage and transaction charges
+        fees *= (1 + TaxConfig.GST_RATE)
 
         # STT Calculation
         stt = 0.0
         if instrument.is_equity:
             # Assuming Intraday for now as safe default. For delivery it's higher (0.1% on both sides).
-            stt = (exit_price * quantity) * STT_EQUITY_INTRADAY_SELL
+            stt = (exit_price * quantity) * TaxConfig.STT_EQUITY_INTRADAY_SELL
         elif instrument.is_future:
-            stt = (exit_price * quantity) * STT_FUTURES_SELL
+            stt = (exit_price * quantity) * TaxConfig.STT_FUTURES_SELL
         elif instrument.is_option:
-            stt = (exit_price * quantity) * STT_OPTIONS_SELL
+            stt = (exit_price * quantity) * TaxConfig.STT_OPTIONS_SELL
 
         fees += stt
         
-        # SEBI charges: Rs 10 per crore
-        fees += (turnover / 10000000) * 10
+        # SEBI charges
+        fees += turnover * TaxConfig.SEBI_CHARGES
         
-        # Stamp duty: 0.003% on buy side
-        fees += (entry_price * quantity) * 0.00003
+        # Stamp duty: on buy side
+        fees += (entry_price * quantity) * TaxConfig.STAMP_DUTY_BUY
         
         return fees
     

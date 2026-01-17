@@ -226,6 +226,24 @@ class ExecutionConfig:
         self.tops_cap_per_sec = config.get("tops_cap_per_sec", 8)
 
 
+class TaxConfig:
+    """Tax and Charges Configuration (Feb 2025 compliant)"""
+    # STT Rates (Effective Oct 1, 2024)
+    STT_EQUITY_INTRADAY_SELL = 0.00025  # 0.025%
+    STT_FUTURES_SELL = 0.0002           # 0.02% (Updated from 0.0125%)
+    STT_OPTIONS_SELL = 0.001            # 0.1% on premium (Updated from 0.0625%)
+
+    # Exchange Transaction Charges (NSE)
+    TXN_NSE_EQUITY = 0.0000325          # 0.00325%
+    TXN_NSE_FUTURES = 0.000019          # 0.0019%
+    TXN_NSE_OPTIONS = 0.0005            # 0.05% (on premium)
+
+    # Other Charges
+    GST_RATE = 0.18                     # 18% on Brokerage + Txn Charges
+    SEBI_CHARGES = 0.000001             # Rs 10 per crore (0.0001%)
+    STAMP_DUTY_BUY = 0.00003            # 0.003% on buy side only
+
+
 class AppConfig:
     """Main application configuration loaded from YAML"""
     
