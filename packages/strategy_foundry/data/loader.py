@@ -1,120 +1,116 @@
-"""Data Loader for Strategy Foundry"""
 import os
-import pandas as pd
 import requests
-import time
+import pandas as pd
 from datetime import datetime, timedelta
-from pathlib import Path
-from io import StringIO
+import time
 import structlog
-import yaml
+import io
 
 logger = structlog.get_logger(__name__)
 
-CACHE_DIR = Path(__file__).parent / "cache"
-CONFIG_DIR = Path(__file__).parent.parent / "configs"
-INSTRUMENT_MAP_PATH = CONFIG_DIR / "instrument_map.yaml"
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+# Ensure cache dir exists
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Default config if file missing
-DEFAULT_INSTRUMENT_MAP = {
-    "NIFTY": {"research": "^NSEI", "proxy": "NIFTYBEES.NS"},
-    "SENSEX": {"research": "^BSESN", "proxy": "SENSEXBEES.NS"} # Fallback examples
+YAHOO_MAP = {
+    "NIFTY": "^NSEI",
+    "SENSEX": "^BSESN"
 }
 
-class DataLoader:
-    def __init__(self, cache_dir: Path = CACHE_DIR):
-        self.cache_dir = cache_dir
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.instrument_map = self._load_map()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
-        }
+def get_data(symbol: str, lookback_days: int = 2000, force_refresh: bool = False) -> pd.DataFrame:
+    """
+    Get OHLCV data for symbol.
+    1. Try cache.
+    2. If stale or missing, download from Yahoo.
+    3. Normalize.
+    """
+    yahoo_symbol = YAHOO_MAP.get(symbol, symbol)
+    cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
 
-    def _load_map(self):
-        if INSTRUMENT_MAP_PATH.exists():
-             with open(INSTRUMENT_MAP_PATH) as f:
-                return yaml.safe_load(f)
-        return DEFAULT_INSTRUMENT_MAP
-
-    def get_data(self, symbol: str, lookback_days: int = 2000) -> pd.DataFrame:
-        """
-        Get daily OHLCV data for a symbol.
-        1. Check cache
-        2. If stale/missing, download
-        """
-        mapping = self.instrument_map.get(symbol)
-        if not mapping:
-             raise ValueError(f"Unknown symbol: {symbol}")
-
-        research_symbol = mapping["research"]
-        file_path = self.cache_dir / f"{symbol}.csv"
-
-        if self._is_cache_valid(file_path):
-            df = pd.read_csv(file_path, parse_dates=["Date"], index_col="Date")
-            logger.info("Loaded from cache", symbol=symbol, rows=len(df))
-            return df
-
-        # Download
-        logger.info("Downloading data", symbol=symbol, ticker=research_symbol)
-        df = self._download_yahoo(research_symbol, lookback_days)
-
-        if df.empty and "proxy" in mapping:
-            logger.warning("Primary download failed, trying proxy", symbol=symbol, proxy=mapping["proxy"])
-            df = self._download_yahoo(mapping["proxy"], lookback_days)
-
-        if not df.empty:
-            df.to_csv(file_path)
-            # Try parquet if available (optional)
+    # Check cache
+    if not force_refresh and os.path.exists(cache_path):
+        modified_time = datetime.fromtimestamp(os.path.getmtime(cache_path))
+        # If cache is from today (and market closed or currently trading), we might want to refresh?
+        # For simple daily backtest, if cache is less than 12 hours old, we stick with it.
+        if datetime.now() - modified_time < timedelta(hours=4):
+            logger.info(f"Loading {symbol} from cache")
             try:
-                import pyarrow
-                df.to_parquet(file_path.with_suffix(".parquet"))
-            except ImportError:
-                pass
+                df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+                return _normalize(df)
+            except Exception as e:
+                logger.error(f"Failed to load cache: {e}")
 
-        return df
+    # Download
+    logger.info(f"Downloading {symbol} from Yahoo")
+    try:
+        df = _download_yahoo(yahoo_symbol, lookback_days)
+        if not df.empty:
+            df.to_csv(cache_path)
+            return _normalize(df)
+    except Exception as e:
+        logger.error(f"Failed to download {symbol}: {e}")
+        # Fallback to cache if exists
+        if os.path.exists(cache_path):
+            logger.warning("Falling back to stale cache")
+            df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+            return _normalize(df)
 
-    def _is_cache_valid(self, path: Path) -> bool:
-        if not path.exists():
-            return False
+    return pd.DataFrame()
 
-        # Check if modified today (simple check)
-        mtime = datetime.fromtimestamp(path.stat().st_mtime)
-        return mtime.date() == datetime.now().date()
+def _download_yahoo(symbol: str, lookback_days: int) -> pd.DataFrame:
+    end = int(time.time())
+    start = int((datetime.now() - timedelta(days=lookback_days)).timestamp())
 
-    def _download_yahoo(self, ticker: str, days: int) -> pd.DataFrame:
-        """Download from Yahoo Finance query1 endpoint"""
-        end = int(time.time())
-        start = int((datetime.now() - timedelta(days=days)).timestamp())
+    url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}"
+    params = {
+        "period1": start,
+        "period2": end,
+        "interval": "1d",
+        "events": "history",
+        "includeAdjustedClose": "true"
+    }
 
-        url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={start}&period2={end}&interval=1d&events=history"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+    }
 
-        try:
-            resp = requests.get(url, headers=self.headers, timeout=10)
-            if resp.status_code != 200:
-                logger.error("Download failed", code=resp.status_code, text=resp.text[:100])
-                return pd.DataFrame()
+    response = requests.get(url, params=params, headers=headers)
+    response.raise_for_status()
 
-            df = pd.read_csv(StringIO(resp.text))
+    df = pd.read_csv(io.StringIO(response.text))
+    return df
 
-            # Normalize
-            df["Date"] = pd.to_datetime(df["Date"])
-            df.set_index("Date", inplace=True)
-            df.sort_index(inplace=True)
+def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize columns and index.
+    """
+    # Standardize columns
+    df.columns = [c.lower().replace(" ", "") for c in df.columns]
 
-            # Rename cols to lowercase
-            df.rename(columns={
-                "Open": "open", "High": "high", "Low": "low",
-                "Close": "close", "Volume": "volume", "Adj Close": "adj_close"
-            }, inplace=True)
+    # Ensure Date index
+    if 'date' in df.columns:
+        df.set_index('date', inplace=True)
 
-            # Drop NaNs
-            df.dropna(inplace=True)
+    df.index = pd.to_datetime(df.index, utc=True)
 
-            # Ensure unique index
-            df = df[~df.index.duplicated(keep='first')]
+    # Convert to Asia/Kolkata
+    df.index = df.index.tz_convert("Asia/Kolkata")
 
-            return df[["open", "high", "low", "close", "volume"]]
+    # Drop rows with NaN
+    df.dropna(inplace=True)
 
-        except Exception as e:
-            logger.error("Download exception", error=str(e))
-            return pd.DataFrame()
+    # Ensure required columns
+    required = {'open', 'high', 'low', 'close', 'volume'}
+    if not required.issubset(df.columns):
+        # Adjust close might be present
+        if 'adjclose' in df.columns:
+             # Use adjclose as close if preferred, but for now stick to Close
+             pass
+        raise ValueError(f"Missing columns: {required - set(df.columns)}")
+
+    return df[['open', 'high', 'low', 'close', 'volume']].sort_index()
+
+if __name__ == "__main__":
+    # Test
+    df = get_data("NIFTY", lookback_days=30)
+    print(df.tail())

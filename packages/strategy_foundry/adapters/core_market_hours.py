@@ -1,40 +1,18 @@
-"""Adapter for Core Market Hours"""
+from packages.core.market_hours import MarketHoursGuard
 from datetime import datetime
 import pytz
 
-try:
-    from packages.core.market_hours import MarketHoursGuard as CoreGuard
-    # Ensure it's available
-    _ = CoreGuard
-except ImportError:
-    CoreGuard = None
-
-IST = pytz.timezone("Asia/Kolkata")
-
-class MarketHoursAdapter:
+class MarketAdapter:
     def __init__(self):
-        if CoreGuard:
-            self.core = CoreGuard()
-        else:
-            self.core = None
+        self.guard = MarketHoursGuard()
+        self.timezone = pytz.timezone("Asia/Kolkata")
 
     def is_market_open(self, dt: datetime = None) -> bool:
-        if self.core:
-            return self.core.is_market_open(dt)
+        return self.guard.is_market_open(dt)
 
-        # Fallback
-        if dt is None:
-            dt = datetime.now(IST)
+    def is_holiday(self, dt: datetime) -> bool:
+        # Check against guard's holiday list
         if dt.tzinfo is None:
-            dt = IST.localize(dt)
-        else:
-            dt = dt.astimezone(IST)
-
-        # Simple Mon-Fri 09:15-15:30
-        if dt.weekday() >= 5: return False
-
-        t = dt.time()
-        start = datetime.strptime("09:15", "%H:%M").time()
-        end = datetime.strptime("15:30", "%H:%M").time()
-
-        return start <= t <= end
+            dt = self.timezone.localize(dt)
+        date_str = dt.date().isoformat()
+        return date_str in self.guard.trading_holidays

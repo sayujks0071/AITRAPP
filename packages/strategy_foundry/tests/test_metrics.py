@@ -1,15 +1,15 @@
-"""Tests for Metrics"""
-import unittest
 import pandas as pd
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
-class TestMetrics(unittest.TestCase):
-    def test_metrics_calc(self):
-        dates = pd.date_range("2023-01-01", periods=100)
-        equity = pd.Series([100 * (1.01 ** i) for i in range(100)], index=dates) # Steady 1% daily
-        trades = pd.DataFrame([{'pnl': 10}, {'pnl': -5}])
+def test_metrics_calc():
+    equity = pd.Series([100, 105, 110, 108, 115], index=pd.date_range("2023-01-01", periods=5))
+    trades = pd.DataFrame({
+        "pnl": [5, 5, -2, 7],
+        "pnl_pct": [0.05, 0.05, -0.02, 0.06]
+    })
 
-        m = calculate_metrics(equity, trades)
-        self.assertGreater(m['cagr'], 0)
-        self.assertGreater(m['sharpe'], 0)
-        self.assertEqual(m['trades'], 2)
+    m = calculate_metrics(equity, trades)
+
+    assert m['total_return'] == 0.15
+    assert m['trades'] == 4
+    assert m['max_drawdown'] < 0
