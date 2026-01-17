@@ -280,48 +280,54 @@ class ExecutionEngine:
             exit_orders.append(stop_order.order_id)
         
         # 2. Take Profit 1
+        tp1_placed_qty = 0
         if signal.take_profit_1:
             tp1_quantity = int(quantity * 0.5)  # 50% partial
             
-            tp1_client_order_id = f"{parent_order_id}_TP1"
-            
-            tp1_order = await self._place_order(
-                tradingsymbol=signal.instrument.tradingsymbol,
-                exchange=signal.instrument.exchange,
-                transaction_type=stop_transaction,
-                quantity=tp1_quantity,
-                order_type="LIMIT",
-                price=signal.take_profit_1,
-                product="MIS",
-                client_order_id=tp1_client_order_id,
-                parent_order_id=parent_order_id,
-                is_take_profit=True
-            )
-            
-            if tp1_order:
-                exit_orders.append(tp1_order.order_id)
+            if tp1_quantity > 0:
+                tp1_client_order_id = f"{parent_order_id}_TP1"
+
+                tp1_order = await self._place_order(
+                    tradingsymbol=signal.instrument.tradingsymbol,
+                    exchange=signal.instrument.exchange,
+                    transaction_type=stop_transaction,
+                    quantity=tp1_quantity,
+                    order_type="LIMIT",
+                    price=signal.take_profit_1,
+                    product="MIS",
+                    client_order_id=tp1_client_order_id,
+                    parent_order_id=parent_order_id,
+                    is_take_profit=True
+                )
+
+                if tp1_order:
+                    exit_orders.append(tp1_order.order_id)
+                    tp1_placed_qty = tp1_quantity
         
         # 3. Take Profit 2
         if signal.take_profit_2:
-            tp2_quantity = quantity - int(quantity * 0.5)
+            # If TP1 was placed, remainder goes to TP2.
+            # If TP1 was NOT placed (None or qty=0), TP2 gets full/remaining quantity.
+            tp2_quantity = quantity - tp1_placed_qty
             
-            tp2_client_order_id = f"{parent_order_id}_TP2"
-            
-            tp2_order = await self._place_order(
-                tradingsymbol=signal.instrument.tradingsymbol,
-                exchange=signal.instrument.exchange,
-                transaction_type=stop_transaction,
-                quantity=tp2_quantity,
-                order_type="LIMIT",
-                price=signal.take_profit_2,
-                product="MIS",
-                client_order_id=tp2_client_order_id,
-                parent_order_id=parent_order_id,
-                is_take_profit=True
-            )
-            
-            if tp2_order:
-                exit_orders.append(tp2_order.order_id)
+            if tp2_quantity > 0:
+                tp2_client_order_id = f"{parent_order_id}_TP2"
+
+                tp2_order = await self._place_order(
+                    tradingsymbol=signal.instrument.tradingsymbol,
+                    exchange=signal.instrument.exchange,
+                    transaction_type=stop_transaction,
+                    quantity=tp2_quantity,
+                    order_type="LIMIT",
+                    price=signal.take_profit_2,
+                    product="MIS",
+                    client_order_id=tp2_client_order_id,
+                    parent_order_id=parent_order_id,
+                    is_take_profit=True
+                )
+
+                if tp2_order:
+                    exit_orders.append(tp2_order.order_id)
         
         # Register OCO group
         if exit_orders:
