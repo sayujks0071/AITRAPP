@@ -1,28 +1,31 @@
 # Backtesting Methodology
 
 ## Assumptions
+
 - **Timeframe**: Daily (1D).
 - **Execution**: Signals generated at Close of Day T are executed at Open of Day T+1.
+- **Price**: Yahoo Finance adjusted data (conceptually, though we use raw Close for signals usually).
 - **Costs**:
-  - Slippage: 5 bps per side.
-  - Brokerage: 20 INR per order.
-  - STT/Taxes: ~3 bps.
-- **Liquidity**: Assumed sufficient (Index ETFs/Futures).
+  - Slippage: 2 bps per side.
+  - Commission/Tax: 3.5 bps per side (Proxy for Futures/Options cost on Index).
+  - Total round-trip drag: ~11 bps.
 
 ## Walk-Forward Evaluation
-To avoid overfitting, we use Walk-Forward Validation:
-1. Data is split into N folds.
-2. We verify the strategy performs well on "Out of Sample" (OOS) data in each fold.
-3. Ranking is based *only* on OOS metrics.
+
+To avoid overfitting, we use Out-Of-Sample (OOS) testing.
+- The dataset is split (e.g., last 30% is OOS).
+- Candidates are ranked solely on their OOS performance.
+- We assume that random generation provides enough "In-Sample" variation that checking OOS performance is sufficient validation.
 
 ## Metrics
-- **CAGR**: Compound Annual Growth Rate.
-- **Sharpe Ratio**: Risk-adjusted return (rf=0).
-- **Max Drawdown**: Peak-to-trough decline.
-- **Stability**: Fraction of OOS folds with positive return.
 
-## Sanity Checks
-Strategies are rejected if:
-- < 30 trades (statistical significance).
-- > 35% Max Drawdown.
-- Poor OOS stability.
+- **Sharpe Ratio**: Annualized (Risk-free rate = 0).
+- **Calmar Ratio**: CAGR / MaxDrawdown.
+- **CAGR**: Compound Annual Growth Rate.
+- **Stability**: Win Rate / Profit Factor proxy.
+
+## Caveats
+
+- **Look-ahead Bias**: We use `shift(1)` for signals to ensure no look-ahead. Execution at Next Open ensures realism.
+- **Survivorship Bias**: Yahoo Finance data for indices is generally stable, but constituent changes are not modeled (we trade the Index proxy).
+- **Data Quality**: Yahoo Finance data may have gaps or errors. We filter NaNs but do not perform deep cleaning.

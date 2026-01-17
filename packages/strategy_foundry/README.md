@@ -1,30 +1,36 @@
 # Strategy Foundry
-A self-generating strategy lab for NIFTY/SENSEX.
 
-## Overview
-This module runs hourly to:
-1. Fetch latest daily OHLC data (cached).
-2. Generate random trading strategies (Trend, Mean Reversion).
-3. Backtest them on Daily timeframe.
-4. Perform Walk-Forward Evaluation to prevent overfitting.
-5. Select a "Champion" based on OOS metrics.
-6. Publish a signal JSON if market is open.
-
-## Usage
-### Run Locally
-```bash
-# Fast mode (fewer candidates, faster run)
-export FAST_MODE=1
-python -m packages.strategy_foundry.run_hourly
-```
-
-### Output
-Artifacts are stored in `results/`:
-- `runs/<timestamp>/`: Leaderboard, metrics.
-- `champions/`: JSON files of promoted strategies.
-- `live_signal.json`: The latest signal from the current champion.
+A self-generating strategy lab that runs hourly to discover, backtest, and promote trading strategies for NIFTY/SENSEX.
 
 ## Architecture
-- **Hybrid**: Reuses `packages.core` indicators/hours but owns its research logic.
-- **Safe**: No real order placement. Only outputs JSON.
-- **Deterministic**: Seeded randomness (where applicable) and stable token IDs.
+
+- **Data**: Downloads daily OHLCV from Yahoo Finance (^NSEI, ^BSESN) via `requests`. Caches to CSV.
+- **Factory**: Generates random strategies using a bounded grammar (Trend, Mean Reversion, Filters, Risk).
+- **Backtest**: Daily timeframe, next-bar open execution. Uses `packages.core.indicators` (via adapters) for calculations.
+- **Selection**: Walk-forward evaluation (OOS metrics). Ranks by Sharpe, Calmar, CAGR.
+- **Live**: Publishes `live_signal.json` (No real orders).
+
+## Usage
+
+### Local Run
+
+```bash
+# Full mode
+python -m packages.strategy_foundry.run_hourly
+
+# Fast mode (fewer candidates)
+FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
+```
+
+### Outputs
+
+Results are stored in `packages/strategy_foundry/results/`:
+- `runs/<timestamp>/`: Artifacts for each run.
+- `champions/`: JSON files of promoted champions.
+- `leaderboard.csv`: Historical performance of candidates.
+- `leaderboard.md`: Top 20 leaderboard.
+- `live_signal.json`: Current trade signal (if market open).
+
+## CI/CD
+
+Runs hourly via GitHub Actions to continuously explore the parameter space.

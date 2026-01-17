@@ -1,27 +1,23 @@
-"""Tests for Data Loader"""
-import unittest
-from pathlib import Path
+import pytest
 from unittest.mock import patch, MagicMock
+from packages.strategy_foundry.data.loader import get_data
 import pandas as pd
-from packages.strategy_foundry.data.loader import DataLoader
 
-class TestDataLoader(unittest.TestCase):
-    def setUp(self):
-        self.loader = DataLoader(cache_dir=Path("/tmp/test_cache"))
+def test_loader_cache_logic():
+    with patch("packages.strategy_foundry.data.loader.os.path.exists") as mock_exists, \
+         patch("packages.strategy_foundry.data.loader.os.path.getmtime") as mock_mtime, \
+         patch("packages.strategy_foundry.data.loader.pd.read_csv") as mock_read:
 
-    @patch('requests.get')
-    def test_download_yahoo(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "Date,Open,High,Low,Close,Adj Close,Volume\n2023-01-01,100,110,90,105,105,1000"
-        mock_get.return_value = mock_resp
+        mock_exists.return_value = True
+        # Mock mtime to be recent
+        import time
+        mock_mtime.return_value = time.time()
 
-        df = self.loader._download_yahoo("TEST", 10)
-        self.assertFalse(df.empty)
-        self.assertIn('close', df.columns)
-        self.assertEqual(len(df), 1)
+        mock_read.return_value = pd.DataFrame({
+            "open": [100], "high": [110], "low": [90], "close": [105], "volume": [1000]
+        }, index=pd.to_datetime(["2023-01-01"]))
 
-    def test_cache_validation(self):
-        p = Path("/tmp/test_cache/test.csv")
-        if p.exists(): p.unlink()
-        self.assertFalse(self.loader._is_cache_valid(p))
+        # Should return cached data
+        df = get_data("NIFTY")
+        assert not df.empty
+        assert "close" in df.columns

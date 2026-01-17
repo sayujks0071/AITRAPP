@@ -1,86 +1,110 @@
-"""Strategy Generator"""
+import time
 import random
-import hashlib
-import json
-from typing import List, Dict, Any
-from .grammar import Rule, TrendFollowingRule, SupertrendRule, RSIReversionRule, StopLossRule
+from typing import List
+from .grammar import StrategyCandidate, hash_strategy
 from .parameter_space import ParameterSpace
 
-class StrategyCandidate:
-    def __init__(self, entry_rule: Rule, exit_rule: Rule, stop_loss: StopLossRule):
-        self.entry_rule = entry_rule
-        self.exit_rule = exit_rule # Can be same as entry (reversal)
-        self.stop_loss = stop_loss
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "entry": self.entry_rule.description(),
-            "exit": self.exit_rule.description(),
-            "stop": self.stop_loss.description()
-        }
-
-    @property
-    def id(self) -> str:
-        s = json.dumps(self.to_dict(), sort_keys=True)
-        return hashlib.md5(s.encode()).hexdigest()
-
-    def generate_positions(self, df, indicators):
-        # 1. Entry Signal
-        entry_sig = self.entry_rule.generate_signal(df, indicators)
-
-        # 2. Apply SL (handled in backtest engine usually, but we can simulate signal cut here if we had state)
-        # For vector backtest, we just pass the raw entry signal and let engine handle stops/exits.
-
-        # If exit rule is different, we combine.
-        # Simple mode: If entry != 0, take it.
-        # If exit != 0, take it (usually 0 to flatten).
-
-        # We return the raw signal series to be processed by engine
-        return entry_sig
-
 class StrategyGenerator:
-    def __init__(self):
-        self.params = ParameterSpace()
 
-    def generate(self, n: int = 10) -> List[StrategyCandidate]:
+    def generate_candidates(self, n: int = 50) -> List[StrategyCandidate]:
         candidates = []
-        seen = set()
+        seen_hashes = set()
 
-        while len(candidates) < n:
-            strat = self._create_random_strategy()
-            if strat.id not in seen:
-                seen.add(strat.id)
-                candidates.append(strat)
+        attempts = 0
+        while len(candidates) < n and attempts < n * 5:
+            attempts += 1
+            strategy_def = self._create_random_strategy()
+            sid = hash_strategy(strategy_def)
+
+            if sid in seen_hashes:
+                continue
+
+            seen_hashes.add(sid)
+            candidates.append(StrategyCandidate(
+                id=sid,
+                source_code=strategy_def,
+                created_at=time.time()
+            ))
 
         return candidates
 
-    def _create_random_strategy(self) -> StrategyCandidate:
-        # Pick strategy type
-        type_ = random.choice(["trend_ema", "trend_supertrend", "mean_rsi"])
+    def _create_random_strategy(self):
+        # Decide type: Trend or Mean Reversion
+        # Bias towards trend for daily timeframe
+        is_trend = random.random() < 0.7
 
-        if type_ == "trend_ema":
-            # Exclude the last element for fast, to ensure slow has options
-            fast = random.choice(self.params.EMA_PERIODS[:-1])
-            slow = random.choice([p for p in self.params.EMA_PERIODS if p > fast])
-            entry = TrendFollowingRule(fast, slow)
-            # For trend, exit is usually reverse signal
-            exit_rule = entry
+        logic_blocks = []
 
-        elif type_ == "trend_supertrend":
-            per = random.choice(self.params.SUPERTREND_PERIODS)
-            mul = random.choice(self.params.SUPERTREND_MULTIPLIERS)
-            entry = SupertrendRule(per, mul)
-            exit_rule = entry
+        if is_trend:
+            logic_blocks.append(self._make_trend_block())
+            filter_block = self._make_filter_block()
+            if filter_block:
+                logic_blocks.append(filter_block)
+        else:
+            logic_blocks.append(self._make_mean_reversion_block())
+            # Usually mean reversion needs a regime filter (e.g. only if ADX < 25)
+            # But we'll keep it simple for now
 
-        else: # mean_rsi
-            per = random.choice(self.params.RSI_PERIODS)
-            b = random.choice(self.params.RSI_BOUNDS)
-            entry = RSIReversionRule(per, b[0], b[1])
-            exit_rule = entry # Simple reversal
+        risk_config = self._make_risk_config()
 
-        # Stop Loss
-        atr_p = random.choice(self.params.ATR_PERIODS)
-        atr_m = random.choice(self.params.ATR_SL_MULTIPLIERS)
-        sl = StopLossRule(atr_p, atr_m)
+        return {
+            "type": "Trend" if is_trend else "MeanReversion",
+            "logic": logic_blocks,
+            "risk": risk_config
+        }
 
-        return StrategyCandidate(entry, exit_rule, sl)
+    def _make_trend_block(self):
+        choice = ParameterSpace.get_trend_logic()
+        if choice == "ema_crossover":
+            fast = ParameterSpace.random_ma_period()
+            slow = ParameterSpace.random_ma_period()
+            if fast >= slow: fast, slow = 10, 50 # Fallback correction
+            return {
+                "type": "ema_crossover",
+                "params": {"fast": fast, "slow": slow}
+            }
+        elif choice == "supertrend":
+            return {
+                "type": "supertrend",
+                "params": {"period": 10, "multiplier": 3.0} # Keep standard for now or randomize
+            }
+        elif choice == "donchian":
+            return {
+                "type": "donchian",
+                "params": {"period": 20}
+            }
+        return {"type": "noop"}
+
+    def _make_mean_reversion_block(self):
+        choice = ParameterSpace.get_mean_reversion_logic()
+        if choice == "rsi_reversion":
+            return {
+                "type": "rsi_reversion",
+                "params": {
+                    "period": ParameterSpace.random_rsi_period(),
+                    "lower": random.choice(ParameterSpace.RSI_OVERSOLD),
+                    "upper": random.choice(ParameterSpace.RSI_OVERBOUGHT)
+                }
+            }
+        return {"type": "noop"}
+
+    def _make_filter_block(self):
+        choice = ParameterSpace.get_filter_logic()
+        if choice == "adx_filter":
+            return {
+                "type": "adx_filter",
+                "params": {"period": 14, "threshold": random.choice(ParameterSpace.ADX_TRENDING)}
+            }
+        elif choice == "regime_filter":
+             return {
+                "type": "regime_filter",
+                "params": {"ma_period": 200}
+            }
+        return None
+
+    def _make_risk_config(self):
+        return {
+            "stop_loss_atr": random.choice(ParameterSpace.SL_ATR_MULT),
+            "take_profit_atr": random.choice(ParameterSpace.TP_ATR_MULT),
+            "trailing_stop": random.choice(ParameterSpace.TRAILING_SL)
+        }

@@ -1,183 +1,148 @@
-"""Hourly Runner"""
 import os
 import sys
-import argparse
+import time
+import pandas as pd
 import structlog
 from datetime import datetime
-import pandas as pd
-import json
+import pytz
 
-from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.factory.generator import StrategyGenerator, StrategyCandidate
-from packages.strategy_foundry.factory.factory import StrategyFactory
-from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.data.loader import get_data
+from packages.strategy_foundry.factory.generator import StrategyGenerator
+from packages.strategy_foundry.factory.registry import CandidateRegistry
 from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
-from packages.strategy_foundry.backtest.sanity import check_sanity
-from packages.strategy_foundry.selection.ranker import calculate_score
+from packages.strategy_foundry.selection.ranker import score_candidate
 from packages.strategy_foundry.selection.champion_store import ChampionStore
 from packages.strategy_foundry.selection.promote import should_promote
-from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
-from packages.strategy_foundry.live.signal_publisher import SignalPublisher
+from packages.strategy_foundry.live.signal_publisher import publish_signal
 
 logger = structlog.get_logger(__name__)
 
-def run():
-    # 0. Config
-    FAST_MODE = os.getenv("FAST_MODE", "0") == "1"
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+RESULTS_DIR = "packages/strategy_foundry/results"
+LEADERBOARD_CSV = os.path.join(RESULTS_DIR, "leaderboard.csv")
+LEADERBOARD_MD = os.path.join(RESULTS_DIR, "leaderboard.md")
 
-    # 1. Setup
-    loader = DataLoader()
-    generator = StrategyGenerator()
-    wf_eval = WalkForwardEvaluator(folds=2 if FAST_MODE else 3)
-    champ_store = ChampionStore()
-    publisher = SignalPublisher()
-    market = MarketHoursAdapter()
+def main():
+    # 1. Config
+    fast_mode = os.environ.get("FAST_MODE", "0") == "1"
 
-    results_dir = f"packages/strategy_foundry/results/runs/{run_ts}"
+    n_candidates = 10 if fast_mode else 50
+    symbols = ["NIFTY", "SENSEX"]
 
-    for SYMBOL in ["NIFTY", "SENSEX"]:
-        logger.info(f"--- Processing {SYMBOL} ---")
+    run_ts = int(time.time())
+    run_dir = os.path.join(RESULTS_DIR, "runs", str(run_ts))
+    os.makedirs(run_dir, exist_ok=True)
 
-        # 2. Update Data
+    logger.info("Starting Hourly Run", fast_mode=fast_mode, run_dir=run_dir)
+
+    # 2. Update Data
+    data_map = {}
+    for sym in symbols:
         try:
-            df = loader.get_data(SYMBOL)
-        except Exception as e:
-            logger.error("Data update failed", error=str(e), symbol=SYMBOL)
-            publisher.publish_skipped(f"Data update failed for {SYMBOL}: {e}")
-            continue
-
-        if df.empty:
-            logger.warning("Empty data", symbol=SYMBOL)
-            continue
-
-        # 3. Generate Candidates
-        count = 10 if FAST_MODE else 50
-        candidates = generator.generate(n=count)
-
-        # 4. Evaluate Candidates
-        results = []
-
-        for cand in candidates:
-            # Full backtest for sanity
-            be = BacktestEngine(allow_short=False)
-            try:
-                bt_res = be.run(df, cand)
-            except Exception as e:
-                logger.debug("Backtest crash", error=str(e))
-                continue
-
-            # Sanity Check
-            passed, reason = check_sanity(bt_res['metrics'], FAST_MODE)
-            if not passed:
-                continue
-
-            # Walk Forward
-            oos_stats = wf_eval.evaluate(df, cand)
-            if not oos_stats:
-                continue
-
-            score = calculate_score(oos_stats)
-
-            results.append({
-                "candidate": cand,
-                "metrics": bt_res['metrics'],
-                "oos_metrics": oos_stats,
-                "score": score
-            })
-
-        # Sort by score
-        results.sort(key=lambda x: x['score'], reverse=True)
-
-        # 5. Champion Selection
-        current_champ_data = champ_store.load_current(symbol=SYMBOL)
-        final_champion = current_champ_data
-        promoted = False
-        best_new = None
-
-        if results:
-            best_new = results[0]
-            if current_champ_data:
-                # Compare
-                curr_score = current_champ_data.get('score', 0)
-                curr_dd = current_champ_data.get('oos_metrics', {}).get('oos_max_dd', 1.0)
-
-                new_score = best_new['score']
-                new_dd = best_new['oos_metrics']['oos_max_dd']
-
-                if should_promote(new_score, curr_score, new_dd, curr_dd):
-                    promoted = True
+            df = get_data(sym, lookback_days=2000) # Ensure enough history
+            if not df.empty:
+                data_map[sym] = df
             else:
-                # No current champion, promote best new
-                promoted = True
+                logger.warning(f"Data for {sym} is empty")
+        except Exception as e:
+            logger.error(f"Failed to load data for {sym}", error=str(e))
+
+    if not data_map:
+        logger.error("No data available, aborting")
+        return
+
+    # 3. Generate Candidates
+    generator = StrategyGenerator()
+    candidates = generator.generate_candidates(n=n_candidates)
+
+    registry = CandidateRegistry(run_dir)
+    registry.save_candidates(candidates)
+    logger.info(f"Generated {len(candidates)} candidates")
+
+    # 4. Evaluate (Walk-Forward / OOS)
+    evaluator = WalkForwardEvaluator()
+    results = []
+
+    # Helper to append to leaderboard
+    leaderboard_rows = []
+
+    for cand in candidates:
+        # Evaluate on NIFTY primarily for ranking, or aggregate?
+        # Plan says "Output per candidate per instrument".
+        # Ranking usually on primary instrument or average.
+        # Let's rank on NIFTY.
+
+        sym = "NIFTY"
+        if sym not in data_map: continue
+
+        df = data_map[sym]
+        metrics = evaluator.evaluate(df, cand)
+
+        score = score_candidate(metrics)
+
+        res = {
+            "run_ts": run_ts,
+            "id": cand.id,
+            "symbol": sym,
+            "score": score,
+            "metrics": metrics,
+            "summary": cand.summary
+        }
+        results.append((cand, metrics, score))
+
+        # Flatten for CSV
+        row = {
+            "run_ts": run_ts,
+            "id": cand.id,
+            "symbol": sym,
+            "score": round(score, 4),
+            "cagr": round(metrics.get('cagr', 0), 4),
+            "sharpe": round(metrics.get('sharpe', 0), 4),
+            "max_dd": round(metrics.get('max_drawdown', 0), 4),
+            "trades": metrics.get('trades', 0),
+            "summary": cand.summary
+        }
+        leaderboard_rows.append(row)
+
+    # Save Run Metrics
+    metrics_df = pd.DataFrame(leaderboard_rows)
+    metrics_df.to_csv(os.path.join(run_dir, "metrics.csv"), index=False)
+
+    # 5. Update Global Leaderboard
+    if os.path.exists(LEADERBOARD_CSV):
+        global_df = pd.read_csv(LEADERBOARD_CSV)
+        global_df = pd.concat([global_df, metrics_df], ignore_index=True)
+    else:
+        global_df = metrics_df
+
+    # Deduplicate by ID? No, same ID might be re-evaluated later with more data.
+    # But for leaderboard we might want unique strategies.
+    # Let's keep history.
+    global_df.to_csv(LEADERBOARD_CSV, index=False)
+
+    # Generate MD Leaderboard (Top 20 Unique by Score)
+    top_20 = global_df.sort_values("score", ascending=False).drop_duplicates("id").head(20)
+    with open(LEADERBOARD_MD, "w") as f:
+        f.write("# Strategy Foundry Leaderboard\n\n")
+        f.write(f"Last Updated: {datetime.now(pytz.timezone('Asia/Kolkata')).isoformat()}\n\n")
+        f.write(top_20.to_markdown(index=False))
+
+    # 6. Champion Selection
+    # Find best in CURRENT run
+    best_cand, best_metrics, best_score = max(results, key=lambda x: x[2]) if results else (None, {}, -float('inf'))
+
+    if best_cand:
+        store = ChampionStore(os.path.join(RESULTS_DIR, "champions"))
+        current_meta = store.load_current_metadata()
+        current_metrics = current_meta.get('metrics')
+
+        if should_promote(best_cand, best_metrics, current_metrics):
+            logger.info("Promoting new champion", id=best_cand.id, score=best_score)
+            store.promote_new_champion(best_cand, best_metrics, best_score)
         else:
-            logger.warning("No valid candidates found", symbol=SYMBOL)
+            logger.info("No promotion", best_score=best_score, current_score=current_meta.get('score'))
 
-        if promoted and best_new:
-            logger.info("Promoting new champion", symbol=SYMBOL, id=best_new['candidate'].id, score=best_new['score'])
-
-            # Serialize candidate
-            champ_dict = {
-                "id": best_new['candidate'].id,
-                "rules": best_new['candidate'].to_dict(),
-                "score": best_new['score'],
-                "metrics": best_new['metrics'],
-                "oos_metrics": best_new['oos_metrics'],
-                "timestamp": run_ts,
-                "symbol": SYMBOL
-            }
-            champ_store.save_new(champ_dict, run_ts, symbol=SYMBOL)
-            final_champion = champ_dict
-        elif not results and not final_champion:
-             # No candidates and no old champion
-             pass
-        else:
-            logger.info("Keeping current champion", symbol=SYMBOL)
-
-        # 6. Live Signal Generation
-        active_candidate = None
-        if promoted and best_new:
-            active_candidate = best_new['candidate']
-        elif final_champion:
-            try:
-                active_candidate = StrategyFactory.from_dict(final_champion['rules'])
-            except Exception as e:
-                logger.error("Failed to reconstruct champion", error=str(e))
-
-        # Publish logic
-        if active_candidate and market.is_market_open():
-            # Get latest signal
-            indicators = be._calc_indicators(df)
-            signals = active_candidate.generate_positions(df, indicators)
-
-            # Last signal (scalar)
-            last_sig = signals.iloc[-1]
-
-            publisher.publish(
-                signal=last_sig,
-                instrument=SYMBOL,
-                champion=final_champion,
-                status="OK"
-            )
-        elif not active_candidate:
-             publisher.publish_skipped(f"No active champion for {SYMBOL}")
-        else:
-            publisher.publish_skipped("Market Closed")
-
-        # 7. Artifacts
-        if results:
-            os.makedirs(results_dir, exist_ok=True)
-            top_10 = []
-            for r in results[:10]:
-                top_10.append({
-                    "id": r['candidate'].id,
-                    "score": r['score'],
-                    "cagr": r['metrics']['cagr'],
-                    "sharpe": r['metrics']['sharpe'],
-                    "rules": r['candidate'].to_dict()
-                })
-
-            pd.DataFrame(top_10).to_csv(f"{results_dir}/leaderboard_{SYMBOL}.csv")
+    # 7. Publish Live Signal
+    publish_signal()
 
 if __name__ == "__main__":
-    run()
+    main()

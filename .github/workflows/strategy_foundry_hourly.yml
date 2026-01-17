@@ -9,32 +9,29 @@ on:
       - 'packages/strategy_foundry/**'
 
 jobs:
-  run-foundry:
+  research:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install Dependencies
         run: |
-          pip install pandas numpy requests structlog pyyaml
-          # Install core if needed or minimal reqs
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pandas numpy requests structlog pytz pydantic
 
-      - name: Run Strategy Foundry
+      - name: Run Hourly Research
         env:
           FAST_MODE: ${{ github.event_name == 'pull_request' && '1' or '0' }}
           PYTHONPATH: .
         run: |
           python -m packages.strategy_foundry.run_hourly
 
-      - name: Upload Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Upload Results
+        uses: actions/upload-artifact@v3
         with:
-          name: foundry-results
+          name: strategy-foundry-results
           path: packages/strategy_foundry/results/

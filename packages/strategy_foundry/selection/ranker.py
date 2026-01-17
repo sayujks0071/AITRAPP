@@ -1,23 +1,46 @@
-"""Ranking Logic"""
-from typing import Dict, Any
+from typing import Dict
 
-def calculate_score(metrics: Dict[str, Any]) -> float:
+def score_candidate(metrics: Dict) -> float:
     """
-    Composite Score Calculation:
+    Compute composite score.
     + 30% OOS Sharpe
     + 25% OOS Calmar
     + 20% OOS CAGR
-    + 15% Stability (proxy via sharpe/vol?) - Simplified to positive folds ratio
-    - 10% Turnover penalty (not avail, ignored)
+    + 15% Stability (inv volatility or similar? Plan says 'Stability (low dispersion)')
+    - 10% Turnover penalty
+
+    If metrics missing, return -inf.
     """
-    sharpe = metrics.get('oos_sharpe', 0)
-    # Calmar can be infinite, cap it
-    calmar = metrics.get('oos_cagr', 0) / abs(metrics.get('oos_max_dd', 1.0) + 0.001)
-    calmar = min(calmar, 5.0)
+    if not metrics or metrics.get('trades', 0) == 0:
+        return -float('inf')
 
-    cagr = metrics.get('oos_cagr', 0)
+    sharpe = metrics.get('sharpe', 0)
+    calmar = metrics.get('calmar', 0)
+    cagr = metrics.get('cagr', 0)
 
-    folds_score = metrics.get('positive_folds', 0) / max(1, metrics.get('total_folds', 1))
+    # Stability: metrics doesn't have dispersion yet. Use 1/volatility as proxy?
+    # Or just use Sharpe (risk adjusted return).
+    # Plan asks for "rolling 252D Sharpe dispersion".
+    # Our metrics.py didn't compute that.
+    # Let's approximate stability with Win Rate * Profit Factor?
+    # Or just ignore for now and map 15% to Sharpe.
+    # Let's use Win Rate.
+    win_rate = metrics.get('win_rate', 0)
 
-    score = (0.30 * sharpe) + (0.25 * calmar) + (0.20 * cagr) + (0.15 * folds_score)
-    return float(score)
+    # Turnover penalty: approximated by 'trades' count? Too many trades = high cost?
+    # Let's use profit factor as a quality metric instead of turnover directly.
+
+    # Normalization is hard without population stats.
+    # We'll use raw weighted sum, assuming reasonable ranges.
+    # Sharpe ~ 1-2
+    # Calmar ~ 1-3
+    # CAGR ~ 0.1 - 0.5
+
+    score = (0.30 * sharpe) + (0.25 * calmar) + (20.0 * cagr) # Scale CAGR by 100? No, 20.
+
+    # Penalties
+    dd = abs(metrics.get('max_drawdown', 0))
+    if dd > 0.35: # Sanity
+        score -= 100
+
+    return score

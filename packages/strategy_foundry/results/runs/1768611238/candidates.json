@@ -1,0 +1,243 @@
+[
+  {
+    "id": "1822fde2f0d7bdc693ee766ca709ba18",
+    "source_code": {
+      "type": "MeanReversion",
+      "logic": [
+        {
+          "type": "rsi_reversion",
+          "params": {
+            "period": 7,
+            "lower": 25,
+            "upper": 70
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 3.0,
+        "take_profit_atr": 2.0,
+        "trailing_stop": false
+      }
+    },
+    "created_at": 1768611238.9652872
+  },
+  {
+    "id": "63801f95866b33d735f6c83a45af1421",
+    "source_code": {
+      "type": "Trend",
+      "logic": [
+        {
+          "type": "supertrend",
+          "params": {
+            "period": 10,
+            "multiplier": 3.0
+          }
+        },
+        {
+          "type": "adx_filter",
+          "params": {
+            "period": 14,
+            "threshold": 20
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 2.0,
+        "take_profit_atr": 2.0,
+        "trailing_stop": false
+      }
+    },
+    "created_at": 1768611238.965337
+  },
+  {
+    "id": "9b6b96385a9dec1b67a46338695796ee",
+    "source_code": {
+      "type": "MeanReversion",
+      "logic": [
+        {
+          "type": "rsi_reversion",
+          "params": {
+            "period": 21,
+            "lower": 20,
+            "upper": 80
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 3.0,
+        "take_profit_atr": 3.0,
+        "trailing_stop": false
+      }
+    },
+    "created_at": 1768611238.9653664
+  },
+  {
+    "id": "021113ae0dcd893b9818ad0066da4e26",
+    "source_code": {
+      "type": "Trend",
+      "logic": [
+        {
+          "type": "ema_crossover",
+          "params": {
+            "fast": 10,
+            "slow": 50
+          }
+        },
+        {
+          "type": "adx_filter",
+          "params": {
+            "period": 14,
+            "threshold": 20
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 3.0,
+        "take_profit_atr": 4.0,
+        "trailing_stop": true
+      }
+    },
+    "created_at": 1768611238.9653995
+  },
+  {
+    "id": "8a726c0852cb17bbbef5fc8a42e03968",
+    "source_code": {
+      "type": "MeanReversion",
+      "logic": [
+        {
+          "type": "rsi_reversion",
+          "params": {
+            "period": 21,
+            "lower": 30,
+            "upper": 80
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 1.5,
+        "take_profit_atr": 4.0,
+        "trailing_stop": false
+      }
+    },
+    "created_at": 1768611238.965424
+  },
+  {
+    "id": "bccc489303a1ce506e94abb8203443b4",
+    "source_code": {
+      "type": "MeanReversion",
+      "logic": [
+        {
+          "type": "rsi_reversion",
+          "params": {
+            "period": 7,
+            "lower": 25,
+            "upper": 65
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 1.5,
+        "take_profit_atr": 2.0,
+        "trailing_stop": true
+      }
+    },
+    "created_at": 1768611238.9654455
+  },
+  {
+    "id": "28b932f44b028f17dda906700a307ccd",
+    "source_code": {
+      "type": "Trend",
+      "logic": [
+        {
+          "type": "ema_crossover",
+          "params": {
+            "fast": 10,
+            "slow": 50
+          }
+        },
+        {
+          "type": "adx_filter",
+          "params": {
+            "period": 14,
+            "threshold": 20
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 3.0,
+        "take_profit_atr": 5.0,
+        "trailing_stop": false
+      }
+    },
+    "created_at": 1768611238.965482
+  },
+  {
+    "id": "6e6476aa31744557190d5a6acff6ffe5",
+    "source_code": {
+      "type": "Trend",
+      "logic": [
+        {
+          "type": "donchian",
+          "params": {
+            "period": 20
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 3.0,
+        "take_profit_atr": 0,
+        "trailing_stop": false
+      }
+    },
+    "created_at": 1768611238.965502
+  },
+  {
+    "id": "7a01950de7435297653fdae9624754c3",
+    "source_code": {
+      "type": "Trend",
+      "logic": [
+        {
+          "type": "donchian",
+          "params": {
+            "period": 20
+          }
+        },
+        {
+          "type": "adx_filter",
+          "params": {
+            "period": 14,
+            "threshold": 30
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 1.0,
+        "take_profit_atr": 4.0,
+        "trailing_stop": false
+      }
+    },
+    "created_at": 1768611238.9655697
+  },
+  {
+    "id": "3bc58f5356e21f98a92d19cee77f8960",
+    "source_code": {
+      "type": "MeanReversion",
+      "logic": [
+        {
+          "type": "rsi_reversion",
+          "params": {
+            "period": 7,
+            "lower": 20,
+            "upper": 80
+          }
+        }
+      ],
+      "risk": {
+        "stop_loss_atr": 2.0,
+        "take_profit_atr": 2.0,
+        "trailing_stop": true
+      }
+    },
+    "created_at": 1768611238.9655988
+  }
+]

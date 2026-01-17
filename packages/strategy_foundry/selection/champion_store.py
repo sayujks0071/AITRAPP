@@ -1,27 +1,51 @@
-"""Champion Storage"""
+import os
 import json
-from pathlib import Path
-from typing import Optional, Dict, Any
-
-CHAMPION_DIR = Path(__file__).parent.parent / "results" / "champions"
+import time
+from typing import Optional, Dict
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
 
 class ChampionStore:
-    def __init__(self):
-        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+    def __init__(self, champions_dir: str):
+        self.champions_dir = champions_dir
+        self.current_file = os.path.join(champions_dir, "current.json")
+        os.makedirs(champions_dir, exist_ok=True)
 
-    def load_current(self, symbol: str = "NIFTY") -> Optional[Dict[str, Any]]:
-        fname = CHAMPION_DIR / f"current_{symbol}.json"
-        if fname.exists():
-            with open(fname) as f:
-                return json.load(f)
-        return None
+    def load_current(self) -> Optional[StrategyCandidate]:
+        if not os.path.exists(self.current_file):
+            return None
+        try:
+            with open(self.current_file, "r") as f:
+                data = json.load(f)
+            return StrategyCandidate(**data['candidate'])
+        except Exception:
+            return None
 
-    def save_new(self, candidate: Dict[str, Any], timestamp: str, symbol: str = "NIFTY"):
-        # Save versioned
-        fname = f"{timestamp}_{symbol}_{candidate.get('id', 'unknown')}.json"
-        with open(CHAMPION_DIR / fname, 'w') as f:
-            json.dump(candidate, f, indent=2)
+    def load_current_metadata(self) -> Dict:
+        if not os.path.exists(self.current_file):
+            return {}
+        try:
+            with open(self.current_file, "r") as f:
+                data = json.load(f)
+            return data
+        except Exception:
+            return {}
+
+    def promote_new_champion(self, candidate: StrategyCandidate, metrics: Dict, score: float):
+        # Save historical version
+        timestamp = int(time.time())
+        filename = f"{timestamp}_{candidate.id}.json"
+
+        data = {
+            "promoted_at": timestamp,
+            "score": score,
+            "metrics": metrics,
+            "candidate": candidate.to_dict()
+        }
+
+        # Save history
+        with open(os.path.join(self.champions_dir, filename), "w") as f:
+            json.dump(data, f, indent=2)
 
         # Update current
-        with open(CHAMPION_DIR / f"current_{symbol}.json", 'w') as f:
-            json.dump(candidate, f, indent=2)
+        with open(self.current_file, "w") as f:
+            json.dump(data, f, indent=2)
