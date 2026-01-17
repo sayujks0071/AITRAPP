@@ -1,0 +1,21 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-7.4.4, pluggy-1.6.0 -- /home/jules/.pyenv/versions/3.12.12/bin/python3.12
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pytest.ini
+plugins: mock-3.12.0, cov-4.1.0, asyncio-0.23.3, anyio-4.12.1, Faker-22.0.0
+asyncio: mode=Mode.STRICT
+collecting ... collected 10 items
+
+tests/integration/test_auth_callback.py::TestKiteAuthCallback::test_callback_success PASSED [ 10%]
+tests/integration/test_auth_callback.py::TestKiteAuthCallback::test_callback_failure_status PASSED [ 20%]
+tests/integration/test_auth_callback.py::TestKiteAuthCallback::test_callback_missing_token PASSED [ 30%]
+tests/integration/test_auth_callback.py::TestKiteAuthCallback::test_callback_exception PASSED [ 40%]
+tests/integration/test_kite_auth_integration.py::TestKiteAuthIntegration::test_bootstrap_script_valid_session PASSED [ 50%]
+tests/integration/test_kite_auth_integration.py::TestKiteAuthIntegration::test_bootstrap_script_check_only_fails PASSED [ 60%]
+tests/integration/test_kite_auth_integration.py::TestKiteAuthIntegration::test_callback_server_flow PASSED [ 70%]
+tests/integration/test_kite_auth_integration.py::TestKiteAuthIntegration::test_bootstrap_end_to_end_mocked PASSED [ 80%]
+tests/integration/test_kite_auth_integration.py::TestKiteAuthIntegration::test_bootstrap_trading_mode_override PASSED [ 90%]
+tests/integration/test_kite_auth_integration.py::TestKiteAuthIntegration::test_bootstrap_trading_mode_paper PASSED [100%]
+
+======================== 10 passed, 1 warning in 2.41s =========================

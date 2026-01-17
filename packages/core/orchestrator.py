@@ -431,6 +431,35 @@ class TradingOrchestrator:
             db.commit()
             db.refresh(position)
             
+            # Add to in-memory positions (if not already present)
+            # This is critical if we deferred creation in _execute_signal
+            if not any(p.position_id == position.position_id for p in self.positions):
+                core_pos = Position(
+                    position_id=position.position_id,
+                    instrument=decision.signal.instrument,
+                    entry_time=position.opened_at or datetime.now(),
+                    entry_price=position.avg_price,
+                    quantity=position.qty,
+                    side=decision.signal.side,
+                    current_price=position.current_price,
+                    stop_loss=position.stop_loss,
+                    take_profit_1=position.take_profit_1,
+                    take_profit_2=position.take_profit_2,
+                    risk_amount=position.risk_amount or 0.0,
+                    status=PositionStatus.OPEN,
+                    entry_order_id=position.entry_order_id,
+                    strategy_name=position.strategy_name
+                )
+                self.positions.append(core_pos)
+                self.orders_placed_today += 1
+                logger.info("In-memory position created from fill event", position_id=core_pos.position_id)
+
+                # Notify strategy
+                for strategy in self.strategies:
+                    if strategy.name == core_pos.strategy_name:
+                        strategy.on_position_opened()
+                        break
+
             # Place stop/TP via OCO manager
             if self.oco_manager and decision.signal.stop_loss:
                 oco_group_id = self.oco_manager.create_oco_group(
@@ -870,39 +899,42 @@ class TradingOrchestrator:
                         "qty": quantity
                     }))
                 
-                # Create position
-                position = Position(
-                    position_id=f"POS_{datetime.now().strftime('%Y%m%d%H%M%S')}_{len(self.positions)}",
-                    instrument=signal.instrument,
-                    entry_time=datetime.now(),
-                    entry_price=order.average_price,
-                    quantity=order.filled_quantity,
-                    side=signal.side,
-                    current_price=order.average_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit_1=signal.take_profit_1,
-                    take_profit_2=signal.take_profit_2,
-                    risk_amount=signal.risk_amount,
-                    status=PositionStatus.OPEN,
-                    entry_order_id=order.order_id,
-                    strategy_name=signal.strategy_name
-                )
-                
-                self.positions.append(position)
-                self.orders_placed_today += 1
-                
-                # Notify strategy
-                for strategy in self.strategies:
-                    if strategy.name == signal.strategy_name:
-                        strategy.on_position_opened()
-                        break
-                
-                logger.info(
-                    "Position opened",
-                    position_id=position.position_id,
-                    instrument=signal.instrument.tradingsymbol,
-                    entry_price=order.average_price
-                )
+                # Create position if filled immediately
+                if result in (OrderResult.SUCCESS, OrderResult.PARTIAL):
+                    position = Position(
+                        position_id=f"POS_{datetime.now().strftime('%Y%m%d%H%M%S')}_{len(self.positions)}",
+                        instrument=signal.instrument,
+                        entry_time=datetime.now(),
+                        entry_price=order.average_price,
+                        quantity=order.filled_quantity,
+                        side=signal.side,
+                        current_price=order.average_price,
+                        stop_loss=signal.stop_loss,
+                        take_profit_1=signal.take_profit_1,
+                        take_profit_2=signal.take_profit_2,
+                        risk_amount=signal.risk_amount,
+                        status=PositionStatus.OPEN,
+                        entry_order_id=order.order_id,
+                        strategy_name=signal.strategy_name
+                    )
+
+                    self.positions.append(position)
+                    self.orders_placed_today += 1
+
+                    # Notify strategy
+                    for strategy in self.strategies:
+                        if strategy.name == signal.strategy_name:
+                            strategy.on_position_opened()
+                            break
+
+                    logger.info(
+                        "Position opened",
+                        position_id=position.position_id,
+                        instrument=signal.instrument.tradingsymbol,
+                        entry_price=order.average_price
+                    )
+                else:
+                    logger.info("Order placed (pending fill)", client_order_id=order.client_order_id)
         
         except Exception as e:
             logger.error("Signal execution failed", error=str(e), signal=signal)
