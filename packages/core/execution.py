@@ -66,6 +66,7 @@ class OrderResult(Enum):
     REJECTED = "REJECTED"
     TIMEOUT = "TIMEOUT"
     ERROR = "ERROR"
+    PLACED = "PLACED" # New result for non-blocking execution
 
 
 class ExecutionEngine:
@@ -111,7 +112,9 @@ class ExecutionEngine:
     async def execute_signal(
         self,
         signal: Signal,
-        quantity: int
+        quantity: int,
+        wait_for_fill: bool = True,
+        place_exits: bool = True
     ) -> tuple[OrderResult, Optional[Order]]:
         """
         Execute a trading signal with entry and attached stops/targets.
@@ -124,6 +127,8 @@ class ExecutionEngine:
         Args:
             signal: Trading signal
             quantity: Position size
+            wait_for_fill: If True, wait for entry fill before returning
+            place_exits: If True, place SL/TP orders after entry
         
         Returns:
             (OrderResult, Entry Order)
@@ -134,7 +139,9 @@ class ExecutionEngine:
                 strategy=signal.strategy_name,
                 instrument=signal.instrument.tradingsymbol,
                 side=signal.side,
-                quantity=quantity
+                quantity=quantity,
+                wait_for_fill=wait_for_fill,
+                place_exits=place_exits
             )
             
             # 1. Place entry order
@@ -144,6 +151,10 @@ class ExecutionEngine:
                 logger.error("Entry order rejected", signal=signal)
                 return OrderResult.REJECTED, None
             
+            # If not waiting for fill, return immediately
+            if not wait_for_fill:
+                return OrderResult.PLACED, entry_order
+
             # 2. Wait for entry fill (with timeout)
             filled = await self._wait_for_fill(entry_order.client_order_id, timeout=30)
             
@@ -169,8 +180,9 @@ class ExecutionEngine:
                         requested=quantity
                     )
 
-                    # Place exit orders for the FILLED quantity
-                    await self._place_exit_orders(signal, entry_order, entry_order.filled_quantity)
+                    if place_exits:
+                        # Place exit orders for the FILLED quantity
+                        await self._place_exit_orders(signal, entry_order, entry_order.filled_quantity)
 
                     return OrderResult.PARTIAL, entry_order
                 if filled_qty > 0:
@@ -181,15 +193,17 @@ class ExecutionEngine:
                         requested_qty=quantity
                     )
 
-                    # Place exit orders for the PARTIAL quantity
-                    await self._place_exit_orders(signal, entry_order, filled_qty)
+                    if place_exits:
+                        # Place exit orders for the PARTIAL quantity
+                        await self._place_exit_orders(signal, entry_order, filled_qty)
 
                     return OrderResult.PARTIAL, current_order
 
                 return OrderResult.TIMEOUT, entry_order
             
             # 3. Place exit orders (stop loss and take profits)
-            await self._place_exit_orders(signal, entry_order, quantity)
+            if place_exits:
+                await self._place_exit_orders(signal, entry_order, quantity)
             
             logger.info(
                 "Signal executed successfully",
@@ -684,3 +698,22 @@ class ExecutionEngine:
             order for order in self.orders.values()
             if order.strategy_name == strategy_name
         ]
+
+    def update_order_status(self, fill_event: dict) -> None:
+        """Update order status from external source (e.g. OrderWatcher)"""
+        client_order_id = fill_event.get("client_order_id")
+        if not client_order_id:
+            return
+
+        order_id = self.order_id_map.get(client_order_id)
+        if not order_id:
+            # If we don't have it mapped, it might be an order placed outside
+            # or before restart.
+            return
+
+        order = self.orders.get(order_id)
+        if order:
+            order.status = OrderStatus.COMPLETE
+            order.filled_quantity = fill_event.get("filled_qty", order.quantity)
+            order.average_price = fill_event.get("average_price", order.average_price)
+            logger.info("Order status updated externally", order_id=order_id, status="COMPLETE")
