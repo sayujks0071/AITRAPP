@@ -1,6 +1,8 @@
 # Kite Authentication Guide
 
 This document outlines the daily authentication process for the AITRAPP trading system using Zerodha Kite Connect.
+(Maintained by Jules - Kite Daily Auth Assistant)
+(Last Updated: 2025-02-22)
 
 ## Overview
 
@@ -61,7 +63,8 @@ python scripts/kite_auth_bootstrap.py
 To automate the check (and prompt if needed):
 
 ```bash
-# Run at 8:00 AM daily
+# Run at 8:00 AM daily (Asia/Kolkata)
+# Ensure TRADING_MODE is set to paper by default
 0 8 * * * cd /path/to/repo && TRADING_MODE=paper /usr/bin/python3 scripts/kite_auth_bootstrap.py >> /var/log/kite_auth.log 2>&1
 ```
 

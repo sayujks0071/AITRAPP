@@ -11,8 +11,18 @@ class KiteAuth:
     Dedicated Auth module for Zerodha Kite Connect.
     Handles session validation, login URL generation, and token exchange.
     Implements the daily manual login flow as per Kite Trade regulations.
+
+    This class ensures that:
+    1. We validate the existing session before prompting for login.
+    2. We generate the correct login URL.
+    3. We exchange the request token for an access token securely.
+    4. We persist the token to the environment (.env) for use by the application.
     """
     def __init__(self):
+        """
+        Initialize the KiteAuth instance.
+        Loads API keys and access token from environment variables.
+        """
         # Support both standard naming and the specific env var from instructions
         self.api_key = os.getenv("KITE_API_KEY") or os.getenv("kiteconnect_api_key")
         self.api_secret = os.getenv("KITE_API_SECRET") or os.getenv("kiteconnect_api_secret")
@@ -21,7 +31,7 @@ class KiteAuth:
         self.access_token = os.getenv("KITE_ACCESS_TOKEN")
 
         if not self.api_key:
-             logger.warning("KITE_API_KEY not found in environment.")
+             logger.warning("KITE_API_KEY not found in environment. Please check your .env file.")
 
         # Initialize KiteConnect
         # We don't pass access_token immediately if we are going to exchange it,
@@ -40,9 +50,10 @@ class KiteAuth:
         try:
             # profile() is a lightweight call to validate session
             self.kite.profile()
+            logger.debug("Session validation successful.")
             return True
         except exceptions.TokenException:
-            logger.info("Session invalid: TokenException.")
+            logger.info("Session invalid: TokenException (Token expired or invalid).")
             return False
         except exceptions.PermissionException:
             logger.info("Session invalid: PermissionException.")
@@ -71,6 +82,7 @@ class KiteAuth:
             raise ValueError("API Secret is missing")
 
         try:
+            logger.info("Exchanging request_token for access_token...")
             data = self.kite.generate_session(request_token, api_secret=self.api_secret)
             access_token = data["access_token"]
 
@@ -78,6 +90,7 @@ class KiteAuth:
             self.access_token = access_token
             self.kite.set_access_token(access_token)
 
+            logger.info("Token exchange successful.")
             return access_token
         except Exception as e:
             logger.error(f"Error exchanging request token: {e}")
@@ -94,7 +107,7 @@ class KiteAuth:
             # Default to .env in current directory if not found
             env_path = ".env"
 
-        logger.info(f"Persisting access token to {env_path}")
+        logger.info(f"Persisting access token to {env_path} (Securely)")
 
         # We use set_key which handles quoting and updates
         dotenv.set_key(env_path, "KITE_ACCESS_TOKEN", access_token)
