@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kite Auth Bootstrap Script
+Kite Daily Auth Bootstrap Script
 
 Daily 8:00 AM job to ensure valid Kite Connect session.
 - Checks if current session is valid.
@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.getcwd())
 
 from src.auth.kite_auth import KiteAuth
+# Import AppMode for type checking or future use
 from packages.core.config import AppMode
 
 # Configure logging
@@ -37,6 +38,9 @@ captured_request_token = None
 server_stop_event = threading.Event()
 
 class CallbackHandler(BaseHTTPRequestHandler):
+    """
+    Simple HTTP handler to capture the Kite Connect callback.
+    """
     def log_message(self, format, *args):
         # Suppress default server logs
         pass
@@ -74,9 +78,10 @@ class CallbackHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"<h1>Missing request_token</h1>")
 
 def start_server(port):
-    server_address = ('', port)
+    # Bind to 0.0.0.0 to allow access from other interfaces if needed
+    server_address = ('0.0.0.0', port)
     httpd = HTTPServer(server_address, CallbackHandler)
-    logger.info(f"Local callback server listening on port {port}")
+    logger.info(f"Local callback server listening on port {port} (0.0.0.0)")
     httpd.serve_forever()
 
 def poll_for_token_change(initial_token, max_retries=60, sleep_sec=5):

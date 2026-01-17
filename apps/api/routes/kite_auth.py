@@ -11,6 +11,8 @@ async def kite_callback(request: Request):
     """
     Callback endpoint for Kite Connect login.
     Receives request_token, exchanges it for access_token, and stores it.
+
+    This endpoint is the target of the redirect_uri configured in the Kite Connect app.
     """
     params = request.query_params
     request_token = params.get("request_token")
@@ -28,7 +30,7 @@ async def kite_callback(request: Request):
         logger.error("No request_token provided in callback")
         return HTMLResponse(content="<h1>Auth Failed</h1><p>Missing request_token.</p>", status_code=400)
 
-    logger.info("Callback received with request_token.")
+    logger.info("Callback received with request_token. Initiating token exchange...")
 
     try:
         auth = KiteAuth()
@@ -41,7 +43,7 @@ async def kite_callback(request: Request):
         <html>
             <head><title>Auth Success</title></head>
             <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-                <h1 style="color: green;">Authentication Successful</h1>
+                <h1 style="color: green;">Authentication Successful (Daily)</h1>
                 <p>The access token has been securely stored.</p>
                 <p>You may close this window and restart your application/services if necessary.</p>
             </body>
