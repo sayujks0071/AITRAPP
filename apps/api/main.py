@@ -31,6 +31,7 @@ import re
 
 from packages.core.config import app_config, settings
 from apps.api.auth import APIKeyMiddleware
+from apps.api.middleware import SecurityHeadersMiddleware
 from packages.core.execution import ExecutionEngine
 from packages.core.exits import ExitManager, ExitSignal
 from packages.core.instruments import InstrumentManager
@@ -342,7 +343,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS
+# Add CORS (Inner)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -361,6 +362,10 @@ app.add_middleware(APIKeyMiddleware, public_paths=[
     "/redoc",
     "/auth/kite/callback"
 ])
+
+# Add Security Headers Middleware (Outer most - handles response last before wire, request first)
+# Must be added LAST (which means it's the first middleware the request hits)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount Prometheus metrics
 if settings.enable_metrics:
