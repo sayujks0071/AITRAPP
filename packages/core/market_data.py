@@ -31,6 +31,9 @@ class TickAggregator:
         # Historical bars
         self.bars: deque = deque(maxlen=500)  # Keep last 500 bars
         
+        # Volume tracking
+        self.last_cumulative_volume: Optional[int] = None
+
     def add_tick(self, tick: Tick) -> Optional[Bar]:
         """
         Add a tick and potentially emit a completed bar.
@@ -38,6 +41,25 @@ class TickAggregator:
         Returns:
             Completed bar if window closed, None otherwise
         """
+        # Calculate volume delta
+        volume_delta = 0
+        if self.last_cumulative_volume is None:
+            # First tick: assume last_quantity is the delta if we just connected
+            # or we accept that we missed volume prior to this connection.
+            volume_delta = tick.last_quantity
+            self.last_cumulative_volume = tick.volume
+        else:
+            # Subsequent ticks: calculate delta from cumulative volume
+            volume_delta = tick.volume - self.last_cumulative_volume
+
+            # Handle volume reset (new day?) or bad data
+            if volume_delta < 0:
+                logger.warning("Volume reset detected", token=self.token,
+                             last=self.last_cumulative_volume, current=tick.volume)
+                volume_delta = tick.last_quantity
+
+            self.last_cumulative_volume = tick.volume
+
         # Initialize window if needed
         if self.current_window_start is None:
             self.current_window_start = self._floor_timestamp(tick.timestamp)
@@ -48,7 +70,7 @@ class TickAggregator:
                 high=tick.last_price,
                 low=tick.last_price,
                 close=tick.last_price,
-                volume=tick.last_quantity,
+                volume=volume_delta,
                 oi=tick.oi
             )
             return None
@@ -71,7 +93,7 @@ class TickAggregator:
                 high=tick.last_price,
                 low=tick.last_price,
                 close=tick.last_price,
-                volume=tick.last_quantity,
+                volume=volume_delta,
                 oi=tick.oi
             )
             
@@ -82,7 +104,7 @@ class TickAggregator:
             self.current_bar.high = max(self.current_bar.high, tick.last_price)
             self.current_bar.low = min(self.current_bar.low, tick.last_price)
             self.current_bar.close = tick.last_price
-            self.current_bar.volume += tick.last_quantity
+            self.current_bar.volume += volume_delta
             self.current_bar.oi = tick.oi
         
         return None
