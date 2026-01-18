@@ -1,0 +1,16 @@
+id,score,eligible,sharpe_15m,trades_15m,sharpe_5m,trades_5m,strategy_type,failed_1d
+99a01c7e8963ecc6,0.0,False,0,0,0,0,SUPERTREND_FOLLOW,False
+c2f3bf34d5cf4473,0.0,False,0,0,0,0,VOL_EXPANSION_ATR,False
+923f21d11612e50c,0.0,False,0,0,0,0,BREAKOUT_DONCHIAN,False
+7d6be65c8bb68e27,0.0,False,0,0,0,0,MEAN_REV_RSI,False
+eea1bd1df79a31e8,0.0,False,0,0,0,0,VOL_EXPANSION_ATR,False
+424f2b0f1062c61d,0.0,False,0,0,0,0,MEAN_REV_RSI,False
+32e8139d16d493a8,0.0,False,0,0,0,0,BREAKOUT_DONCHIAN,False
+fab9f0c5e3c442d7,0.0,False,0,0,0,0,MEAN_REV_RSI,False
+499c8d9b1fac92f9,0.0,False,0,0,0,0,BREAKOUT_DONCHIAN,False
+496b387a7bcda122,0.0,False,0,0,0,0,SUPERTREND_FOLLOW,False
+c06c39bc8baa1d8e,0.0,False,0,0,0,0,MEAN_REV_RSI,False
+da592a7cde73d539,0.0,False,0,0,0,0,MEAN_REV_BB,False
+bc0eb1f682c839a4,0.0,False,0,0,0,0,SUPERTREND_FOLLOW,False
+45e9256c646bfb43,0.0,False,0,0,0,0,MEAN_REV_RSI,False
+20e680c888159223,0.0,False,0,0,0,0,VOL_EXPANSION_ATR,False

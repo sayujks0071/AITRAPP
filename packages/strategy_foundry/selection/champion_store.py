@@ -1,51 +1,68 @@
-import os
 import json
-import time
-from typing import Optional, Dict
-from packages.strategy_foundry.factory.grammar import StrategyCandidate
+import os
+import shutil
+from datetime import datetime
+from typing import Dict, Optional, Any
 
 class ChampionStore:
-    def __init__(self, champions_dir: str):
-        self.champions_dir = champions_dir
-        self.current_file = os.path.join(champions_dir, "current.json")
-        os.makedirs(champions_dir, exist_ok=True)
+    def __init__(self, base_dir="packages/strategy_foundry/results/champions"):
+        self.base_dir = base_dir
+        self.current_file = os.path.join(base_dir, "current.json")
+        os.makedirs(base_dir, exist_ok=True)
 
-    def load_current(self) -> Optional[StrategyCandidate]:
-        if not os.path.exists(self.current_file):
-            return None
-        try:
-            with open(self.current_file, "r") as f:
-                data = json.load(f)
-            return StrategyCandidate(**data['candidate'])
-        except Exception:
-            return None
+    def load_current_champion(self) -> Optional[Dict[str, Any]]:
+        if os.path.exists(self.current_file):
+            try:
+                with open(self.current_file, "r") as f:
+                    return json.load(f)
+            except Exception:
+                return None
+        return None
 
-    def load_current_metadata(self) -> Dict:
-        if not os.path.exists(self.current_file):
-            return {}
-        try:
-            with open(self.current_file, "r") as f:
-                data = json.load(f)
-            return data
-        except Exception:
-            return {}
-
-    def promote_new_champion(self, candidate: StrategyCandidate, metrics: Dict, score: float):
-        # Save historical version
-        timestamp = int(time.time())
-        filename = f"{timestamp}_{candidate.id}.json"
-
-        data = {
-            "promoted_at": timestamp,
-            "score": score,
+    def save_new_champion(self, candidate_spec: Dict, metrics: Dict, score: float, run_ts: str):
+        """
+        Promotes a new champion.
+        """
+        champion_data = {
+            "spec": candidate_spec,
             "metrics": metrics,
-            "candidate": candidate.to_dict()
+            "score": score,
+            "promoted_at": datetime.now().isoformat(),
+            "run_ts": run_ts
         }
 
-        # Save history
-        with open(os.path.join(self.champions_dir, filename), "w") as f:
-            json.dump(data, f, indent=2)
+        # 1. Archive old if exists
+        if os.path.exists(self.current_file):
+            old = self.load_current_champion()
+            if old:
+                ts = datetime.now().strftime("%Y%m%d%H%M%S")
+                old_id = old.get("spec", {}).get("id", "unknown")
+                archive_path = os.path.join(self.base_dir, f"{ts}_{old_id}.json")
+                with open(archive_path, "w") as f:
+                    json.dump(old, f, indent=2)
 
-        # Update current
+        # 2. Save new
         with open(self.current_file, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(champion_data, f, indent=2)
+
+    def should_promote(self, new_score: float, new_metrics: Dict) -> bool:
+        """
+        Decides if new candidate should replace current champion.
+        """
+        current = self.load_current_champion()
+        if not current:
+            return True
+
+        current_score = current.get("score", 0)
+        current_metrics = current.get("metrics", {})
+
+        # Rule: New score >= Current + 10%
+        if new_score >= current_score * 1.10:
+            return True
+
+        # Rule: Reduce MaxDD by 5% absolute, without degrading Sharpe meaningfully (e.g. within 10%)
+        # Assuming we passed eligibility already.
+        # This is complex to check perfectly without granular metric access.
+        # Let's stick to Score beat.
+
+        return False

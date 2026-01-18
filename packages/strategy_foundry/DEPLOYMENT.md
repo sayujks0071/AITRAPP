@@ -1,35 +1,31 @@
-# Deployment & Live Signals
+# Deployment & Consumption
 
-**Strategy Foundry is a Research Lab. It does NOT place orders.**
+## Live Signal
+The foundry produces a signal artifact at `packages/strategy_foundry/results/live_signal.json`.
 
-## Signal Artifact
-
-If a Champion is active and the market is open, `live_signal.json` is generated:
-
+### Schema
 ```json
 {
   "timestamp_ist": "2023-10-27T10:00:00+05:30",
-  "champion_id": "a1b2c3...",
+  "champion_id": "a1b2c3d4",
+  "timeframe": "5m",
   "instrument": "NIFTY",
-  "signal": 1,
-  "rule_summary": "Logic: ema_crossover(10, 50)",
-  "status": "OK"
+  "proxy_symbol_live": "NSE:NIFTY50-FUT",
+  "signal": 1, // 1 = LONG, 0 = FLAT
+  "status": "OK",
+  "reason": "Signal Generated"
 }
 ```
 
-- `signal`: 1 (Long), -1 (Short), 0 (Flat).
-- `status`: "OK" or "SKIPPED".
+## Consumption
+Core execution systems should:
+1. Poll `live_signal.json` (or watch for file changes).
+2. Verify `timestamp_ist` is fresh (within last 5-15 mins).
+3. Verify `status` is "OK".
+4. execute the target position indicated by `signal`.
 
-## Consumption (Optional)
-
-To wire this to execution (NOT RECOMMENDED without audit):
-
-1. **Gating**: Ensure `ENABLE_LIVE=true` in env and `approvals/ALLOW_LIVE.txt` exists.
-2. **Bridge**: A separate process must read `live_signal.json`.
-3. **Execution**: Map `signal` to `packages.core.execution`.
-
-## Safety
-
-- **Champions** must pass strict gates (Sharpe > 1.0, DD < 25%) to be published.
-- **Market Hours** are checked via `packages.core.market_hours`.
-- **Fail-safe**: If data is stale or missing, signal is SKIPPED.
+## Safety Gates
+- **Live Trading Flag**: Must be enabled via `ENABLE_LIVE=true` env var in the consumer.
+- **Approval File**: Must exist at `approvals/ALLOW_LIVE.txt`.
+- **Market Hours**: Foundry only publishes during market hours.
+- **Performance Gates**: Signals are only generated if the Champion strategy meets strict OOS performance criteria (Sharpe > 1.2, Low Drawdown).

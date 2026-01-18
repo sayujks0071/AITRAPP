@@ -1,38 +1,36 @@
-import random
+from typing import Dict, Any
 
 class ParameterSpace:
+    """
+    Defines the search space for strategy parameters.
+    """
+
     # Indicator Periods
-    MA_PERIODS = [10, 20, 50, 100, 200]
     RSI_PERIODS = [7, 14, 21]
-    ATR_PERIODS = [14]
-    ADX_PERIODS = [14]
+    ATR_PERIODS = [10, 14, 20]
+    ADX_PERIODS = [14, 20]
+    SMA_PERIODS = [20, 50, 100, 200]
+    EMA_PERIODS = [9, 21, 34, 55, 89]
     BB_PERIODS = [20]
+    BB_STD = [2.0, 2.5]
+    DONCHIAN_PERIODS = [20, 40, 60]
+    SUPERTREND_PERIODS = [10, 14]
+    SUPERTREND_MULTIPLIERS = [2.0, 3.0, 4.0]
 
     # Thresholds
-    RSI_OVERSOLD = [20, 25, 30, 35]
-    RSI_OVERBOUGHT = [65, 70, 75, 80]
-    ADX_TRENDING = [20, 25, 30]
+    RSI_OVERBOUGHT = [70, 75, 80]
+    RSI_OVERSOLD = [20, 25, 30]
+    ADX_THRESHOLD = [20, 25]
 
-    # Risk
-    SL_ATR_MULT = [1.0, 1.5, 2.0, 3.0]
-    TP_ATR_MULT = [2.0, 3.0, 4.0, 5.0, 0] # 0 means no fixed TP (trailing only)
-    TRAILING_SL = [True, False]
-
-    @classmethod
-    def random_ma_period(cls): return random.choice(cls.MA_PERIODS)
-    @classmethod
-    def random_rsi_period(cls): return random.choice(cls.RSI_PERIODS)
+    # Risk Management
+    STOP_LOSS_ATR_MULT = [1.5, 2.0, 3.0]
+    TAKE_PROFIT_ATR_MULT = [2.0, 3.0, 5.0]
+    TRAILING_STOP_ATR_MULT = [1.5, 2.0]
+    MAX_BARS_HOLD = [12, 24, 48] # e.g., 12*5m = 1 hour, 48*5m = 4 hours
 
     @classmethod
-    def get_trend_logic(cls):
-        choices = ["ema_crossover", "supertrend", "donchian"]
-        return random.choice(choices)
-
-    @classmethod
-    def get_mean_reversion_logic(cls):
-        return "rsi_reversion"
-
-    @classmethod
-    def get_filter_logic(cls):
-        choices = ["adx_filter", "regime_filter", None]
-        return random.choice(choices)
+    def get_random_param(cls, param_name: str) -> Any:
+        import random
+        if hasattr(cls, param_name):
+            return random.choice(getattr(cls, param_name))
+        return None
