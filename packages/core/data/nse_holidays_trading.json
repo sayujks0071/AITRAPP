@@ -15,6 +15,7 @@
     {"tradingDate": "21-Oct-2025", "weekDay": "Tuesday", "description": "Diwali-Laxmi Pujan*", "Sr_no": 13},
     {"tradingDate": "22-Oct-2025", "weekDay": "Wednesday", "description": "Diwali-Balipratipada", "Sr_no": 14},
     {"tradingDate": "05-Nov-2025", "weekDay": "Wednesday", "description": "Gurunanak Jayanti", "Sr_no": 15},
-    {"tradingDate": "25-Dec-2025", "weekDay": "Thursday", "description": "Christmas", "Sr_no": 16}
+    {"tradingDate": "25-Dec-2025", "weekDay": "Thursday", "description": "Christmas", "Sr_no": 16},
+    {"tradingDate": "26-Jan-2026", "weekDay": "Monday", "description": "Republic Day", "Sr_no": 17}
   ]
 }
