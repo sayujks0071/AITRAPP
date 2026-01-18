@@ -157,5 +157,18 @@ class TestNSEHolidays(unittest.TestCase):
         # And it should have created the cache file from the seed
         self.assertTrue(os.path.exists(self.test_cache_path))
 
+    def test_seed_file_integrity_2026(self):
+        """Explicitly verify that the seed file contains 2026 holidays."""
+        # Load the seed file directly to verify its content on disk
+        seed_path = "packages/core/data/nse_holidays_trading.json"
+        with open(seed_path, "r") as f:
+            seed_data = json.load(f)
+
+        # Extract dates
+        dates = extract_segment_dates(seed_data, "FO")
+
+        # Verify 2026 Republic Day is present
+        self.assertIn("2026-01-26", dates)
+
 if __name__ == '__main__':
     unittest.main()
