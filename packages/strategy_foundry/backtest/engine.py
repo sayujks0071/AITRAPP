@@ -142,7 +142,10 @@ class BacktestEngine:
     def _simulate(self, df: pd.DataFrame, spec: StrategySpec) -> Tuple[List, pd.Series, int]:
         trades = []
         equity = 100000.0
-        equity_series = pd.Series(index=df.index, dtype=float)
+
+        # Performance Optimization: Use numpy array for equity tracking instead of Series
+        n = len(df)
+        equity_values = np.full(n, np.nan, dtype=np.float64)
 
         position = 0 # 0 or 1
         entry_price = 0.0
@@ -169,11 +172,13 @@ class BacktestEngine:
         entries = df["entry_long"].values
         times = df.index
 
-        n = len(df)
+        # Pre-compute time checks to avoid repeated attribute access
+        times_hours = times.hour
+        times_minutes = times.minute
 
         for i in range(n - 1): # Stop at n-1 to execute next open
             current_time = times[i]
-            equity_series.iloc[i] = equity # Mark to market roughly
+            equity_values[i] = equity # Mark to market roughly
 
             # 1. Manage Existing Position
             if position > 0:
@@ -182,7 +187,11 @@ class BacktestEngine:
                 exit_reason = ""
 
                 # Check Intraday Force Close
-                if current_time.hour > close_hour or (current_time.hour == close_hour and current_time.minute >= close_minute):
+                # Use pre-computed hour/minute arrays for speed
+                curr_h = times_hours[i]
+                curr_m = times_minutes[i]
+
+                if curr_h > close_hour or (curr_h == close_hour and curr_m >= close_minute):
                     exit_price = opens[i] # Exit at Open of this bar if we passed time (or close of prev, simplified to open of current)
                     exit_reason = "SESSION_CLOSE"
 
@@ -236,7 +245,10 @@ class BacktestEngine:
 
             # 2. Check Entry
             # Only enter if flat and market is not about to close
-            time_ok = (current_time.hour < close_hour) or (current_time.hour == close_hour and current_time.minute < close_minute - 15)
+            # Use pre-computed time arrays
+            curr_h = times_hours[i]
+            curr_m = times_minutes[i]
+            time_ok = (curr_h < close_hour) or (curr_h == close_hour and curr_m < close_minute - 15)
 
             if position == 0 and entries[i] and time_ok:
                 # Enter next Open
@@ -252,5 +264,8 @@ class BacktestEngine:
                 tp_price = entry_price_raw + (atr_val * tp_mult)
 
         # Fill last equity
-        equity_series.iloc[-1] = equity
+        equity_values[-1] = equity
+
+        # Convert back to Series
+        equity_series = pd.Series(equity_values, index=df.index)
         return trades, equity_series, position
