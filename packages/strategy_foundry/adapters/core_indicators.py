@@ -1,64 +1,50 @@
 from packages.core.indicators import IndicatorCalculator
-import numpy as np
 import pandas as pd
+import numpy as np
+from typing import Dict
 
 class VectorIndicatorCalculator(IndicatorCalculator):
     """
-    Adapter for IndicatorCalculator to expose vector/series calculations clearly
-    for the Strategy Foundry.
+    Adapter for core indicators ensuring vector outputs (Series/Arrays)
+    for vectorized backtesting.
     """
+
     def __init__(self, **kwargs):
+        # Allow overriding defaults
         super().__init__(**kwargs)
 
-    def compute_all_vectors(self, df: pd.DataFrame) -> pd.DataFrame:
+    def compute_vectors(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
         """
-        Compute all indicators and return as a DataFrame aligned with input df.
+        Compute all indicators as vectors aligned with df index.
         """
-        if df.empty:
-            return pd.DataFrame(index=df.index)
+        indicators = {}
 
-        # Pre-calculate TR
+        # Base Helpers
         tr = self.calculate_tr(df)
 
-        # Calculate indicators
-        indicators = pd.DataFrame(index=df.index)
-
-        indicators['atr'] = self.atr_series(df, tr=tr)
-        indicators['rsi'] = self.rsi_series(df)
-        indicators['adx'] = self.adx_series(df, tr=tr)
-        indicators['ema_fast'] = self.ema_series(df['close'], self.ema_fast)
-        indicators['ema_slow'] = self.ema_series(df['close'], self.ema_slow)
+        # Trend
+        indicators["ema_fast"] = self.ema_series(df["close"], self.ema_fast)
+        indicators["ema_slow"] = self.ema_series(df["close"], self.ema_slow)
 
         st_val, st_dir = self.supertrend_series(df, tr=tr)
-        indicators['supertrend'] = st_val
-        indicators['supertrend_direction'] = st_dir
+        indicators["supertrend"] = pd.Series(st_val, index=df.index)
+        indicators["supertrend_dir"] = pd.Series(st_dir, index=df.index)
 
-        bb_upper, bb_middle, bb_lower = self.bollinger_bands_series(df['close'])
-        indicators['bb_upper'] = bb_upper
-        indicators['bb_lower'] = bb_lower
+        d_up, d_low = self.donchian_series(df)
+        indicators["donchian_upper"] = d_up
+        indicators["donchian_lower"] = d_low
 
-        dc_upper, dc_lower = self.donchian_series(df)
-        indicators['dc_upper'] = dc_upper
-        indicators['dc_lower'] = dc_lower
+        # Momentum
+        indicators["rsi"] = pd.Series(self.rsi_series(df), index=df.index)
 
-        return indicators
+        # Volatility
+        indicators["atr"] = pd.Series(self.atr_series(df, tr=tr), index=df.index)
 
-    def supertrend(self, df: pd.DataFrame, period=None, multiplier=None) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Override/expose supertrend with optional custom params.
-        """
-        # Save original params
-        orig_period = self.supertrend_period
-        orig_mult = self.supertrend_multiplier
+        bb_u, bb_m, bb_l = self.bollinger_bands_series(df["close"])
+        indicators["bb_upper"] = bb_u
+        indicators["bb_lower"] = bb_l
+        indicators["bb_width"] = (bb_u - bb_l) / bb_m
 
-        if period is not None:
-            self.supertrend_period = period
-        if multiplier is not None:
-            self.supertrend_multiplier = multiplier
+        indicators["adx"] = pd.Series(self.adx_series(df, tr=tr), index=df.index)
 
-        try:
-            return self.supertrend_series(df)
-        finally:
-            # Restore
-            self.supertrend_period = orig_period
-            self.supertrend_multiplier = orig_mult
+        return pd.DataFrame(indicators)

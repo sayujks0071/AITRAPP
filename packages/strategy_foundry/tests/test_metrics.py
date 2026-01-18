@@ -1,15 +1,33 @@
+import unittest
 import pandas as pd
-from packages.strategy_foundry.backtest.metrics import calculate_metrics
+import numpy as np
+from packages.strategy_foundry.backtest.metrics import compute_metrics, calculate_stability
 
-def test_metrics_calc():
-    equity = pd.Series([100, 105, 110, 108, 115], index=pd.date_range("2023-01-01", periods=5))
-    trades = pd.DataFrame({
-        "pnl": [5, 5, -2, 7],
-        "pnl_pct": [0.05, 0.05, -0.02, 0.06]
-    })
+class TestMetrics(unittest.TestCase):
+    def test_metrics_calculation(self):
+        # Mock trades
+        trades = pd.DataFrame([
+            {"pnl": 0.1, "bars": 5},
+            {"pnl": -0.05, "bars": 3},
+            {"pnl": 0.02, "bars": 4}
+        ])
 
-    m = calculate_metrics(equity, trades)
+        # Mock equity
+        idx = pd.date_range("2023-01-01", periods=100)
+        equity = pd.Series(np.linspace(1.0, 1.2, 100), index=idx)
 
-    assert m['total_return'] == 0.15
-    assert m['trades'] == 4
-    assert m['max_drawdown'] < 0
+        m = compute_metrics(trades, equity)
+
+        self.assertEqual(m["total_trades"], 3)
+        self.assertGreater(m["cagr"], 0)
+        self.assertGreater(m["win_rate"], 0.6)
+
+    def test_empty_trades(self):
+        trades = pd.DataFrame()
+        equity = pd.Series([1.0], index=[pd.Timestamp("2023-01-01")])
+        m = compute_metrics(trades, equity)
+        self.assertEqual(m["total_trades"], 0)
+        self.assertEqual(m["sharpe"], 0.0)
+
+if __name__ == '__main__':
+    unittest.main()
