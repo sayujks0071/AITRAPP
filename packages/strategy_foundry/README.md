@@ -1,36 +1,31 @@
 # Strategy Foundry
 
-A self-generating strategy lab that runs hourly to discover, backtest, and promote trading strategies for NIFTY/SENSEX.
+Self-generating strategy lab that evolves trading strategies using `packages/core` primitives.
 
-## Architecture
+## Structure
 
-- **Data**: Downloads daily OHLCV from Yahoo Finance (^NSEI, ^BSESN) via `requests`. Caches to CSV.
-- **Factory**: Generates random strategies using a bounded grammar (Trend, Mean Reversion, Filters, Risk).
-- **Backtest**: Daily timeframe, next-bar open execution. Uses `packages.core.indicators` (via adapters) for calculations.
-- **Selection**: Walk-forward evaluation (OOS metrics). Ranks by Sharpe, Calmar, CAGR.
-- **Live**: Publishes `live_signal.json` (No real orders).
+- `data/`: Data loading and caching (Yahoo Finance).
+- `adapters/`: Adapters to core (Indicators, Market Hours, Costs).
+- `factory/`: Strategy generation grammar and random search.
+- `backtest/`: Vectorized backtest engine.
+- `selection/`: Ranking and champion promotion.
+- `live/`: Signal publishing (JSON only).
 
 ## Usage
 
-### Local Run
-
+### Run Hourly
 ```bash
-# Full mode
 python -m packages.strategy_foundry.run_hourly
+```
 
-# Fast mode (fewer candidates)
+### Fast Mode (for CI)
+```bash
 FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
 ```
 
-### Outputs
+## Output
 
-Results are stored in `packages/strategy_foundry/results/`:
-- `runs/<timestamp>/`: Artifacts for each run.
-- `champions/`: JSON files of promoted champions.
-- `leaderboard.csv`: Historical performance of candidates.
-- `leaderboard.md`: Top 20 leaderboard.
-- `live_signal.json`: Current trade signal (if market open).
-
-## CI/CD
-
-Runs hourly via GitHub Actions to continuously explore the parameter space.
+Artifacts are stored in `packages/strategy_foundry/results/`.
+- `runs/<timestamp>/`: Metrics and candidate details.
+- `champions/`: Historical champions.
+- `live_signal.json`: Latest trade signal (if market open).

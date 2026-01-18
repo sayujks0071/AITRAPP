@@ -1,148 +1,168 @@
+"""
+Hourly Runner for Strategy Foundry.
+"""
 import os
 import sys
-import time
-import pandas as pd
 import structlog
+import pandas as pd
 from datetime import datetime
+import json
 import pytz
 
-from packages.strategy_foundry.data.loader import get_data
+# Add repo root to path
+sys.path.append(os.getcwd())
+
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.adapters.core_indicators import VectorIndicatorCalculator
 from packages.strategy_foundry.factory.generator import StrategyGenerator
-from packages.strategy_foundry.factory.registry import CandidateRegistry
-from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
-from packages.strategy_foundry.selection.ranker import score_candidate
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.backtest.metrics import compute_metrics
+from packages.strategy_foundry.selection.ranker import Ranker
 from packages.strategy_foundry.selection.champion_store import ChampionStore
-from packages.strategy_foundry.selection.promote import should_promote
-from packages.strategy_foundry.live.signal_publisher import publish_signal
+from packages.strategy_foundry.live.signal_publisher import SignalPublisher
 
 logger = structlog.get_logger(__name__)
 
-RESULTS_DIR = "packages/strategy_foundry/results"
-LEADERBOARD_CSV = os.path.join(RESULTS_DIR, "leaderboard.csv")
-LEADERBOARD_MD = os.path.join(RESULTS_DIR, "leaderboard.md")
-
 def main():
+    logger.info("Starting Strategy Foundry Hourly Run")
+
     # 1. Config
     fast_mode = os.environ.get("FAST_MODE", "0") == "1"
-
     n_candidates = 10 if fast_mode else 50
-    symbols = ["NIFTY", "SENSEX"]
+    instruments = ["NIFTY", "SENSEX"]
 
-    run_ts = int(time.time())
-    run_dir = os.path.join(RESULTS_DIR, "runs", str(run_ts))
+    # Run ID
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = f"packages/strategy_foundry/results/runs/{timestamp}"
     os.makedirs(run_dir, exist_ok=True)
 
-    logger.info("Starting Hourly Run", fast_mode=fast_mode, run_dir=run_dir)
+    # 2. Load Data
+    loader = DataLoader()
+    dfs = {}
+    indicators = {}
 
-    # 2. Update Data
-    data_map = {}
-    for sym in symbols:
+    calc = VectorIndicatorCalculator()
+
+    for inst in instruments:
         try:
-            df = get_data(sym, lookback_days=2000) # Ensure enough history
-            if not df.empty:
-                data_map[sym] = df
-            else:
-                logger.warning(f"Data for {sym} is empty")
+            df = loader.get_data(inst)
+            dfs[inst] = df
+            # Precompute Indicators
+            indicators[inst] = calc.compute_vectors(df)
+            logger.info(f"Loaded {inst}: {len(df)} bars")
         except Exception as e:
-            logger.error(f"Failed to load data for {sym}", error=str(e))
+            logger.error(f"Failed to load {inst}: {e}")
 
-    if not data_map:
-        logger.error("No data available, aborting")
+    if not dfs:
+        logger.error("No data available. Exiting.")
         return
 
     # 3. Generate Candidates
-    generator = StrategyGenerator()
-    candidates = generator.generate_candidates(n=n_candidates)
+    gen = StrategyGenerator()
+    candidates = gen.generate_candidates(n=n_candidates)
 
-    registry = CandidateRegistry(run_dir)
-    registry.save_candidates(candidates)
-    logger.info(f"Generated {len(candidates)} candidates")
+    # Save Candidates
+    cand_list = [c.to_json() for c in candidates]
+    with open(f"{run_dir}/candidates.json", "w") as f:
+        json.dump(cand_list, f, indent=2)
 
-    # 4. Evaluate (Walk-Forward / OOS)
-    evaluator = WalkForwardEvaluator()
+    # 4. Backtest Loop
+    engine = BacktestEngine()
     results = []
 
-    # Helper to append to leaderboard
-    leaderboard_rows = []
-
     for cand in candidates:
-        # Evaluate on NIFTY primarily for ranking, or aggregate?
-        # Plan says "Output per candidate per instrument".
-        # Ranking usually on primary instrument or average.
-        # Let's rank on NIFTY.
+        for inst, df in dfs.items():
+            ind = indicators[inst]
+            try:
+                bt_res = engine.run(df, cand, ind)
+                metrics = compute_metrics(bt_res["trades"], bt_res["equity"])
 
-        sym = "NIFTY"
-        if sym not in data_map: continue
+                res_row = metrics.copy()
+                res_row["id"] = cand.strategy_id
+                res_row["instrument"] = inst
+                results.append(res_row)
+            except Exception as e:
+                logger.error(f"Backtest failed for {cand.strategy_id} on {inst}: {e}")
 
-        df = data_map[sym]
-        metrics = evaluator.evaluate(df, cand)
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(f"{run_dir}/metrics.csv", index=False)
 
-        score = score_candidate(metrics)
+    # 5. Rank & Select
+    ranker = Ranker()
+    ranked = ranker.rank(results_df)
 
-        res = {
-            "run_ts": run_ts,
-            "id": cand.id,
-            "symbol": sym,
-            "score": score,
-            "metrics": metrics,
-            "summary": cand.summary
-        }
-        results.append((cand, metrics, score))
+    leader = ranked.iloc[0] if not ranked.empty else None
 
-        # Flatten for CSV
-        row = {
-            "run_ts": run_ts,
-            "id": cand.id,
-            "symbol": sym,
-            "score": round(score, 4),
-            "cagr": round(metrics.get('cagr', 0), 4),
-            "sharpe": round(metrics.get('sharpe', 0), 4),
-            "max_dd": round(metrics.get('max_drawdown', 0), 4),
-            "trades": metrics.get('trades', 0),
-            "summary": cand.summary
-        }
-        leaderboard_rows.append(row)
+    # 6. Champion Logic
+    store = ChampionStore()
+    curr_champ = store.get_current_champion()
 
-    # Save Run Metrics
-    metrics_df = pd.DataFrame(leaderboard_rows)
-    metrics_df.to_csv(os.path.join(run_dir, "metrics.csv"), index=False)
+    # Logic: If leader score > current * 1.1 => Promote
+    # Need to store score in champion JSON
 
-    # 5. Update Global Leaderboard
-    if os.path.exists(LEADERBOARD_CSV):
-        global_df = pd.read_csv(LEADERBOARD_CSV)
-        global_df = pd.concat([global_df, metrics_df], ignore_index=True)
-    else:
-        global_df = metrics_df
+    if leader is not None and leader["score"] > 0: # Sanity
+        # Fetch candidate obj
+        champ_cand = next(c for c in candidates if c.strategy_id == leader["id"])
 
-    # Deduplicate by ID? No, same ID might be re-evaluated later with more data.
-    # But for leaderboard we might want unique strategies.
-    # Let's keep history.
-    global_df.to_csv(LEADERBOARD_CSV, index=False)
-
-    # Generate MD Leaderboard (Top 20 Unique by Score)
-    top_20 = global_df.sort_values("score", ascending=False).drop_duplicates("id").head(20)
-    with open(LEADERBOARD_MD, "w") as f:
-        f.write("# Strategy Foundry Leaderboard\n\n")
-        f.write(f"Last Updated: {datetime.now(pytz.timezone('Asia/Kolkata')).isoformat()}\n\n")
-        f.write(top_20.to_markdown(index=False))
-
-    # 6. Champion Selection
-    # Find best in CURRENT run
-    best_cand, best_metrics, best_score = max(results, key=lambda x: x[2]) if results else (None, {}, -float('inf'))
-
-    if best_cand:
-        store = ChampionStore(os.path.join(RESULTS_DIR, "champions"))
-        current_meta = store.load_current_metadata()
-        current_metrics = current_meta.get('metrics')
-
-        if should_promote(best_cand, best_metrics, current_metrics):
-            logger.info("Promoting new champion", id=best_cand.id, score=best_score)
-            store.promote_new_champion(best_cand, best_metrics, best_score)
+        should_promote = False
+        if not curr_champ:
+            should_promote = True
         else:
-            logger.info("No promotion", best_score=best_score, current_score=current_meta.get('score'))
+            prev_score = curr_champ["metrics"].get("score", 0)
+            if leader["score"] > prev_score * 1.1:
+                should_promote = True
 
-    # 7. Publish Live Signal
-    publish_signal()
+        if should_promote:
+            store.promote_new_champion(
+                champ_cand.to_json(),
+                leader.to_dict(),
+                timestamp
+            )
+            curr_champ = store.get_current_champion()
+
+    # 7. Live Signal (Simulation)
+    publisher = SignalPublisher()
+
+    if curr_champ:
+        # Evaluate current champion on LATEST data (already done in loop? No)
+        # We need to run the specific champion on the specific instrument it is good at.
+        # Ideally, we have separate champions for NIFTY vs SENSEX.
+        # For simplicity, we just take the global best.
+
+        c_inst = curr_champ["metrics"]["instrument"]
+        if c_inst in dfs:
+            c_cand = StrategyCandidate.from_json(curr_champ["candidate"])
+
+            # Re-run to get latest signal
+            # Optimization: generate only last bar?
+            # We need indicators.
+            df = dfs[c_inst]
+            ind = indicators[c_inst]
+
+            # Generate positions
+            signals = c_cand.generate_positions(df, ind)
+
+            # Last completed bar signal
+            # "Execution: next-bar open".
+            # So if we are running at 10:00 (hourly), we check the last completed daily bar?
+            # This is a DAILY strategy lab.
+            # So we check the signal for TODAY (based on yesterday close).
+
+            # If we run intraday, we might have intraday bars?
+            # But we are using Daily Data from Yahoo.
+            # So the signal is valid for "Today's Open".
+            # If we run at 10AM, the signal was generated yesterday.
+
+            latest_signal = int(signals.iloc[-1]) # This is signal based on close[-1]
+            # This signal is for T+1.
+            # Since close[-1] is "Yesterday" (if we fetch daily data before today close).
+            # Yahoo daily data usually updates EOD.
+            # So fetching during market hours gives yesterday's data as last row.
+
+            publisher.publish(curr_champ, latest_signal, c_inst)
+
+    logger.info("Run Complete", leader_id=leader["id"] if leader is not None else "None")
 
 if __name__ == "__main__":
     main()

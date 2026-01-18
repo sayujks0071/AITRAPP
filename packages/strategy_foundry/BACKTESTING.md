@@ -1,31 +1,25 @@
 # Backtesting Methodology
 
 ## Assumptions
-
 - **Timeframe**: Daily (1D).
-- **Execution**: Signals generated at Close of Day T are executed at Open of Day T+1.
-- **Price**: Yahoo Finance adjusted data (conceptually, though we use raw Close for signals usually).
+- **Data Source**: Yahoo Finance (Adjusted Close? No, using Close).
+- **Execution**: Next-Bar Open. Signals are generated on Close[T]. Trade enters on Open[T+1].
 - **Costs**:
-  - Slippage: 2 bps per side.
-  - Commission/Tax: 3.5 bps per side (Proxy for Futures/Options cost on Index).
-  - Total round-trip drag: ~11 bps.
+  - Slippage: 5 bps per side.
+  - All-in Fees: 3 bps per side (Tax, Brokerage).
+  - Total per round trip: ~16 bps.
 
-## Walk-Forward Evaluation
+## Walk-Forward & Selection
+- Strategies are generated with fixed parameters.
+- Candidates are evaluated on the full history (10 years).
+- **Ranking**:
+  - Sharpe Ratio (30%)
+  - Calmar Ratio (25%)
+  - CAGR (20%)
+  - Stability (15%) - Rolling Sharpe Dispersion
+  - Turnover (10%) - Penalty for excessive trading
 
-To avoid overfitting, we use Out-Of-Sample (OOS) testing.
-- The dataset is split (e.g., last 30% is OOS).
-- Candidates are ranked solely on their OOS performance.
-- We assume that random generation provides enough "In-Sample" variation that checking OOS performance is sufficient validation.
-
-## Metrics
-
-- **Sharpe Ratio**: Annualized (Risk-free rate = 0).
-- **Calmar Ratio**: CAGR / MaxDrawdown.
-- **CAGR**: Compound Annual Growth Rate.
-- **Stability**: Win Rate / Profit Factor proxy.
-
-## Caveats
-
-- **Look-ahead Bias**: We use `shift(1)` for signals to ensure no look-ahead. Execution at Next Open ensures realism.
-- **Survivorship Bias**: Yahoo Finance data for indices is generally stable, but constituent changes are not modeled (we trade the Index proxy).
-- **Data Quality**: Yahoo Finance data may have gaps or errors. We filter NaNs but do not perform deep cleaning.
+## Live Signals
+- The "Champion" strategy is promoted if it beats the incumbent by 10% score improvement.
+- Signals are published as JSON only.
+- No automatic execution.

@@ -1,75 +1,73 @@
-import numpy as np
 import pandas as pd
+import numpy as np
+from typing import Dict
 
-def calculate_metrics(equity_curve: pd.Series, trades: pd.DataFrame) -> dict:
-    """
-    Calculate performance metrics from equity curve and trades.
-    equity_curve: Series of account equity (daily)
-    trades: DataFrame of closed trades
-    """
-    if equity_curve.empty:
-        return {}
+def compute_metrics(trades: pd.DataFrame, equity: pd.Series) -> Dict[str, float]:
+    if trades.empty:
+        return {
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "cagr": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "max_dd": 0.0,
+            "calmar": 0.0,
+            "avg_trade_pct": 0.0,
+            "avg_bars": 0.0
+        }
 
-    initial_capital = equity_curve.iloc[0]
-    final_capital = equity_curve.iloc[-1]
+    # Trade Metrics
+    n = len(trades)
+    winners = trades[trades["pnl"] > 0]
+    win_rate = len(winners) / n
+    avg_trade = trades["pnl"].mean()
+    avg_bars = trades["bars"].mean()
 
-    # Returns
-    returns = equity_curve.pct_change().dropna()
-    total_return = (final_capital - initial_capital) / initial_capital
+    # Time Metrics (Equity)
+    # Total Return
+    total_ret = equity.iloc[-1] - 1.0
 
-    days = (equity_curve.index[-1] - equity_curve.index[0]).days
-    years = days / 365.25
-    if years > 0:
-        cagr = (final_capital / initial_capital) ** (1 / years) - 1
-    else:
-        cagr = 0.0
+    # CAGR (approx)
+    days = (equity.index[-1] - equity.index[0]).days
+    years = max(days / 365.25, 0.1)
+    cagr = (equity.iloc[-1])**(1/years) - 1.0
 
-    # Risk
-    volatility = returns.std() * np.sqrt(252)
+    # Volatility & Sharpe
+    daily_rets = equity.pct_change().dropna()
+    ann_vol = daily_rets.std() * np.sqrt(252)
+    sharpe = (cagr / ann_vol) if ann_vol > 0 else 0.0
 
-    sharpe = 0.0
-    if volatility > 0:
-        sharpe = (returns.mean() * 252) / (returns.std() * np.sqrt(252))
+    # Sortino (downside vol)
+    neg_rets = daily_rets[daily_rets < 0]
+    down_vol = neg_rets.std() * np.sqrt(252)
+    sortino = (cagr / down_vol) if down_vol > 0 else 0.0
 
-    # Drawdown
-    running_max = equity_curve.cummax()
-    drawdown = (equity_curve - running_max) / running_max
-    max_drawdown = drawdown.min()
+    # Max Drawdown
+    rolling_max = equity.cummax()
+    drawdown = (equity - rolling_max) / rolling_max
+    max_dd = abs(drawdown.min())
 
-    calmar = 0.0
-    if max_drawdown < 0:
-        calmar = cagr / abs(max_drawdown)
-
-    # Trade Stats
-    num_trades = len(trades)
-    win_rate = 0.0
-    profit_factor = 0.0
-    avg_trade = 0.0
-
-    if num_trades > 0:
-        wins = trades[trades['pnl'] > 0]
-        losses = trades[trades['pnl'] <= 0]
-        win_rate = len(wins) / num_trades
-
-        gross_profit = wins['pnl'].sum()
-        gross_loss = abs(losses['pnl'].sum())
-
-        if gross_loss > 0:
-            profit_factor = gross_profit / gross_loss
-        else:
-            profit_factor = float('inf') if gross_profit > 0 else 0.0
-
-        avg_trade = trades['pnl_pct'].mean()
+    calmar = (cagr / max_dd) if max_dd > 0 else 0.0
 
     return {
-        "cagr": cagr,
-        "total_return": total_return,
-        "volatility": volatility,
-        "sharpe": sharpe,
-        "max_drawdown": max_drawdown, # Negative number
-        "calmar": calmar,
-        "trades": num_trades,
-        "win_rate": win_rate,
-        "profit_factor": profit_factor,
-        "avg_trade": avg_trade
+        "total_trades": n,
+        "win_rate": round(win_rate, 4),
+        "cagr": round(cagr, 4),
+        "sharpe": round(sharpe, 4),
+        "sortino": round(sortino, 4),
+        "max_dd": round(max_dd, 4),
+        "calmar": round(calmar, 4),
+        "avg_trade_pct": round(avg_trade, 6),
+        "avg_bars": round(avg_bars, 1)
     }
+
+def calculate_stability(equity: pd.Series, window: int = 252) -> float:
+    """
+    Rolling Sharpe dispersion. Lower is better.
+    """
+    if len(equity) < window * 2:
+        return 0.0
+
+    rets = equity.pct_change().dropna()
+    rolling_sharpe = rets.rolling(window).mean() / rets.rolling(window).std() * np.sqrt(252)
+    return rolling_sharpe.std()

@@ -1,110 +1,92 @@
-import time
 import random
+import hashlib
+import json
 from typing import List
-from .grammar import StrategyCandidate, hash_strategy
-from .parameter_space import ParameterSpace
+from .grammar import StrategyCandidate
 
 class StrategyGenerator:
+    """
+    Generates random Strategy Candidates based on a parameter space.
+    """
 
     def generate_candidates(self, n: int = 50) -> List[StrategyCandidate]:
         candidates = []
         seen_hashes = set()
 
-        attempts = 0
-        while len(candidates) < n and attempts < n * 5:
-            attempts += 1
-            strategy_def = self._create_random_strategy()
-            sid = hash_strategy(strategy_def)
+        while len(candidates) < n:
+            params = self._random_params()
 
-            if sid in seen_hashes:
+            # Create ID
+            param_str = json.dumps(params, sort_keys=True)
+            strat_id = hashlib.sha256(param_str.encode()).hexdigest()[:12]
+
+            if strat_id in seen_hashes:
                 continue
 
-            seen_hashes.add(sid)
-            candidates.append(StrategyCandidate(
-                id=sid,
-                source_code=strategy_def,
-                created_at=time.time()
-            ))
+            seen_hashes.add(strat_id)
+
+            # Generate description
+            desc = self._describe(params)
+
+            candidate = StrategyCandidate(
+                strategy_id=strat_id,
+                params=params,
+                source_code=desc
+            )
+            candidates.append(candidate)
 
         return candidates
 
-    def _create_random_strategy(self):
-        # Decide type: Trend or Mean Reversion
-        # Bias towards trend for daily timeframe
-        is_trend = random.random() < 0.7
+    def _random_params(self) -> dict:
+        p = {}
 
-        logic_blocks = []
+        # 1. Entry Logic
+        p["entry_type"] = random.choice(["supertrend", "ema_cross", "donchian_breakout", "rsi_reversal", "bb_reversion"])
 
-        if is_trend:
-            logic_blocks.append(self._make_trend_block())
-            filter_block = self._make_filter_block()
-            if filter_block:
-                logic_blocks.append(filter_block)
+        # 2. Filters
+        p["use_adx_filter"] = random.choice([True, False])
+        p["adx_threshold"] = random.choice([15, 20, 25])
+
+        # 3. Parameters for indicators (implied fixed mostly, but we can vary thresholds)
+        if p["entry_type"] == "rsi_reversal":
+            p["rsi_lower"] = random.choice([20, 25, 30, 35])
+
+        # 4. Risk / Exits
+        p["stop_loss_pct"] = random.choice([1.0, 2.0, 3.0, 5.0])
+
+        # Take profit: often better to let run, so 50% chance of being 0 (no TP)
+        p["take_profit_pct"] = random.choice([0.0, 0.0, 5.0, 10.0])
+
+        # Trailing
+        if random.random() < 0.5:
+            p["trailing_stop_activation_pct"] = random.choice([1.0, 2.0])
+            p["trailing_stop_callback_pct"] = random.choice([0.5, 1.0])
         else:
-            logic_blocks.append(self._make_mean_reversion_block())
-            # Usually mean reversion needs a regime filter (e.g. only if ADX < 25)
-            # But we'll keep it simple for now
+            p["trailing_stop_activation_pct"] = 0.0
+            p["trailing_stop_callback_pct"] = 0.0
 
-        risk_config = self._make_risk_config()
+        # Time exit
+        p["max_bars_hold"] = random.choice([0, 0, 0, 5, 10, 20])
 
-        return {
-            "type": "Trend" if is_trend else "MeanReversion",
-            "logic": logic_blocks,
-            "risk": risk_config
-        }
+        # Direction
+        p["direction"] = "long_only" # Enforce long only for now as per plan defaults
 
-    def _make_trend_block(self):
-        choice = ParameterSpace.get_trend_logic()
-        if choice == "ema_crossover":
-            fast = ParameterSpace.random_ma_period()
-            slow = ParameterSpace.random_ma_period()
-            if fast >= slow: fast, slow = 10, 50 # Fallback correction
-            return {
-                "type": "ema_crossover",
-                "params": {"fast": fast, "slow": slow}
-            }
-        elif choice == "supertrend":
-            return {
-                "type": "supertrend",
-                "params": {"period": 10, "multiplier": 3.0} # Keep standard for now or randomize
-            }
-        elif choice == "donchian":
-            return {
-                "type": "donchian",
-                "params": {"period": 20}
-            }
-        return {"type": "noop"}
+        return p
 
-    def _make_mean_reversion_block(self):
-        choice = ParameterSpace.get_mean_reversion_logic()
-        if choice == "rsi_reversion":
-            return {
-                "type": "rsi_reversion",
-                "params": {
-                    "period": ParameterSpace.random_rsi_period(),
-                    "lower": random.choice(ParameterSpace.RSI_OVERSOLD),
-                    "upper": random.choice(ParameterSpace.RSI_OVERBOUGHT)
-                }
-            }
-        return {"type": "noop"}
+    def _describe(self, p: dict) -> str:
+        parts = []
+        parts.append(f"Entry: {p['entry_type']}")
+        if p['use_adx_filter']:
+            parts.append(f"Filter: ADX>{p['adx_threshold']}")
 
-    def _make_filter_block(self):
-        choice = ParameterSpace.get_filter_logic()
-        if choice == "adx_filter":
-            return {
-                "type": "adx_filter",
-                "params": {"period": 14, "threshold": random.choice(ParameterSpace.ADX_TRENDING)}
-            }
-        elif choice == "regime_filter":
-             return {
-                "type": "regime_filter",
-                "params": {"ma_period": 200}
-            }
-        return None
+        parts.append(f"Risk: SL {p['stop_loss_pct']}%")
+        if p['take_profit_pct'] > 0:
+            parts.append(f"TP {p['take_profit_pct']}%")
 
-    def _make_risk_config(self):
-        return {
-            "stop_loss_atr": random.choice(ParameterSpace.SL_ATR_MULT),
-            "take_profit_atr": random.choice(ParameterSpace.TP_ATR_MULT),
-            "trailing_stop": random.choice(ParameterSpace.TRAILING_SL)
-        }
+        if p['trailing_stop_activation_pct'] > 0:
+            parts.append(f"Trail: Act {p['trailing_stop_activation_pct']}% / Call {p['trailing_stop_callback_pct']}%")
+
+        if p['max_bars_hold'] > 0:
+            parts.append(f"TimeExit: {p['max_bars_hold']} bars")
+
+        return " | ".join(parts)

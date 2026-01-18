@@ -1,22 +1,12 @@
-class CostAdapter:
-    """
-    Provides cost assumptions for backtesting.
-    Defaults if core config is missing or too complex.
-    """
-    # Default assumptions for NIFTY/SENSEX
-    SLIPPAGE_BPS = 2.0  # 0.02% per side
-    COMMISSION_BPS = 1.0  # ~0.01% per side (STT is higher on delivery, but this is index/derivatives proxy)
+from dataclasses import dataclass
 
-    # STT on Sell for Futures: 0.0125%
-    # STT on Sell for Options: 0.0625% (on premium)
-    # Since we are simulating "Strategy" on Index, we'll model it as Futures-like exposure.
-    # Total round trip cost ~ 3-4 bps.
+@dataclass
+class TransactionCosts:
+    slippage_bps: float = 5.0
+    all_in_cost_bps: float = 3.0 # Brokerage + STT + Exchange + GST approx for index
 
-    ALL_IN_COST_BPS = 3.5
-
-    @staticmethod
-    def get_costs():
-        return {
-            "slippage_bps": CostAdapter.SLIPPAGE_BPS,
-            "all_in_cost_bps": CostAdapter.ALL_IN_COST_BPS
-        }
+    def calculate_cost(self, price: float, quantity: float, side: str) -> float:
+        # Cost = Value * (Slippage + Fees)
+        value = price * quantity
+        total_bps = self.slippage_bps + self.all_in_cost_bps
+        return value * (total_bps / 10000.0)
