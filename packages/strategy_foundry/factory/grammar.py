@@ -1,31 +1,40 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
-import hashlib
-import json
+from enum import Enum
+from typing import TypedDict, Dict, Any, Optional
 
-@dataclass
-class StrategyCandidate:
+class StrategyType(Enum):
+    BREAKOUT_DONCHIAN = "BREAKOUT_DONCHIAN"
+    TREND_EMA_CROSS = "TREND_EMA_CROSS"
+    MEAN_REV_RSI = "MEAN_REV_RSI"
+    MEAN_REV_BB = "MEAN_REV_BB"
+    VOL_EXPANSION_ATR = "VOL_EXPANSION_ATR"
+    SUPERTREND_FOLLOW = "SUPERTREND_FOLLOW"
+
+class FilterType(Enum):
+    NO_FILTER = "NO_FILTER"
+    REGIME_EMA = "REGIME_EMA" # Close > EMA(200)
+    VOLATILITY_ADX = "VOLATILITY_ADX" # ADX > 20
+    RSI_FILTER = "RSI_FILTER" # RSI < 70 for Long
+
+class ExitType(Enum):
+    FIXED_RR = "FIXED_RR" # SL and TP based on ATR
+    TRAILING_ATR = "TRAILING_ATR" # Trailing stop
+    TIME_BASED = "TIME_BASED" # Exit after N bars
+
+class StrategySpec(TypedDict):
     id: str
-    source_code: Dict[str, Any]  # The JSON representation of rules
-    created_at: float
+    direction: str # LONG or SHORT (default LONG)
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "source_code": self.source_code,
-            "created_at": self.created_at
-        }
+    # Entry Logic
+    strategy_type: str
+    strategy_params: Dict[str, Any]
 
-    @property
-    def summary(self) -> str:
-        # Generate human readable summary
-        logic = self.source_code.get("logic", [])
-        risk = self.source_code.get("risk", {})
+    # Filter Logic
+    filter_type: str
+    filter_params: Dict[str, Any]
 
-        logic_str = " AND ".join([f"{l['type']}({l.get('params', {})})" for l in logic])
-        return f"Logic: {logic_str} | Risk: {risk}"
+    # Exit Logic
+    exit_type: str
+    exit_params: Dict[str, Any]
 
-def hash_strategy(source_code: Dict[str, Any]) -> str:
-    """Stable hash of the strategy structure"""
-    s = json.dumps(source_code, sort_keys=True)
-    return hashlib.md5(s.encode()).hexdigest()
+    # Global Constraints
+    session_close_time: str # "15:25"

@@ -1,116 +1,121 @@
 import os
 import requests
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
-import time
-import structlog
-import io
+import yaml
+import logging
 
-logger = structlog.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
-# Ensure cache dir exists
-os.makedirs(CACHE_DIR, exist_ok=True)
+class DataLoader:
+    def __init__(self, cache_dir="packages/strategy_foundry/data/cache"):
+        self.cache_dir = cache_dir
+        self.config_path = "packages/strategy_foundry/configs/instrument_map.yaml"
+        self._load_config()
+        os.makedirs(self.cache_dir, exist_ok=True)
 
-YAHOO_MAP = {
-    "NIFTY": "^NSEI",
-    "SENSEX": "^BSESN"
-}
+    def _load_config(self):
+        with open(self.config_path, "r") as f:
+            self.config = yaml.safe_load(f)
+        self.research_map = self.config.get("research", {})
 
-def get_data(symbol: str, lookback_days: int = 2000, force_refresh: bool = False) -> pd.DataFrame:
-    """
-    Get OHLCV data for symbol.
-    1. Try cache.
-    2. If stale or missing, download from Yahoo.
-    3. Normalize.
-    """
-    yahoo_symbol = YAHOO_MAP.get(symbol, symbol)
-    cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
+    def get_symbol_for_instrument(self, instrument):
+        return self.research_map.get(instrument, instrument)
 
-    # Check cache
-    if not force_refresh and os.path.exists(cache_path):
-        modified_time = datetime.fromtimestamp(os.path.getmtime(cache_path))
-        # If cache is from today (and market closed or currently trading), we might want to refresh?
-        # For simple daily backtest, if cache is less than 12 hours old, we stick with it.
-        if datetime.now() - modified_time < timedelta(hours=4):
-            logger.info(f"Loading {symbol} from cache")
-            try:
-                df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
-                return _normalize(df)
-            except Exception as e:
-                logger.error(f"Failed to load cache: {e}")
+    def fetch_data(self, instrument, timeframe, force_refresh=False):
+        """
+        Fetches OHLCV data for an instrument and timeframe.
+        Prioritizes cache unless force_refresh is True.
+        """
+        symbol = self.get_symbol_for_instrument(instrument)
+        cache_file = os.path.join(self.cache_dir, f"{instrument}_{timeframe}.csv")
 
-    # Download
-    logger.info(f"Downloading {symbol} from Yahoo")
-    try:
-        df = _download_yahoo(yahoo_symbol, lookback_days)
-        if not df.empty:
-            df.to_csv(cache_path)
-            return _normalize(df)
-    except Exception as e:
-        logger.error(f"Failed to download {symbol}: {e}")
-        # Fallback to cache if exists
-        if os.path.exists(cache_path):
-            logger.warning("Falling back to stale cache")
-            df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
-            return _normalize(df)
+        if not force_refresh and os.path.exists(cache_file):
+            logger.info(f"Loading {instrument} {timeframe} from cache")
+            df = pd.read_csv(cache_file, parse_dates=["datetime"], index_col="datetime")
+            return df
 
-    return pd.DataFrame()
+        logger.info(f"Downloading {instrument} ({symbol}) {timeframe} from source")
+        df = self._download_yahoo(symbol, timeframe)
 
-def _download_yahoo(symbol: str, lookback_days: int) -> pd.DataFrame:
-    end = int(time.time())
-    start = int((datetime.now() - timedelta(days=lookback_days)).timestamp())
+        if df is not None and not df.empty:
+            df.to_csv(cache_file)
+            return df
+        else:
+            logger.warning(f"Failed to download data for {instrument}")
+            if os.path.exists(cache_file):
+                logger.info("Falling back to stale cache")
+                return pd.read_csv(cache_file, parse_dates=["datetime"], index_col="datetime")
+            return pd.DataFrame()
 
-    url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}"
-    params = {
-        "period1": start,
-        "period2": end,
-        "interval": "1d",
-        "events": "history",
-        "includeAdjustedClose": "true"
-    }
+    def _download_yahoo(self, symbol, timeframe):
+        # Map timeframe to Yahoo API format
+        interval_map = {
+            "5m": "5m",
+            "15m": "15m",
+            "1d": "1d"
+        }
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-    }
+        range_map = {
+            "5m": "60d",
+            "15m": "60d",
+            "1d": "10y"
+        }
 
-    response = requests.get(url, params=params, headers=headers)
-    response.raise_for_status()
+        interval = interval_map.get(timeframe)
+        if not interval:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
 
-    df = pd.read_csv(io.StringIO(response.text))
-    return df
+        range_val = range_map.get(timeframe)
 
-def _normalize(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normalize columns and index.
-    """
-    # Standardize columns
-    df.columns = [c.lower().replace(" ", "") for c in df.columns]
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        params = {
+            "interval": interval,
+            "range": range_val
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+        }
 
-    # Ensure Date index
-    if 'date' in df.columns:
-        df.set_index('date', inplace=True)
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
 
-    df.index = pd.to_datetime(df.index, utc=True)
+            result = data["chart"]["result"][0]
+            timestamps = result["timestamp"]
+            indicators = result["indicators"]["quote"][0]
 
-    # Convert to Asia/Kolkata
-    df.index = df.index.tz_convert("Asia/Kolkata")
+            df = pd.DataFrame({
+                "datetime": pd.to_datetime(timestamps, unit="s", utc=True).tz_convert("Asia/Kolkata"),
+                "open": indicators["open"],
+                "high": indicators["high"],
+                "low": indicators["low"],
+                "close": indicators["close"],
+                "volume": indicators["volume"]
+            })
 
-    # Drop rows with NaN
-    df.dropna(inplace=True)
+            # Remove Timezone info to avoid future warnings with some libs, but keep it local time
+            df["datetime"] = df["datetime"].dt.tz_localize(None)
+            df.set_index("datetime", inplace=True)
 
-    # Ensure required columns
-    required = {'open', 'high', 'low', 'close', 'volume'}
-    if not required.issubset(df.columns):
-        # Adjust close might be present
-        if 'adjclose' in df.columns:
-             # Use adjclose as close if preferred, but for now stick to Close
-             pass
-        raise ValueError(f"Missing columns: {required - set(df.columns)}")
+            # Drop NaN rows
+            df.dropna(inplace=True)
 
-    return df[['open', 'high', 'low', 'close', 'volume']].sort_index()
+            # Basic Market Hours Filter (09:15 - 15:30) for intraday
+            if timeframe in ["5m", "15m"]:
+                df = df.between_time("09:15", "15:29") # Inclusive start, inclusive end
+
+            return df
+
+        except Exception as e:
+            logger.error(f"Error downloading {symbol}: {e}")
+            return None
 
 if __name__ == "__main__":
     # Test
-    df = get_data("NIFTY", lookback_days=30)
+    logging.basicConfig(level=logging.INFO)
+    loader = DataLoader()
+    df = loader.fetch_data("NIFTY", "15m")
     print(df.tail())

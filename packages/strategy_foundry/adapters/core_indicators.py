@@ -1,64 +1,75 @@
-from packages.core.indicators import IndicatorCalculator
 import numpy as np
 import pandas as pd
+from packages.core.indicators import IndicatorCalculator
 
 class VectorIndicatorCalculator(IndicatorCalculator):
     """
-    Adapter for IndicatorCalculator to expose vector/series calculations clearly
-    for the Strategy Foundry.
+    Adapter for core IndicatorCalculator to support vectorized backtesting
+    with dynamic parameters per call.
     """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def compute_all_vectors(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Compute all indicators and return as a DataFrame aligned with input df.
-        """
-        if df.empty:
-            return pd.DataFrame(index=df.index)
+    def rsi(self, df: pd.DataFrame, period: int) -> np.ndarray:
+        # Save state
+        old_period = self.rsi_period
+        # Set new state
+        self.rsi_period = period
+        try:
+            return self.rsi_series(df)
+        finally:
+            # Restore state
+            self.rsi_period = old_period
 
-        # Pre-calculate TR
-        tr = self.calculate_tr(df)
+    def atr(self, df: pd.DataFrame, period: int) -> np.ndarray:
+        old_period = self.atr_period
+        self.atr_period = period
+        try:
+            return self.atr_series(df)
+        finally:
+            self.atr_period = old_period
 
-        # Calculate indicators
-        indicators = pd.DataFrame(index=df.index)
+    def adx(self, df: pd.DataFrame, period: int) -> np.ndarray:
+        old_period = self.adx_period
+        self.adx_period = period
+        try:
+            return self.adx_series(df)
+        finally:
+            self.adx_period = old_period
 
-        indicators['atr'] = self.atr_series(df, tr=tr)
-        indicators['rsi'] = self.rsi_series(df)
-        indicators['adx'] = self.adx_series(df, tr=tr)
-        indicators['ema_fast'] = self.ema_series(df['close'], self.ema_fast)
-        indicators['ema_slow'] = self.ema_series(df['close'], self.ema_slow)
+    def ema(self, series: pd.Series, period: int) -> pd.Series:
+        # Base class _ema uses self.ema_fast/slow but ema_series takes period arg?
+        # Let's check base class.
+        # def ema_series(self, series: pd.Series, period: int) -> pd.Series:
+        # It takes period! So we can just call it.
+        return self.ema_series(series, period)
 
-        st_val, st_dir = self.supertrend_series(df, tr=tr)
-        indicators['supertrend'] = st_val
-        indicators['supertrend_direction'] = st_dir
+    def sma(self, series: pd.Series, period: int) -> pd.Series:
+        return series.rolling(window=period).mean()
 
-        bb_upper, bb_middle, bb_lower = self.bollinger_bands_series(df['close'])
-        indicators['bb_upper'] = bb_upper
-        indicators['bb_lower'] = bb_lower
+    def bollinger_bands(self, series: pd.Series, period: int, std: float) -> tuple[pd.Series, pd.Series, pd.Series]:
+        old_period = self.bb_period
+        old_std = self.bb_std
+        self.bb_period = period
+        self.bb_std = std
+        try:
+            return self.bollinger_bands_series(series)
+        finally:
+            self.bb_period = old_period
+            self.bb_std = old_std
 
-        dc_upper, dc_lower = self.donchian_series(df)
-        indicators['dc_upper'] = dc_upper
-        indicators['dc_lower'] = dc_lower
+    def donchian(self, df: pd.DataFrame, period: int) -> tuple[pd.Series, pd.Series]:
+        # donchian_series takes period arg
+        return self.donchian_series(df, period)
 
-        return indicators
-
-    def supertrend(self, df: pd.DataFrame, period=None, multiplier=None) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Override/expose supertrend with optional custom params.
-        """
-        # Save original params
-        orig_period = self.supertrend_period
-        orig_mult = self.supertrend_multiplier
-
-        if period is not None:
-            self.supertrend_period = period
-        if multiplier is not None:
-            self.supertrend_multiplier = multiplier
-
+    def supertrend(self, df: pd.DataFrame, period: int, multiplier: float) -> tuple[np.ndarray, np.ndarray]:
+        old_period = self.supertrend_period
+        old_mult = self.supertrend_multiplier
+        self.supertrend_period = period
+        self.supertrend_multiplier = multiplier
         try:
             return self.supertrend_series(df)
         finally:
-            # Restore
-            self.supertrend_period = orig_period
-            self.supertrend_multiplier = orig_mult
+            self.supertrend_period = old_period
+            self.supertrend_multiplier = old_mult

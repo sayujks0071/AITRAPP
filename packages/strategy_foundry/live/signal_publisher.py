@@ -1,116 +1,115 @@
 import json
 import os
-import pandas as pd
+import yaml
 from datetime import datetime
 import pytz
-from packages.strategy_foundry.adapters.core_market_hours import MarketAdapter
-from packages.strategy_foundry.data.loader import get_data
-from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.adapters.core_market_hours import MarketSchedule
 from packages.strategy_foundry.selection.champion_store import ChampionStore
-import structlog
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.backtest.engine import BacktestEngine
+from packages.strategy_foundry.factory.grammar import StrategySpec
 
-logger = structlog.get_logger(__name__)
+class SignalPublisher:
+    def __init__(self):
+        self.schedule = MarketSchedule()
+        self.store = ChampionStore()
+        self.loader = DataLoader()
+        self.engine = BacktestEngine()
+        self.output_path = "packages/strategy_foundry/results/live_signal.json"
 
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), "../results")
-os.makedirs(RESULTS_DIR, exist_ok=True)
-LIVE_SIGNAL_FILE = os.path.join(RESULTS_DIR, "live_signal.json")
+        # Load Config for proxies
+        with open("packages/strategy_foundry/configs/instrument_map.yaml", "r") as f:
+            self.map_config = yaml.safe_load(f)
 
-def publish_signal():
-    """
-    Generate and publish live signal JSON.
-    """
-    market = MarketAdapter()
-    now = datetime.now(pytz.timezone("Asia/Kolkata"))
+    def publish(self):
+        # 1. Check Market Hours
+        now = datetime.now(pytz.timezone("Asia/Kolkata"))
+        if not self.schedule.is_open_now():
+             self._write_skipped(now, "MARKET_CLOSED")
+             return
 
-    # 1. Check Market Hours
-    if not market.is_market_open(now):
-        _write_skipped("Market Closed")
-        return
-
-    # 2. Load Champion
-    store = ChampionStore(os.path.join(RESULTS_DIR, "champions"))
-    champion = store.load_current()
-    if not champion:
-        _write_skipped("No Champion")
-        return
-
-    # 3. Check Eligibility (Sanity)
-    meta = store.load_current_metadata()
-    metrics = meta.get('metrics', {})
-    if metrics.get('sharpe', 0) < 1.0 or abs(metrics.get('max_drawdown', 1)) > 0.25:
-        _write_skipped("Champion not eligible for live")
-        return
-
-    # 4. Get Data
-    # For live signal, we usually focus on NIFTY
-    symbol = "NIFTY"
-    df = get_data(symbol, lookback_days=300, force_refresh=True)
-
-    if df.empty:
-        _write_skipped("No Data")
-        return
-
-    # 5. Run Logic
-    engine = BacktestEngine()
-    # We only need signals
-    _, _, signal_df = engine.run(df, champion)
-
-    # 6. Determine Signal for TODAY
-    # logic: signal at T determines position at T+1 Open.
-    # We want position for NOW (Today).
-    # So we need signal from Yesterday.
-
-    last_dt = df.index[-1]
-    last_is_today = last_dt.date() == now.date()
-
-    if last_is_today:
-        # df has today's partial bar.
-        # Signal for Today's Open came from Yesterday's Close.
-        # Yesterday is index -2.
-        if len(signal_df) < 2:
-            _write_skipped("Not enough data")
+        # 2. Load Champion
+        champion = self.store.load_current_champion()
+        if not champion:
+            self._write_skipped(now, "NO_CHAMPION")
             return
-        sig_val = signal_df.iloc[-2]
-    else:
-        # df ends yesterday.
-        # Signal for Today's Open came from Yesterday's Close.
-        # Yesterday is index -1.
-        sig_val = signal_df.iloc[-1]
 
-    # sig_val is the generated signal (-1, 0, 1)
-    # But wait, BacktestEngine returns a Series, but `run` returns `trades, equity, raw_signal`.
-    # `raw_signal` is a Series.
+        spec = champion["spec"]
+        # Determine timeframe and instrument to run
+        # Ideally champion spec should store which timeframe it won on or we run the blended logic.
+        # But for simplicity, let's assume we run the Primary Timeframe (5m) if available, else 15m.
+        # The champion metrics might have score_5m and score_15m.
+        # Let's pick 5m if valid, else 15m.
 
-    # NOTE: BacktestEngine logic returns -1, 0, 1.
-    # But for "Live", we might be holding a position.
-    # The simple "Signal" artifact requested is just direction.
+        # NOTE: The current generator/ranker structure produces a champion which is a SPEC.
+        # The spec doesn't hardcode timeframe. The metrics do.
+        metrics = champion.get("metrics", {})
 
-    signal_value = int(sig_val) if not pd.isna(sig_val) else 0
+        # Decide timeframe
+        # If score_5m exists and is good, use 5m.
+        # Actually, let's look at the metrics keys. "metrics" in champion store is probably a dict of { "5m": {...}, "15m": {...} }?
+        # My Ranker/ChampionStore logic was:
+        # ChampionStore.save_new_champion(candidate_spec, metrics, score, ...)
+        # So 'metrics' is the full dict.
 
-    output = {
-        "timestamp_ist": now.isoformat(),
-        "champion_id": champion.id,
-        "instrument": symbol,
-        "signal": signal_value,
-        "rule_summary": champion.summary,
-        "risk": champion.source_code.get("risk", {}),
-        "status": "OK",
-        "reason": "Market Open, Champion Active"
-    }
+        target_tf = "5m"
+        # Fallback logic could be better, but assuming 5m is primary as per requirements.
 
-    with open(LIVE_SIGNAL_FILE, "w") as f:
-        json.dump(output, f, indent=2)
-    logger.info("Published live signal", signal=signal_value)
+        # Instrument: "NIFTY" (Default for now, lab focuses on Index)
+        instrument = "NIFTY"
 
-def _write_skipped(reason):
-    output = {
-        "timestamp_ist": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
-        "status": "SKIPPED",
-        "reason": reason
-    }
-    with open(LIVE_SIGNAL_FILE, "w") as f:
-        json.dump(output, f, indent=2)
-    logger.info("Skipped live signal", reason=reason)
+        # 3. Fetch Data (Force Refresh for Live)
+        df = self.loader.fetch_data(instrument, target_tf, force_refresh=True)
+        if df.empty:
+            self._write_skipped(now, "DATA_FETCH_FAILED")
+            return
+
+        # 4. Run Engine to get State
+        res = self.engine.run(df, spec)
+        final_pos = res["final_position"]
+
+        # 5. Construct Signal
+        signal_val = 1 if final_pos > 0 else 0 # Long Only default
+
+        proxies = self._get_proxies(instrument)
+
+        signal_data = {
+            "timestamp_ist": now.isoformat(),
+            "champion_id": spec.get("id"),
+            "timeframe": target_tf,
+            "instrument": instrument,
+            "proxy_symbol_paper": proxies.get("paper"),
+            "proxy_symbol_live": proxies.get("live"),
+            "signal": signal_val,
+            "rule_summary": f"{spec['strategy_type']} + {spec['filter_type']}",
+            "risk": {
+                "stop_atr_mult": spec["exit_params"].get("sl_mult"),
+                "flat_by": spec.get("session_close_time")
+            },
+            "status": "OK",
+            "reason": "Signal Generated"
+        }
+
+        self._write_json(signal_data)
+
+    def _get_proxies(self, instrument):
+        return {
+            "paper": self.map_config.get("paper_proxy", {}).get(instrument),
+            "live": self.map_config.get("live_proxy", {}).get(instrument)
+        }
+
+    def _write_skipped(self, now, reason):
+        data = {
+            "timestamp_ist": now.isoformat(),
+            "status": "SKIPPED",
+            "reason": reason
+        }
+        self._write_json(data)
+
+    def _write_json(self, data):
+        os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
+        with open(self.output_path, "w") as f:
+            json.dump(data, f, indent=2)
 
 if __name__ == "__main__":
-    publish_signal()
+    SignalPublisher().publish()

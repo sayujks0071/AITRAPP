@@ -1,110 +1,109 @@
-import time
 import random
+import hashlib
+import json
 from typing import List
-from .grammar import StrategyCandidate, hash_strategy
-from .parameter_space import ParameterSpace
+from packages.strategy_foundry.factory.grammar import StrategySpec, StrategyType, FilterType, ExitType
+from packages.strategy_foundry.factory.parameter_space import ParameterSpace
 
 class StrategyGenerator:
+    def __init__(self):
+        pass
 
-    def generate_candidates(self, n: int = 50) -> List[StrategyCandidate]:
+    def generate_candidates(self, n: int = 10) -> List[StrategySpec]:
         candidates = []
-        seen_hashes = set()
+        hashes = set()
 
         attempts = 0
         while len(candidates) < n and attempts < n * 5:
             attempts += 1
-            strategy_def = self._create_random_strategy()
-            sid = hash_strategy(strategy_def)
+            spec = self._generate_single()
+            spec_id = self._compute_hash(spec)
 
-            if sid in seen_hashes:
-                continue
-
-            seen_hashes.add(sid)
-            candidates.append(StrategyCandidate(
-                id=sid,
-                source_code=strategy_def,
-                created_at=time.time()
-            ))
+            if spec_id not in hashes:
+                spec["id"] = spec_id
+                candidates.append(spec)
+                hashes.add(spec_id)
 
         return candidates
 
-    def _create_random_strategy(self):
-        # Decide type: Trend or Mean Reversion
-        # Bias towards trend for daily timeframe
-        is_trend = random.random() < 0.7
+    def _generate_single(self) -> StrategySpec:
+        st_type = random.choice(list(StrategyType))
+        st_params = {}
 
-        logic_blocks = []
+        if st_type == StrategyType.BREAKOUT_DONCHIAN:
+            st_params["period"] = ParameterSpace.get_random_param("DONCHIAN_PERIODS")
 
-        if is_trend:
-            logic_blocks.append(self._make_trend_block())
-            filter_block = self._make_filter_block()
-            if filter_block:
-                logic_blocks.append(filter_block)
-        else:
-            logic_blocks.append(self._make_mean_reversion_block())
-            # Usually mean reversion needs a regime filter (e.g. only if ADX < 25)
-            # But we'll keep it simple for now
+        elif st_type == StrategyType.TREND_EMA_CROSS:
+            # fast < slow
+            # Ensure fast is not the largest available period
+            available_fast = [p for p in ParameterSpace.EMA_PERIODS if p < max(ParameterSpace.EMA_PERIODS)]
+            fast = random.choice(available_fast)
 
-        risk_config = self._make_risk_config()
+            available_slow = [p for p in ParameterSpace.EMA_PERIODS if p > fast]
+            slow = random.choice(available_slow)
+
+            st_params["fast_period"] = fast
+            st_params["slow_period"] = slow
+
+        elif st_type == StrategyType.MEAN_REV_RSI:
+            st_params["period"] = ParameterSpace.get_random_param("RSI_PERIODS")
+            st_params["oversold"] = ParameterSpace.get_random_param("RSI_OVERSOLD")
+            st_params["overbought"] = ParameterSpace.get_random_param("RSI_OVERBOUGHT")
+
+        elif st_type == StrategyType.MEAN_REV_BB:
+            st_params["period"] = ParameterSpace.get_random_param("BB_PERIODS")
+            st_params["std"] = ParameterSpace.get_random_param("BB_STD")
+
+        elif st_type == StrategyType.VOL_EXPANSION_ATR:
+            st_params["period"] = ParameterSpace.get_random_param("ATR_PERIODS")
+
+        elif st_type == StrategyType.SUPERTREND_FOLLOW:
+            st_params["period"] = ParameterSpace.get_random_param("SUPERTREND_PERIODS")
+            st_params["multiplier"] = ParameterSpace.get_random_param("SUPERTREND_MULTIPLIERS")
+
+        # Filters
+        ft_type = random.choice(list(FilterType))
+        ft_params = {}
+        if ft_type == FilterType.REGIME_EMA:
+            ft_params["period"] = ParameterSpace.get_random_param("SMA_PERIODS")
+        elif ft_type == FilterType.VOLATILITY_ADX:
+            ft_params["period"] = ParameterSpace.get_random_param("ADX_PERIODS")
+            ft_params["threshold"] = ParameterSpace.get_random_param("ADX_THRESHOLD")
+        elif ft_type == FilterType.RSI_FILTER:
+             ft_params["period"] = ParameterSpace.get_random_param("RSI_PERIODS")
+             ft_params["max_val"] = 70 # Hardcoded simple filter for long
+
+        # Exits
+        ex_type = random.choice(list(ExitType))
+        ex_params = {}
+        ex_params["sl_mult"] = ParameterSpace.get_random_param("STOP_LOSS_ATR_MULT")
+        ex_params["tp_mult"] = ParameterSpace.get_random_param("TAKE_PROFIT_ATR_MULT")
+
+        if ex_type == ExitType.TIME_BASED:
+            ex_params["max_bars"] = ParameterSpace.get_random_param("MAX_BARS_HOLD")
+
+        # Mandatory intraday close
+        session_close = "15:25"
 
         return {
-            "type": "Trend" if is_trend else "MeanReversion",
-            "logic": logic_blocks,
-            "risk": risk_config
+            "id": "", # Set later
+            "direction": "LONG", # Default Long-only
+            "strategy_type": st_type.value,
+            "strategy_params": st_params,
+            "filter_type": ft_type.value,
+            "filter_params": ft_params,
+            "exit_type": ex_type.value,
+            "exit_params": ex_params,
+            "session_close_time": session_close
         }
 
-    def _make_trend_block(self):
-        choice = ParameterSpace.get_trend_logic()
-        if choice == "ema_crossover":
-            fast = ParameterSpace.random_ma_period()
-            slow = ParameterSpace.random_ma_period()
-            if fast >= slow: fast, slow = 10, 50 # Fallback correction
-            return {
-                "type": "ema_crossover",
-                "params": {"fast": fast, "slow": slow}
-            }
-        elif choice == "supertrend":
-            return {
-                "type": "supertrend",
-                "params": {"period": 10, "multiplier": 3.0} # Keep standard for now or randomize
-            }
-        elif choice == "donchian":
-            return {
-                "type": "donchian",
-                "params": {"period": 20}
-            }
-        return {"type": "noop"}
+    def _compute_hash(self, spec: StrategySpec) -> str:
+        # Create a deterministic string representation
+        # Exclude ID if present
+        s = spec.copy()
+        if "id" in s:
+            del s["id"]
 
-    def _make_mean_reversion_block(self):
-        choice = ParameterSpace.get_mean_reversion_logic()
-        if choice == "rsi_reversion":
-            return {
-                "type": "rsi_reversion",
-                "params": {
-                    "period": ParameterSpace.random_rsi_period(),
-                    "lower": random.choice(ParameterSpace.RSI_OVERSOLD),
-                    "upper": random.choice(ParameterSpace.RSI_OVERBOUGHT)
-                }
-            }
-        return {"type": "noop"}
-
-    def _make_filter_block(self):
-        choice = ParameterSpace.get_filter_logic()
-        if choice == "adx_filter":
-            return {
-                "type": "adx_filter",
-                "params": {"period": 14, "threshold": random.choice(ParameterSpace.ADX_TRENDING)}
-            }
-        elif choice == "regime_filter":
-             return {
-                "type": "regime_filter",
-                "params": {"ma_period": 200}
-            }
-        return None
-
-    def _make_risk_config(self):
-        return {
-            "stop_loss_atr": random.choice(ParameterSpace.SL_ATR_MULT),
-            "take_profit_atr": random.choice(ParameterSpace.TP_ATR_MULT),
-            "trailing_stop": random.choice(ParameterSpace.TRAILING_SL)
-        }
+        # Sort keys for stable JSON
+        s_str = json.dumps(s, sort_keys=True)
+        return hashlib.sha256(s_str.encode("utf-8")).hexdigest()[:16]
