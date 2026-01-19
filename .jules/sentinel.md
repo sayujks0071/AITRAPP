@@ -12,3 +12,8 @@
 **Vulnerability:** Found `HistoricalDataLoader.load_file` accepting arbitrary strings for `symbol`, potentially allowing directory traversal via `../` if prefixes were changed or exploited.
 **Learning:** Implicit trust in API inputs passed to file operations is a common pattern even when prefixes exist. Defensive programming requires explicit validation.
 **Prevention:** Added regex validation `^[a-zA-Z0-9_-]+$` to `HistoricalDataLoader` inputs. Always validate inputs at the boundary before they reach sensitive operations like file I/O.
+
+## 2026-01-19 - Missing Security Headers in FastAPI
+**Vulnerability:** Missing standard security headers (HSTS, CSP, X-Frame-Options) leaving the application vulnerable to clickjacking, XSS, and downgrade attacks.
+**Learning:** Default FastAPI apps do not include strict security headers. Implementing CSP requires careful tuning (`unsafe-inline`, `unsafe-eval`) to maintain compatibility with the built-in Swagger UI (`/docs`).
+**Prevention:** Implemented `SecurityHeadersMiddleware` as a standard wrapper. Always verify CSP against interactive documentation tools during development.
