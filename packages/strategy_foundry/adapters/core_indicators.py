@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
+
 from packages.core.indicators import IndicatorCalculator
+
 
 class VectorIndicatorCalculator(IndicatorCalculator):
     """

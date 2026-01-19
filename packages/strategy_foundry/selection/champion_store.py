@@ -1,8 +1,8 @@
 import json
 import os
-import shutil
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
+
 
 class ChampionStore:
     def __init__(self, base_dir="packages/strategy_foundry/results/champions"):
@@ -56,13 +56,34 @@ class ChampionStore:
         current_score = current.get("score", 0)
         current_metrics = current.get("metrics", {})
 
-        # Rule: New score >= Current + 10%
+        # Rule 1: New score >= Current + 10%
         if new_score >= current_score * 1.10:
             return True
 
-        # Rule: Reduce MaxDD by 5% absolute, without degrading Sharpe meaningfully (e.g. within 10%)
-        # Assuming we passed eligibility already.
-        # This is complex to check perfectly without granular metric access.
-        # Let's stick to Score beat.
+        # Rule 2: Reduce MaxDD by >= 5% absolute, Sharpe within 10%
+        # Check for 5m first (Primary)
+        tf = "5m"
+        # If either is missing the primary timeframe data, fallback to 15m
+        if tf not in new_metrics or tf not in current_metrics:
+            tf = "15m"
+
+        if tf in new_metrics and tf in current_metrics:
+            new_m = new_metrics[tf]
+            curr_m = current_metrics[tf]
+
+            # Check if metrics are populated
+            if not new_m or not curr_m:
+                return False
+
+            new_dd = new_m.get("max_dd", 1.0)
+            curr_dd = curr_m.get("max_dd", 1.0)
+            new_sharpe = new_m.get("sharpe", 0.0)
+            curr_sharpe = curr_m.get("sharpe", 0.0)
+
+            # Reduce MaxDD by >= 5% absolute (e.g. 0.25 -> 0.20)
+            if (curr_dd - new_dd) >= 0.05:
+                # Sharpe not degrading meaningfully (>= 90% of current)
+                if new_sharpe >= curr_sharpe * 0.90:
+                     return True
 
         return False

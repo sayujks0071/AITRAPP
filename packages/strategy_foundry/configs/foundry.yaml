@@ -14,10 +14,10 @@ execution:
   tax_bps: 3.0 # Approx STT + GST etc.
 
 selection:
-  min_trades_5m: 60
-  min_trades_15m: 30
+  min_trades_5m: 80 # Updated to match requirement
+  min_trades_15m: 40 # Updated to match requirement
   max_drawdown: 0.30
   min_profit_factor: 1.1
   min_win_rate: 0.35
-  sanity_daily_min_sharpe: -0.5 # Lenient check for daily sanity
+  sanity_daily_min_sharpe: -0.5
   sanity_daily_max_dd: 0.45

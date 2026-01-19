@@ -1,9 +1,17 @@
-import pandas as pd
+from typing import Any, Dict, List, Tuple
+
 import numpy as np
-from typing import Dict, List, Any, Tuple
-from packages.strategy_foundry.factory.grammar import StrategySpec, StrategyType, FilterType, ExitType
+import pandas as pd
+
 from packages.strategy_foundry.adapters.core_indicators import VectorIndicatorCalculator
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
+from packages.strategy_foundry.factory.grammar import (
+    ExitType,
+    FilterType,
+    StrategySpec,
+    StrategyType,
+)
+
 
 class BacktestEngine:
     def __init__(self, cost_bps=5.0, slippage_bps=5.0):

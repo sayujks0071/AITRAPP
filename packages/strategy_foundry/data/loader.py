@@ -1,10 +1,9 @@
-import os
-import requests
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import yaml
 import logging
+import os
+
+import pandas as pd
+import requests
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +37,20 @@ class DataLoader:
 
         logger.info(f"Downloading {instrument} ({symbol}) {timeframe} from source")
         df = self._download_yahoo(symbol, timeframe)
+
+        if df is None or df.empty:
+            # Fallback to ETF Proxy
+            etf_proxy = self.config.get("paper_proxy", {}).get(instrument)
+            if etf_proxy and etf_proxy != symbol:
+                 logger.info(f"Primary symbol failed. Falling back to ETF proxy: {etf_proxy}")
+                 # Append .NS if missing and looks like a symbol (simple heuristic)
+                 # Research symbols start with ^. ETF proxies usually don't.
+                 if not etf_proxy.endswith(".NS") and not etf_proxy.startswith("^"):
+                      etf_proxy_yahoo = etf_proxy + ".NS"
+                 else:
+                      etf_proxy_yahoo = etf_proxy
+
+                 df = self._download_yahoo(etf_proxy_yahoo, timeframe)
 
         if df is not None and not df.empty:
             df.to_csv(cache_file)

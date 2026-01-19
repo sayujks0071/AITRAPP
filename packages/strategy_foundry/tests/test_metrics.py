@@ -1,6 +1,9 @@
 import unittest
+
 import pandas as pd
+
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
+
 
 class TestMetrics(unittest.TestCase):
     def test_calculate_metrics_empty(self):

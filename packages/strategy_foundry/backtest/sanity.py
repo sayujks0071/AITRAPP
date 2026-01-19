@@ -1,5 +1,7 @@
+from typing import Dict
+
 import pandas as pd
-from typing import Dict, List
+
 
 def check_sanity(trades_df: pd.DataFrame, timeframe_str: str) -> Dict[str, bool]:
     """

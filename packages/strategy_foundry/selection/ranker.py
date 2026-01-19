@@ -1,6 +1,5 @@
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Any
+from typing import Dict
+
 
 class Ranker:
     def __init__(self):
