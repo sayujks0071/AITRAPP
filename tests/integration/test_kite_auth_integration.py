@@ -136,3 +136,13 @@ class TestKiteAuthIntegration:
                     main()
 
                 assert os.environ["APP_MODE"] == "PAPER"
+
+    def test_bootstrap_with_token_arg(self, mock_env, mock_kite_auth):
+        """Test that passing request_token as argument works"""
+        with patch("sys.argv", ["script", "manual_request_token"]):
+             with pytest.raises(SystemExit) as pytest_wrapped_e:
+                main()
+             assert pytest_wrapped_e.value.code == 0
+
+             mock_kite_auth.exchange_request_token.assert_called_with("manual_request_token")
+             mock_kite_auth.persist_access_token.assert_called()

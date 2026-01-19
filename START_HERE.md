@@ -19,19 +19,20 @@ You need to authenticate with Kite Connect to get an access token.
 ```bash
 cd /Users/mac/AITRAPP
 source venv/bin/activate
-python get_kite_token.py
+python scripts/kite_auth_bootstrap.py
 ```
 
 The script will:
-1. Show you the login URL
-2. Guide you through the process
-3. Optionally update your `.env` file automatically
+1. Check if your current session is valid
+2. If invalid, start a local server to capture the token
+3. Show you the login URL
+4. Automatically update your `.env` file after callback
 
 **Option B: Manual process**
-1. Visit: https://kite.trade/connect/login?api_key=nhe2vo0afks02ojs&v=3
+1. Visit the login URL provided by the script
 2. Login with your Zerodha credentials
 3. Copy the `request_token` from the redirect URL
-4. Run: `python get_kite_token.py` and paste the token
+4. Run: `python scripts/kite_auth_bootstrap.py YOUR_REQUEST_TOKEN`
 
 ### Step 2: Update .env File
 
@@ -105,7 +106,7 @@ curl http://localhost:8000/metrics | head -20
 
 ### "Access token expired" or "Invalid token"
 - Access tokens expire daily
-- Re-run `python get_kite_token.py` to get a new token
+- Re-run `python scripts/kite_auth_bootstrap.py` to get a new token
 
 ### "Database connection error"
 ```bash
@@ -136,7 +137,7 @@ pip install -r requirements.txt
 
 ## 📚 Quick Reference
 
-- **Get token**: `python get_kite_token.py`
+- **Get token**: `python scripts/kite_auth_bootstrap.py`
 - **Start app**: `make paper`
 - **Check health**: `curl http://localhost:8000/health | jq`
 - **View logs**: `tail -f logs/aitrapp.log | jq`

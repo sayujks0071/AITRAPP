@@ -7,7 +7,7 @@ You already have a helper script! Run:
 ```bash
 cd /Users/mac/AITRAPP
 source venv/bin/activate
-python get_kite_token.py YOUR_REQUEST_TOKEN
+python scripts/kite_auth_bootstrap.py
 ```
 
 But first, you need to get the `request_token` from Kite Connect.
@@ -51,7 +51,7 @@ Run the helper script with your request token:
 ```bash
 cd /Users/mac/AITRAPP
 source venv/bin/activate
-python get_kite_token.py YOUR_REQUEST_TOKEN_HERE
+python scripts/kite_auth_bootstrap.py YOUR_REQUEST_TOKEN_HERE
 ```
 
 The script will:
@@ -133,7 +133,7 @@ https://kite.trade/connect/login?api_key=nhe2vo0afks02ojs&v=3
 
 **Helper Script:**
 ```bash
-python get_kite_token.py REQUEST_TOKEN
+python scripts/kite_auth_bootstrap.py REQUEST_TOKEN
 ```
 
 ## Daily Routine
@@ -141,8 +141,8 @@ python get_kite_token.py REQUEST_TOKEN
 Since tokens expire daily, your morning routine should include:
 
 1. **Before market open:**
-   - Visit login URL and get new request token
-   - Run `python get_kite_token.py REQUEST_TOKEN`
+   - Run `python scripts/kite_auth_bootstrap.py`
+   - Follow the login prompt
    - Update GitHub secret if using CI
 
 2. **Or automate it:**
