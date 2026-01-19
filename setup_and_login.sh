@@ -61,13 +61,13 @@ if grep -q "KITE_ACCESS_TOKEN=your_access_token_here" .env || grep -q "KITE_ACCE
     echo "⚠️  Access token not configured in .env"
     echo ""
     echo "📝 To get your access token:"
-    echo "   1. Run: python get_kite_token.py"
-    echo "   2. Or visit: https://kite.trade/connect/login?api_key=nhe2vo0afks02ojs&v=3"
+    echo "   1. Run: python scripts/kite_auth_bootstrap.py"
+    echo "   2. Or visit the login URL manually"
     echo ""
     read -p "Do you want to generate access token now? (y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        python get_kite_token.py
+        python scripts/kite_auth_bootstrap.py
     else
         echo "⚠️  Please configure KITE_ACCESS_TOKEN in .env before starting the app"
         exit 1
