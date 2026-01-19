@@ -12,3 +12,8 @@
 **Vulnerability:** Found `HistoricalDataLoader.load_file` accepting arbitrary strings for `symbol`, potentially allowing directory traversal via `../` if prefixes were changed or exploited.
 **Learning:** Implicit trust in API inputs passed to file operations is a common pattern even when prefixes exist. Defensive programming requires explicit validation.
 **Prevention:** Added regex validation `^[a-zA-Z0-9_-]+$` to `HistoricalDataLoader` inputs. Always validate inputs at the boundary before they reach sensitive operations like file I/O.
+
+## 2026-01-16 - Missing Security Headers in API
+**Vulnerability:** API responses lacked standard security headers (X-Frame-Options, CSP, HSTS, etc.), leaving clients vulnerable to clickjacking, MIME sniffing, and XSS.
+**Learning:** Default FastAPI/Starlette configurations prioritize ease of use and do not include strict security headers by default. Explicit middleware is required.
+**Prevention:** Implement a `SecurityHeadersMiddleware` early in the project to enforce defense-in-depth headers on all responses.
