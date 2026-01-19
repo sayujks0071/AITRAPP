@@ -198,31 +198,6 @@ class BacktestEngine:
                 for b in bars:
                     b.token = token
 
-                # Pre-calculate instrument and token to avoid overhead in inner loop
-                from packages.core.models import Instrument, InstrumentType
-                inst_type = InstrumentType.CE if option_type == 'CE' else InstrumentType.PE
-
-                # Stable deterministic token generation
-                token_str = f"{symbol}_{strike}_{option_type}"
-                # Use MD5 to get consistent hash across runs/platforms
-                token_hash = hashlib.md5(token_str.encode()).hexdigest()
-                token = int(token_hash[:8], 16)  # Take first 8 chars (32 bits)
-
-                # Ensure bar tokens match instrument token (O(N) operation done once)
-                for b in bars:
-                    b.token = token
-
-                instrument = Instrument(
-                    token=token,
-                    symbol=symbol,
-                    tradingsymbol=f"{symbol}{int(strike)}{option_type}",
-                    exchange="NFO",
-                    instrument_type=inst_type,
-                    strike=strike,
-                    lot_size=50 if symbol == "NIFTY" else 25,
-                    tick_size=0.05
-                )
-
                 # Generate signals
                 for strategy in strategies:
                     if not strategy.enabled:
