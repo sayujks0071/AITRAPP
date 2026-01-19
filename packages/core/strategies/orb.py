@@ -139,6 +139,21 @@ class ORBStrategy(Strategy):
         if not bars:
             return
         
+        # Validate data sufficiency
+        market_open = time(9, 15)
+        window_start = datetime.combine(timestamp.date(), market_open)
+
+        # Check if bars cover the start of the window (allow 1 min buffer)
+        # Note: bars are assumed to be sorted by timestamp
+        if bars[0].timestamp > window_start + timedelta(minutes=1):
+            logger.warning(
+                "ORB: Insufficient data history - cannot calculate reliable range",
+                token=token,
+                first_bar=bars[0].timestamp,
+                expected_start=window_start
+            )
+            return
+
         # Calculate high and low from bars
         highs = [bar.high for bar in bars]
         lows = [bar.low for bar in bars]
