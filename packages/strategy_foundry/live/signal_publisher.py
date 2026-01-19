@@ -1,115 +1,164 @@
+"""
+Live signal publisher.
+"""
 import json
-import os
-import yaml
-from datetime import datetime
-import pytz
-from packages.strategy_foundry.adapters.core_market_hours import MarketSchedule
+import pandas as pd
+from pathlib import Path
+from typing import Dict, Optional
+from packages.strategy_foundry.live.market_hours import LiveMarketHours
 from packages.strategy_foundry.selection.champion_store import ChampionStore
 from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import StrategySpec
+from packages.strategy_foundry.factory.grammar import Strategy, EmaCrossEntry, RsiEntry, SupertrendEntry, AdxFilter, StrategyComponent
+from packages.strategy_foundry.selection.promote import is_live_eligible
+
+RESULTS_DIR = Path("packages/strategy_foundry/results")
+LIVE_SIGNAL_FILE = RESULTS_DIR / "live_signal.json"
 
 class SignalPublisher:
     def __init__(self):
-        self.schedule = MarketSchedule()
-        self.store = ChampionStore()
+        self.market_hours = LiveMarketHours()
+        self.champion_store = ChampionStore()
         self.loader = DataLoader()
-        self.engine = BacktestEngine()
-        self.output_path = "packages/strategy_foundry/results/live_signal.json"
-
-        # Load Config for proxies
-        with open("packages/strategy_foundry/configs/instrument_map.yaml", "r") as f:
-            self.map_config = yaml.safe_load(f)
 
     def publish(self):
+        """
+        Main publish logic.
+        """
+        timestamp = self.market_hours.get_current_time_ist()
+
         # 1. Check Market Hours
-        now = datetime.now(pytz.timezone("Asia/Kolkata"))
-        if not self.schedule.is_open_now():
-             self._write_skipped(now, "MARKET_CLOSED")
-             return
+        if not self.market_hours.is_market_open():
+            self._write_skipped("Market Closed", timestamp)
+            return
 
         # 2. Load Champion
-        champion = self.store.load_current_champion()
-        if not champion:
-            self._write_skipped(now, "NO_CHAMPION")
+        champ_data = self.champion_store.load_current_champion()
+        if not champ_data:
+            self._write_skipped("No Champion Found", timestamp)
             return
 
-        spec = champion["spec"]
-        # Determine timeframe and instrument to run
-        # Ideally champion spec should store which timeframe it won on or we run the blended logic.
-        # But for simplicity, let's assume we run the Primary Timeframe (5m) if available, else 15m.
-        # The champion metrics might have score_5m and score_15m.
-        # Let's pick 5m if valid, else 15m.
+        # 3. Check Eligibility
+        # We check the metrics stored in the champion file
+        if not is_live_eligible(champ_data["metrics"]):
+            self._write_skipped("Champion Not Eligible (Low Metrics)", timestamp)
+            return
 
-        # NOTE: The current generator/ranker structure produces a champion which is a SPEC.
-        # The spec doesn't hardcode timeframe. The metrics do.
-        metrics = champion.get("metrics", {})
+        # 4. Generate Signal
+        # We need to reconstruct the strategy and run on latest data.
+        # Ideally, we run on NIFTY or SENSEX depending on what the strategy was trained on?
+        # The prompt says "Generate N candidates ... Output per candidate per instrument".
+        # Usually we pick the best instrument too?
+        # Or we run on NIFTY by default?
+        # "Output leaderboards: top 20 for NIFTY and SENSEX".
+        # The Champion JSON should probably say which instrument it excelled on?
+        # The prompt schema has "instrument": "NIFTY|SENSEX".
+        # Let's assume the champion is tied to an instrument or we evaluate on NIFTY.
+        # For MVP, let's pick NIFTY.
 
-        # Decide timeframe
-        # If score_5m exists and is good, use 5m.
-        # Actually, let's look at the metrics keys. "metrics" in champion store is probably a dict of { "5m": {...}, "15m": {...} }?
-        # My Ranker/ChampionStore logic was:
-        # ChampionStore.save_new_champion(candidate_spec, metrics, score, ...)
-        # So 'metrics' is the full dict.
-
-        target_tf = "5m"
-        # Fallback logic could be better, but assuming 5m is primary as per requirements.
-
-        # Instrument: "NIFTY" (Default for now, lab focuses on Index)
         instrument = "NIFTY"
+        df = self.loader.get_nifty()
 
-        # 3. Fetch Data (Force Refresh for Live)
-        df = self.loader.fetch_data(instrument, target_tf, force_refresh=True)
-        if df.empty:
-            self._write_skipped(now, "DATA_FETCH_FAILED")
-            return
+        # Reconstruct strategy
+        strat_def = champ_data["strategy"]
+        strategy = self._reconstruct_strategy(strat_def)
 
-        # 4. Run Engine to get State
-        res = self.engine.run(df, spec)
-        final_pos = res["final_position"]
+        # Generate position
+        # We need the LAST COMPLETED BAR's signal.
+        # Since we are Daily, and running during the day, we need the signal generated at Yesterday's Close.
+        # `generate_positions` returns a series.
+        # `apply_risk_overlay` returns "End of Day Position".
+        # If `final_pos[-1]` is the position for TODAY (based on yesterday close),
+        # Wait. `final_pos` indices match DF.
+        # `final_pos[i]` is position held at Close[i].
+        # We trade at Open[i+1].
+        # So for TODAY (Open[i+1]), we look at `final_pos[i]` (Yesterday).
 
-        # 5. Construct Signal
-        signal_val = 1 if final_pos > 0 else 0 # Long Only default
+        raw_signal = strategy.generate_positions(df)
+        final_pos = strategy.apply_risk_overlay(df, raw_signal)
 
-        proxies = self._get_proxies(instrument)
+        # Get last valid position (Yesterday)
+        # Verify DF dates.
+        # If today is trading day, DF might contain Today's bar if Yahoo updated (live)?
+        # Or only up to Yesterday.
+        # We want the signal that dictates CURRENT exposure.
+        # Exposure for Day T is determined by Data T-1.
+        # So we look at the last row of `final_pos` if it corresponds to T-1.
 
+        # Safety check on date
+        last_date = df.index[-1]
+        # If last_date is Today, we can't use it (session not closed).
+        # We need Yesterday.
+        # Yahoo Finance often provides live partial bar for current day.
+        # We should exclude today's partial bar if present to be safe?
+        # Or "Backtest engine: execution next-bar open".
+        # If we have T-1 Close, we have Signal for T Open.
+
+        # Identify T-1.
+        # If last row is today, ignore it. Use T-1.
+        # If last row is T-1, use it.
+
+        # Assuming we can compare dates.
+        today_date = pd.Timestamp.now(tz="Asia/Kolkata").date()
+
+        if df.index[-1].date() == today_date:
+            # Last row is today (partial).
+            # Signal comes from T-1 (row -2).
+            signal_idx = -2
+        else:
+            # Last row is yesterday (or earlier).
+            signal_idx = -1
+
+        target_pos = int(final_pos.iloc[signal_idx])
+
+        # Construct JSON
         signal_data = {
-            "timestamp_ist": now.isoformat(),
-            "champion_id": spec.get("id"),
-            "timeframe": target_tf,
+            "timestamp_ist": timestamp,
+            "champion_id": champ_data["id"],
             "instrument": instrument,
-            "proxy_symbol_paper": proxies.get("paper"),
-            "proxy_symbol_live": proxies.get("live"),
-            "signal": signal_val,
-            "rule_summary": f"{spec['strategy_type']} + {spec['filter_type']}",
-            "risk": {
-                "stop_atr_mult": spec["exit_params"].get("sl_mult"),
-                "flat_by": spec.get("session_close_time")
-            },
+            "signal": target_pos,
+            "rule_summary": strategy.describe(),
+            "risk": champ_data["strategy"]["risk_params"],
             "status": "OK",
             "reason": "Signal Generated"
         }
 
         self._write_json(signal_data)
 
-    def _get_proxies(self, instrument):
-        return {
-            "paper": self.map_config.get("paper_proxy", {}).get(instrument),
-            "live": self.map_config.get("live_proxy", {}).get(instrument)
-        }
-
-    def _write_skipped(self, now, reason):
+    def _write_skipped(self, reason: str, timestamp: str):
         data = {
-            "timestamp_ist": now.isoformat(),
+            "timestamp_ist": timestamp,
             "status": "SKIPPED",
             "reason": reason
         }
         self._write_json(data)
 
-    def _write_json(self, data):
-        os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
-        with open(self.output_path, "w") as f:
+    def _write_json(self, data: Dict):
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LIVE_SIGNAL_FILE, "w") as f:
             json.dump(data, f, indent=2)
 
-if __name__ == "__main__":
-    SignalPublisher().publish()
+    def _reconstruct_strategy(self, data: Dict) -> Strategy:
+        # Reconstruct from dict
+        # We need to map strings to Classes
+
+        entry_rules = []
+        for r in data["entry_rules"]:
+            name = r["name"]
+            params = r["params"]
+            if "EmaCross" in name:
+                entry_rules.append(EmaCrossEntry(name, params))
+            elif "Rsi" in name:
+                entry_rules.append(RsiEntry(name, params))
+            elif "Supertrend" in name:
+                entry_rules.append(SupertrendEntry(name, params))
+
+        filters = []
+        for f in data["filters"]:
+            name = f["name"]
+            params = f["params"]
+            if "Adx" in name:
+                filters.append(AdxFilter(name, params))
+
+        risk_params = data["risk_params"]
+
+        return Strategy(entry_rules, filters, risk_params)

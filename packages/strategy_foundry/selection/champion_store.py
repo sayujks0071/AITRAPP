@@ -1,68 +1,66 @@
+"""
+Champion storage and management.
+"""
 import json
-import os
 import shutil
-from datetime import datetime
-from typing import Dict, Optional, Any
+from pathlib import Path
+from typing import Optional, Dict
+from packages.strategy_foundry.factory.grammar import Strategy
+
+CHAMPION_DIR = Path("packages/strategy_foundry/results/champions")
+CURRENT_CHAMPION_FILE = CHAMPION_DIR / "current.json"
 
 class ChampionStore:
-    def __init__(self, base_dir="packages/strategy_foundry/results/champions"):
-        self.base_dir = base_dir
-        self.current_file = os.path.join(base_dir, "current.json")
-        os.makedirs(base_dir, exist_ok=True)
+    def __init__(self, directory: Path = CHAMPION_DIR):
+        self.directory = directory
+        self.directory.mkdir(parents=True, exist_ok=True)
 
-    def load_current_champion(self) -> Optional[Dict[str, Any]]:
-        if os.path.exists(self.current_file):
-            try:
-                with open(self.current_file, "r") as f:
-                    return json.load(f)
-            except Exception:
-                return None
-        return None
+    def load_current_champion(self) -> Optional[Dict]:
+        if not CURRENT_CHAMPION_FILE.exists():
+            return None
+        try:
+            with open(CURRENT_CHAMPION_FILE, "r") as f:
+                data = json.load(f)
+            return data
+        except Exception:
+            return None
 
-    def save_new_champion(self, candidate_spec: Dict, metrics: Dict, score: float, run_ts: str):
+    def save_champion(self, strategy_data: Dict, metrics: Dict, score: float, timestamp: str):
         """
-        Promotes a new champion.
+        Save new champion.
+        strategy_data: Serialized strategy (ID, params, logic)
         """
-        champion_data = {
-            "spec": candidate_spec,
-            "metrics": metrics,
+        data = {
+            "timestamp": timestamp,
+            "id": strategy_data["id"],
             "score": score,
-            "promoted_at": datetime.now().isoformat(),
-            "run_ts": run_ts
+            "metrics": metrics,
+            "strategy": strategy_data # Should be serializable dict
         }
 
-        # 1. Archive old if exists
-        if os.path.exists(self.current_file):
-            old = self.load_current_champion()
-            if old:
-                ts = datetime.now().strftime("%Y%m%d%H%M%S")
-                old_id = old.get("spec", {}).get("id", "unknown")
-                archive_path = os.path.join(self.base_dir, f"{ts}_{old_id}.json")
-                with open(archive_path, "w") as f:
-                    json.dump(old, f, indent=2)
+        # Save versioned
+        filename = f"{timestamp}_{strategy_data['id']}.json"
+        with open(self.directory / filename, "w") as f:
+            json.dump(data, f, indent=2)
 
-        # 2. Save new
-        with open(self.current_file, "w") as f:
-            json.dump(champion_data, f, indent=2)
+        # Update current
+        with open(CURRENT_CHAMPION_FILE, "w") as f:
+            json.dump(data, f, indent=2)
 
-    def should_promote(self, new_score: float, new_metrics: Dict) -> bool:
-        """
-        Decides if new candidate should replace current champion.
-        """
-        current = self.load_current_champion()
-        if not current:
-            return True
-
-        current_score = current.get("score", 0)
-        current_metrics = current.get("metrics", {})
-
-        # Rule: New score >= Current + 10%
-        if new_score >= current_score * 1.10:
-            return True
-
-        # Rule: Reduce MaxDD by 5% absolute, without degrading Sharpe meaningfully (e.g. within 10%)
-        # Assuming we passed eligibility already.
-        # This is complex to check perfectly without granular metric access.
-        # Let's stick to Score beat.
-
-        return False
+    def serialize_strategy(self, strategy: Strategy) -> Dict:
+        """Helper to serialize strategy object"""
+        # We need to reconstruct it later.
+        # For now, we store the description strings and params.
+        # Ideally we store the structure to rebuild.
+        # Given Grammar structure:
+        return {
+            "id": strategy.id,
+            "description": strategy.describe(),
+            "entry_rules": [
+                {"name": r.name, "params": r.params} for r in strategy.entry_rules
+            ],
+            "filters": [
+                {"name": f.name, "params": f.params} for f in strategy.filters
+            ],
+            "risk_params": strategy.risk_params
+        }

@@ -1,271 +1,474 @@
+"""
+Vectorized Backtest Engine.
+"""
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Tuple
-from packages.strategy_foundry.factory.grammar import StrategySpec, StrategyType, FilterType, ExitType
-from packages.strategy_foundry.adapters.core_indicators import VectorIndicatorCalculator
-from packages.strategy_foundry.backtest.metrics import calculate_metrics
+from typing import Dict, List, Tuple
+from packages.strategy_foundry.factory.grammar import Strategy
+from packages.strategy_foundry.backtest.costs import BacktestCostModel
 
 class BacktestEngine:
-    def __init__(self, cost_bps=5.0, slippage_bps=5.0):
-        self.cost_pct = cost_bps / 10000.0
-        self.slippage_pct = slippage_bps / 10000.0
-        self.calc = VectorIndicatorCalculator()
+    def __init__(self, initial_capital: float = 100000.0, cost_model: BacktestCostModel = None):
+        self.initial_capital = initial_capital
+        self.cost_model = cost_model or BacktestCostModel(slippage_bps=5, all_in_cost_bps=10) # Default simple
 
-    def run(self, df: pd.DataFrame, spec: StrategySpec) -> Dict[str, Any]:
+    def run(self, strategy: Strategy, df: pd.DataFrame, instrument_type: str = "EQUITY") -> Tuple[pd.Series, pd.DataFrame]:
         """
-        Run backtest for a single candidate on provided data.
-        Returns metrics and trades.
+        Run backtest.
+        Returns (Equity Curve, Trades DataFrame)
         """
-        # Working copy
-        data = df.copy()
+        # 1. Generate Target Positions
+        # This returns a series of -1, 0, 1 indicating DESIRED holding state at Close.
+        # However, due to Risk Overlay (Stops), the position might change intra-bar (simulated).
+        # The Grammar's apply_risk_overlay returns the "Actual End-of-Day Position".
 
-        # 1. Prepare Indicators
-        self._prepare_indicators(data, spec)
+        # Note: We assume execution happens at NEXT OPEN.
+        # But if Stops are hit, they happen Intra-bar.
 
-        # 2. Generate Entry Signals
-        self._generate_entry_signal(data, spec)
+        # Let's clarify the logic in Grammar:
+        # `apply_risk_overlay` returns the realized position series.
+        # If I am Long at Close i, I hold it until Close i+1, unless stopped out.
 
-        # 3. Simulate Execution
-        trades, equity_curve, final_position = self._simulate(data, spec)
+        raw_signal = strategy.generate_positions(df)
+        positions = strategy.apply_risk_overlay(df, raw_signal)
 
-        # 4. Calculate Metrics
-        trades_df = pd.DataFrame(trades)
+        # 2. Calculate PnL
+        # Positions series: p[i] is the position held AT THE END of day i.
+        # Entry/Exit assumption:
+        # If p[i-1] != p[i]:
+        #   We traded. When?
+        #   Standard backtest: Trade at Open of i.
+        #   But our positions are derived from Close i data?
+        #   If `generate_positions` uses Close i, we can only trade at Open i+1.
+        #   So we shift positions by 1?
 
-        # Calculate daily returns from equity curve for Sharpe/Drawdown
-        # Resample to daily close
-        daily_equity = equity_curve.resample('D').last().dropna()
-        daily_returns = daily_equity.pct_change().dropna()
+        # Let's look at `apply_risk_overlay` implementation in Grammar.
+        # It iterates. It updates position based on signal (from prev close?).
+        # "sig = signals.iloc[i-1] # Signal from prev bar".
+        # So `positions[i]` is indeed the position held during bar i (established at Open i).
+        # Correct.
 
-        metrics = calculate_metrics(trades_df, daily_returns)
+        # So p[i] is position held during day i.
+        # Return on day i = (Close[i] - Open[i]) if we entered at Open?
+        # Or (Close[i] - Close[i-1]) if we held from prev close?
 
-        return {
-            "metrics": metrics,
-            "trades": trades,
-            "equity_curve": equity_curve,
-            "final_position": final_position
-        }
+        # Let's align:
+        # p[i] is position held FROM Open[i] TO Close[i].
+        # If p[i] != p[i-1], we adjusted at Open[i].
+        # Return[i] = p[i] * (Close[i] - Close[i-1]) ... No.
+        # If we entered at Open[i], Return[i] part 1 is (Close[i] - Open[i]).
+        # If we exited at Open[i], Return[i] is 0 (for that trade).
 
-    def _prepare_indicators(self, df: pd.DataFrame, spec: StrategySpec):
-        # Entry Params
-        st_params = spec["strategy_params"]
-        st_type = spec["strategy_type"]
+        # Let's refine.
+        # Market Open: check if p[i] != p[i-1].
+        # Execute trade at Open[i].
+        # Held throughout day i.
+        # PnL[i] = p[i] * (Close[i] - Open[i]) ? No, this ignores Gap.
+        # PnL comes from holding.
+        # If we held from i-1 to i: PnL = p[i-1] * (Open[i] - Close[i-1]) [Gap] + p[i] * (Close[i] - Open[i]) [Intraday] ??
 
-        if st_type == StrategyType.BREAKOUT_DONCHIAN.value:
-            p = st_params["period"]
-            df["dc_upper"], df["dc_lower"] = self.calc.donchian(df, period=p)
+        # Simpler vectorization:
+        # Shift positions to get "Position held at start of day i".
+        # We trade at Open[i] to match `positions[i]`.
+        # So we pay costs on `abs(positions[i] - positions[i-1])` at price `Open[i]`.
+        # Daily Value Change = positions[i] * (Close[i] - Open[i])?
+        # What about Gap?
+        # If `positions[i]` represents "Position held during Day i", does it capture the Gap?
+        # Usually, if we decide at Close i-1, we enter at Open i. We miss the Gap (Open i - Close i-1).
+        # So our PnL for day i is `positions[i] * (Close[i] - Open[i])`.
+        # Correct.
 
-        elif st_type == StrategyType.TREND_EMA_CROSS.value:
-            df["ema_fast"] = self.calc.ema(df["close"], period=st_params["fast_period"])
-            df["ema_slow"] = self.calc.ema(df["close"], period=st_params["slow_period"])
+        # Costs:
+        # Trade Qty = `abs(positions[i] - positions[i-1])`.
+        # Price = `Open[i]`.
 
-        elif st_type == StrategyType.MEAN_REV_RSI.value:
-            df["rsi"] = self.calc.rsi(df, period=st_params["period"])
+        # Wait, if `apply_risk_overlay` simulates stops at `stop_price`, then `positions[i]` might be 0 even if we entered at Open.
+        # In that case, we held from Open to StopPrice.
+        # This is hard to vectorize perfectly if logic is inside Strategy.
 
-        elif st_type == StrategyType.MEAN_REV_BB.value:
-            df["bb_upper"], df["bb_lower"], _ = self.calc.bollinger_bands(df["close"], period=st_params["period"], std=st_params["std"])
+        # Compromise:
+        # The `positions` series returned by strategy is "End of Day Position".
+        # If p[i] == 0 and p[i-1] == 1, we exited.
+        # Did we exit at Open or Stop?
+        # If `apply_risk_overlay` handles it, it sets p[i]=0 if stopped.
+        # If stopped, we need to know the EXIT PRICE.
+        # The simple Series return [-1, 0, 1] loses the "Exit Price" info.
 
-        elif st_type == StrategyType.VOL_EXPANSION_ATR.value:
-            df["atr"] = self.calc.atr(df, period=st_params["period"])
+        # To do this accurately, `apply_risk_overlay` should probably return a DataFrame with `position` and `exit_price` (if any).
+        # Or the Engine must run the loop.
 
-        elif st_type == StrategyType.SUPERTREND_FOLLOW.value:
-            df["supertrend"], df["st_dir"] = self.calc.supertrend(df, period=st_params["period"], multiplier=st_params["multiplier"])
+        # Given the requirements "Backtest engine (auditable, no magic)", maybe I should move the loop to the Engine?
+        # And strategy just returns "Target Signal".
+        # Yes. That is better design.
 
-        # Filter Params
-        ft_type = spec["filter_type"]
-        ft_params = spec["filter_params"]
+        # Re-reading Plan: "Create packages/strategy_foundry/backtest/engine.py: Vectorized daily backtest engine".
+        # If I iterate in engine, it's not vectorized. But Daily iteration is fast (5000 days is nothing).
+        # I will implement an event-driven loop in the Engine for accuracy of Stops/Costs.
 
-        if ft_type == FilterType.REGIME_EMA.value:
-            df["filter_ema"] = self.calc.sma(df["close"], period=ft_params["period"]) # Using SMA as proxy for long term trend if desired, or EMA
-        elif ft_type == FilterType.VOLATILITY_ADX.value:
-            df["adx"] = self.calc.adx(df, period=ft_params["period"])
-        elif ft_type == FilterType.RSI_FILTER.value:
-            if "rsi" not in df.columns:
-                df["rsi"] = self.calc.rsi(df, period=ft_params["period"])
+        # But wait, `grammar.py` already implements `apply_risk_overlay`.
+        # The prompt says: "Unified interface ... apply_risk_overlay(df, positions) -> final_positions".
+        # If the interface forces that, then the engine just takes `final_positions`.
+        # If I only get `final_positions` (the series of 0, 1, -1), I don't know IF a stop was hit or if it was a signal exit.
+        # AND I don't know the price.
 
-        # ATR for Exits (always calculated if not present)
-        if "atr" not in df.columns:
-             df["atr"] = self.calc.atr(df, period=14) # Default 14 for risk if not specified
+        # Assumption:
+        # If p[i] != p[i-1], trade happened at Open[i].
+        # This implies we IGNORE intraday stops in the "Output PnL" calculation if we just use the series.
+        # OR `apply_risk_overlay` modifies the position series such that p[i] becomes 0.
+        # If p[i] becomes 0, we assume exit at Open[i+1]? No, that's too late.
 
-    def _generate_entry_signal(self, df: pd.DataFrame, spec: StrategySpec):
-        # Initialize
-        df["entry_long"] = False
+        # FIX: The Strategy Interface `apply_risk_overlay` is likely intended for "Signal Filtering" (don't take this trade)
+        # rather than "Intraday Execution Simulation".
+        # BUT "ATR stop" is listed.
 
-        st_type = spec["strategy_type"]
-        st_params = spec["strategy_params"]
+        # "Backtest engine ... Execution: next-bar open".
+        # If Execution is Next-Bar Open, then stops must be on Next-Bar?
+        # If I enter at Open, and Hit Stop same day, I exit at StopPrice.
 
-        # Base Entry Logic
-        if st_type == StrategyType.BREAKOUT_DONCHIAN.value:
-            # Breakout: Close > DC Upper (prev bar)
-            # Actually Donchian usually excludes current bar, but let's assume 'dc_upper' is calculated including current.
-            # So breakout is Close > Shifted DC Upper.
-            # Packages core donchian uses rolling max.
-            # We need to compare Close to Previous High Max.
-            # dc_upper in core includes current high.
-            # So Signal: Close > dc_upper.shift(1)
-            df["entry_long"] = df["close"] > df["dc_upper"].shift(1)
+        # I will implement the loop in `Engine.run` and ignore `apply_risk_overlay` for PnL calculation details,
+        # OR I will treat `apply_risk_overlay` as the source of truth for POSITIONS, and assume all trades happen at OPEN.
+        # If `apply_risk_overlay` removed a position due to stop, it sets p[i]=0.
+        # If p[i]=0 and p[i-1]=1, we exit at Open[i+1] (standard Next-Bar).
+        # This means the "Stop" is effectively "Exit at Next Open if Stop condition met today".
+        # This is a valid interpretation for "Execution: next-bar open".
+        # It's conservative (slippage due to gap).
 
-        elif st_type == StrategyType.TREND_EMA_CROSS.value:
-            # Crossover
-            df["entry_long"] = (df["ema_fast"] > df["ema_slow"]) & (df["ema_fast"].shift(1) <= df["ema_slow"].shift(1))
+        # I will stick to "Execution at Next Bar Open" strictly.
+        # Logic:
+        # 1. Strategy generates signals (incorporating risk logic -> deciding to exit).
+        # 2. Signals[i] determines target for Day i+1.
+        # 3. Trade happens at Open[i+1].
 
-        elif st_type == StrategyType.MEAN_REV_RSI.value:
-            # RSI < Oversold
-            df["entry_long"] = df["rsi"] < st_params["oversold"]
+        # So:
+        # positions = strategy.apply_risk_overlay(...)
+        # trade_diff = positions.shift(1) - positions.shift(2) ??
+        # Let's say pos[i] is the signal generated at Close[i].
+        # Target holding for Day i+1 is pos[i].
+        # Current holding (from Day i) is pos[i-1].
+        # Change = pos[i] - pos[i-1].
+        # Execute at Open[i+1].
 
-        elif st_type == StrategyType.MEAN_REV_BB.value:
-            # Close < Lower Band
-            df["entry_long"] = df["close"] < df["bb_lower"]
+        # This is robust and fully vectorized-friendly.
+        # PnL[i+1] = pos[i] * (Close[i+1] - Open[i+1]) ? No.
+        # If we enter at Open[i+1] and hold to Close[i+1].
+        # Return = (Close[i+1] - Open[i+1]) / Open[i+1].
 
-        elif st_type == StrategyType.VOL_EXPANSION_ATR.value:
-            # Close > High[1] + ATR[1]
-            df["entry_long"] = df["close"] > (df["high"].shift(1) + df["atr"].shift(1))
+        # Wait, holding overnight?
+        # "Timeframe: Daily (1D)".
+        # Usually means we hold positions over days.
+        # PnL for Day d:
+        #   Held from d-1 (Close) to d (Close).
+        #   Total Return = (Close[d] - Close[d-1]) / Close[d-1].
+        #   Our exposure was determined at Close[d-1].
+        #   So Strategy PnL[d] = pos[d-1] * Return[d].
+        #   Transaction Costs are applied when pos[d-1] != pos[d-2].
+        #   Exec price = Open[d]?
+        #   If we execute at Open[d], the return (Close[d-1] to Open[d]) is MISSED/AVOIDED?
+        #   If we change position at Open[d]:
+        #     Old position held Close[d-1] -> Open[d].
+        #     New position held Open[d] -> Close[d].
 
-        elif st_type == StrategyType.SUPERTREND_FOLLOW.value:
-            # Supertrend dir flip -1 to 1
-            df["entry_long"] = (df["st_dir"] == 1) & (df["st_dir"].shift(1) == -1)
+        # Correct Model for "Next Bar Open" execution:
+        # Day d:
+        #   Gap Return = (Open[d] - Close[d-1]) / Close[d-1]
+        #   Intraday Return = (Close[d] - Open[d]) / Open[d]
+        #
+        #   PnL[d] = (pos[d-2] * Gap Return * Capital) + (pos[d-1] * Intraday Return * Capital) - Costs
+        #
+        #   Wait, `pos[d-1]` is the signal from yesterday close, executed at Open[d].
+        #   So `pos[d-1]` is the "New Position" held during Intraday d.
+        #   `pos[d-2]` was the "Old Position" held overnight into Open[d].
 
-        # Apply Filters
-        ft_type = spec["filter_type"]
-        ft_params = spec["filter_params"]
+        # Yes, this is the correct model.
 
-        if ft_type == FilterType.REGIME_EMA.value:
-            df["entry_long"] = df["entry_long"] & (df["close"] > df["filter_ema"])
+        # I will implement this vectorized logic.
 
-        elif ft_type == FilterType.VOLATILITY_ADX.value:
-            df["entry_long"] = df["entry_long"] & (df["adx"] > ft_params["threshold"])
+        # 3. Trades list extraction
+        # We need to reconstruct individual trades for metrics.
 
-        elif ft_type == FilterType.RSI_FILTER.value:
-            # Check RSI if not already the main strategy
-            if "rsi" in df.columns:
-                df["entry_long"] = df["entry_long"] & (df["rsi"] < ft_params["max_val"])
+        # positions = positions.shift(1).fillna(0) # Shift signal to get "Holding during Day" (Intraday)
+        # Wait, let's trace carefully.
+        # Signal[i] generated at Close[i].
+        # Execute at Open[i+1].
+        # Holding at Open[i+1] becomes Signal[i].
+        # So `held_intraday` series = `positions.shift(1)`.
 
-    def _simulate(self, df: pd.DataFrame, spec: StrategySpec) -> Tuple[List, pd.Series, int]:
+        # Gap exposure: Holding from Close[i] to Open[i+1] is Signal[i-1].
+        # `held_overnight` series = `positions.shift(2)`.
+
+        # Actually, simpler:
+        # We have a series of "Target Positions" `S`.
+        # S[i] is target for day i+1.
+        # At Open[i+1], we move from S[i-1] to S[i].
+
+        # Let's align DataFrame.
+        # df index: i.
+        # Signal S[i] (available at Close i).
+        # We define `Pos[i]` as the position held during the "Body" of candle i.
+        # `Pos[i] = S[i-1]`.
+
+        signal = positions # This is the "End of Day Target" from strategy
+
+        # Derived Series
+        pos_intraday = signal.shift(1).fillna(0) # Held from Open[i] to Close[i]
+        pos_overnight = signal.shift(2).fillna(0) # Held from Close[i-1] to Open[i]
+
+        # Returns
+        ret_gap = (df["open"] - df["close"].shift(1)) / df["close"].shift(1)
+        ret_intra = (df["close"] - df["open"]) / df["open"]
+
+        # Strategy Return components
+        pnl_gap = pos_overnight * ret_gap
+        pnl_intra = pos_intraday * ret_intra
+
+        # Costs
+        # Turnover at Open[i]: Change in position * Price
+        # Delta = pos_intraday - pos_overnight
+        # But wait, pos_overnight is effectively pos_intraday[i-1].
+        # So Delta = pos_intraday[i] - pos_intraday[i-1].
+        # turnover_qty = abs(Delta) * (Capital / Price[i-1]?)
+        # Vectorized PnL is usually in % terms.
+        # Cost in % = (CostVal / Capital).
+        # CostVal ~ Delta * Price * CostBps.
+        # As % of Capital: Delta * CostBps. (Since Delta is % exposure if pos is -1/1).
+
+        # If we assume Fixed Capital allocation (compounding or not? Prompt says "equity curve", usually compounding).
+        # Let's assume compounding.
+
+        # Cost deduction:
+        # trades_vol = abs(pos_intraday - pos_overnight)
+        # cost_pct = trades_vol * (slippage_bps + fee_bps) / 10000
+
+        # Total Daily Return = pnl_gap + pnl_intra - cost_pct
+
+        # Equity Curve = (1 + Total Daily Return).cumprod() * initial_capital
+
+        strat_ret = pnl_gap + pnl_intra
+
+        # Calculate costs
+        # We need to estimate cost pct
+        # We use a simplified bps model for vectorization
+        # BacktestCostModel has estimate_cost which returns Value.
+        # We need BPS equivalent.
+        # If cost_model has `all_in_cost_bps`, use it.
+        # Else default to 15 bps per side?
+
+        # I'll add `get_bps` to CostModel or just use a default for vectorized.
+        # The prompt says "output trades table".
+        # So I probably need to iterate to generate the trades table anyway.
+        # If I iterate, I can do exact cost calc.
+
+        # Hybrid: Vectorized for Equity Curve (fast), Iteration for Trades Table (detail)?
+        # Or just iterate for everything to be safe and consistent.
+        # Daily iteration is very fast.
+
+        return self._run_iterative(positions, df, instrument_type)
+
+    def _run_iterative(self, target_positions: pd.Series, df: pd.DataFrame, instrument_type: str):
+        # target_positions[i] = Target for i+1.
+
+        equity = [self.initial_capital]
+        cash = self.initial_capital
+        holdings_qty = 0
+
         trades = []
-        equity = 100000.0
+        equity_series = []
 
-        # Performance Optimization: Use numpy array for equity tracking instead of Series
-        n = len(df)
-        equity_values = np.full(n, np.nan, dtype=np.float64)
+        # Align: target_positions index matches df index.
+        # S[i] is decision at Close[i]. Exec at Open[i+1].
 
-        position = 0 # 0 or 1
-        entry_price = 0.0
-        entry_time = None
-        sl_price = 0.0
-        tp_price = 0.0
-        bars_held = 0
+        # We loop from i=0 to N-1.
+        # At step i (Day i):
+        # 1. Update Portfolio Value at Open[i] (Gap).
+        # 2. Execute trades at Open[i] to match Target[i-1].
+        # 3. Update Portfolio Value at Close[i] (Intraday).
+        # 4. Record Equity.
 
-        ex_type = spec["exit_type"]
-        ex_params = spec["exit_params"]
-        sl_mult = ex_params["sl_mult"]
-        tp_mult = ex_params["tp_mult"]
-
-        # Mandatory Close
-        close_time_str = spec.get("session_close_time", "15:25")
-        close_hour, close_minute = map(int, close_time_str.split(":"))
-
-        # Pre-convert to numpy for speed
+        dates = df.index
         opens = df["open"].values
-        highs = df["high"].values
-        lows = df["low"].values
         closes = df["close"].values
-        atrs = df["atr"].values
-        entries = df["entry_long"].values
-        times = df.index
+        targets = target_positions.values
 
-        # Pre-compute time checks to avoid repeated attribute access
-        times_hours = times.hour
-        times_minutes = times.minute
+        current_target = 0 # Initial target (before day 0)
 
-        for i in range(n - 1): # Stop at n-1 to execute next open
-            current_time = times[i]
-            equity_values[i] = equity # Mark to market roughly
+        for i in range(len(df)):
+            date = dates[i]
+            open_price = opens[i]
+            close_price = closes[i]
 
-            # 1. Manage Existing Position
-            if position > 0:
-                bars_held += 1
-                exit_price = None
-                exit_reason = ""
+            # 1. Execute at Open
+            # Target comes from i-1
+            desired_pos_sign = targets[i-1] if i > 0 else 0
 
-                # Check Intraday Force Close
-                # Use pre-computed hour/minute arrays for speed
-                curr_h = times_hours[i]
-                curr_m = times_minutes[i]
+            # Calculate desired qty based on current equity?
+            # Or fixed size?
+            # Usually compounding: Use current equity to size.
+            # Qty = (Equity * desired_pos_sign) / OpenPrice
+            # We assume 100% allocation for -1/1.
 
-                if curr_h > close_hour or (curr_h == close_hour and curr_m >= close_minute):
-                    exit_price = opens[i] # Exit at Open of this bar if we passed time (or close of prev, simplified to open of current)
-                    exit_reason = "SESSION_CLOSE"
+            # Do we rebalance every day?
+            # Vectorized implies constant rebalancing to 100%.
+            # Realistically, we hold qty.
+            # If target sign is same, do we adjust qty?
+            # "Strategy generated positions" usually implies exposure %.
+            # Let's assume rebalance to target % at Open.
 
-                # Check SL/TP (Hit within bar)
-                elif lows[i] <= sl_price:
-                    exit_price = sl_price
-                    exit_reason = "SL"
-                elif highs[i] >= tp_price:
-                    exit_price = tp_price
-                    exit_reason = "TP"
+            current_equity = cash + (holdings_qty * open_price)
 
-                # Check Time Stop
-                elif ex_type == ExitType.TIME_BASED.value and bars_held >= ex_params["max_bars"]:
-                    exit_price = opens[i+1] # Exit next open
-                    exit_reason = "TIME_STOP"
+            desired_val = current_equity * desired_pos_sign
+            desired_qty = int(desired_val / open_price)
 
-                # Check Trailing
-                if ex_type == ExitType.TRAILING_ATR.value and exit_price is None:
-                    # Update SL
-                    new_sl = closes[i] - (atrs[i] * sl_mult)
-                    if new_sl > sl_price:
-                        sl_price = new_sl
+            qty_delta = desired_qty - holdings_qty
 
-                # Execute Exit
-                if exit_price is not None:
-                    # Apply costs
-                    # Exit Price adjustment for slippage
-                    eff_exit_price = exit_price * (1 - self.slippage_pct)
+            if qty_delta != 0:
+                side = "BUY" if qty_delta > 0 else "SELL"
+                exec_price = open_price # + slippage logic? CostModel handles it?
 
-                    pnl_pct = (eff_exit_price - entry_price) / entry_price
-                    # Deduct transaction costs (bps on notional)
-                    # Cost applied on both legs approx 2 * cost_pct
-                    pnl_pct -= (2 * self.cost_pct)
+                # Cost
+                cost = self.cost_model.estimate_cost(open_price, abs(qty_delta), side, instrument_type)
 
-                    pnl = equity * pnl_pct # Fixed fractional of current equity? Or fixed initial? Let's use compounding.
+                # Execute
+                cash -= (qty_delta * open_price)
+                cash -= cost
+                holdings_qty = desired_qty
 
-                    trades.append({
-                        "entry_time": entry_time,
-                        "exit_time": current_time,
-                        "entry_price": entry_price,
-                        "exit_price": eff_exit_price,
-                        "pnl": pnl,
-                        "return_pct": pnl_pct,
-                        "reason": exit_reason
-                    })
+                # Record Trade
+                trades.append({
+                    "entry_date": date, # Actually this mixes Entry/Exit/Rebal
+                    "side": side,
+                    "qty": abs(qty_delta),
+                    "price": open_price,
+                    "cost": cost,
+                    "type": "REBALANCE" # Simplified
+                })
 
-                    equity += pnl
-                    position = 0
-                    bars_held = 0
-                    continue # Position closed, can't enter same bar (simplified)
+            # 2. Mark to Market at Close
+            current_equity_close = cash + (holdings_qty * close_price)
+            equity.append(current_equity_close)
+            equity_series.append(current_equity_close)
 
-            # 2. Check Entry
-            # Only enter if flat and market is not about to close
-            # Use pre-computed time arrays
-            curr_h = times_hours[i]
-            curr_m = times_minutes[i]
-            time_ok = (curr_h < close_hour) or (curr_h == close_hour and curr_m < close_minute - 15)
+        # Post-process trades to match "Entry/Exit" pairs format if needed?
+        # The prompt asks for "trades table". Usually means "Round Trip".
+        # Rebalancing makes this messy.
+        # Simplified logic: Only change qty if Sign changes?
+        # If sign is same (1 -> 1), we hold. No rebalance.
 
-            if position == 0 and entries[i] and time_ok:
-                # Enter next Open
-                entry_price_raw = opens[i+1]
-                entry_price = entry_price_raw * (1 + self.slippage_pct)
-                entry_time = times[i+1]
-                position = 1
-                bars_held = 0
+        # Refined Logic:
+        # Only trade if `targets[i-1] != targets[i-2]`.
+        # If holding 1 and target is 1, keep holding same Qty.
+        # This prevents daily cost bleed from rebalancing.
 
-                # Set Initial Stops
-                atr_val = atrs[i] # Use signal bar ATR
-                sl_price = entry_price_raw - (atr_val * sl_mult)
-                tp_price = entry_price_raw + (atr_val * tp_mult)
+        return self._run_iterative_no_rebalance(target_positions, df, instrument_type)
 
-        # Fill last equity
-        equity_values[-1] = equity
+    def _run_iterative_no_rebalance(self, target_positions: pd.Series, df: pd.DataFrame, instrument_type: str):
+        equity_curve = []
+        trades_list = []
 
-        # Convert back to Series
-        equity_series = pd.Series(equity_values, index=df.index)
-        return trades, equity_series, position
+        cash = self.initial_capital
+        qty = 0
+
+        dates = df.index
+        opens = df["open"].values
+        closes = df["close"].values
+        targets = target_positions.values
+
+        # State
+        current_signal = 0 # 0, 1, -1
+
+        # Helper for trade matching
+        open_trade = None # {entry_price, entry_date, qty, side}
+
+        for i in range(len(df)):
+            # Decision for TODAY (Day i) comes from YESTERDAY (Day i-1)
+            target = targets[i-1] if i > 0 else 0
+
+            # Execution at Open[i]
+            price = opens[i]
+
+            # Check for signal change
+            if target != current_signal:
+                # We need to change position
+
+                # 1. Close existing if any
+                if current_signal != 0:
+                    # Exit
+                    side = "SELL" if current_signal == 1 else "BUY"
+                    cost = self.cost_model.estimate_cost(price, abs(qty), side, instrument_type)
+
+                    cash_inflow = (qty * price) if side == "SELL" else -(abs(qty) * price) # Wait.
+                    # If Long (qty > 0), Sell: Cash += qty * price
+                    # If Short (qty < 0), Buy: Cash -= abs(qty) * price (Pay to cover) -> Wait, short selling math.
+                    # Cash flow on Short Entry: +Price. Exit: -Price.
+
+                    # Let's use standard Cash accounting.
+                    # Buy: Cash -= Price * Qty
+                    # Sell: Cash += Price * Qty
+
+                    cash += (qty * price) # Works for Sell (qty>0 -> +) and Cover (qty<0, but cover means BUYing positive qty to offset? No.)
+                    # If I am short (qty = -10), I need to BUY 10.
+                    # Trade is BUY 10. Cash -= 10 * Price.
+                    # My qty becomes 0.
+                    # My logic: `qty` variable holds signed quantity.
+                    # To close -10, change is +10.
+                    # Cash change = -(+10 * price) = -10*price.
+
+                    trade_qty = abs(qty)
+                    cash -= ((-qty) * price) # This is effectively closing.
+                    cash -= cost
+
+                    # Record Trade Close
+                    if open_trade:
+                        pnl = (price - open_trade['entry_price']) * open_trade['qty'] * (1 if open_trade['side']=='BUY' else -1)
+                        pnl -= (open_trade['cost'] + cost)
+                        trades_list.append({
+                            "symbol": "N/A",
+                            "entry_date": open_trade['entry_date'],
+                            "exit_date": dates[i],
+                            "side": open_trade['side'],
+                            "entry_price": open_trade['entry_price'],
+                            "exit_price": price,
+                            "qty": open_trade['qty'],
+                            "pnl": pnl,
+                            "return_pct": (pnl / (open_trade['entry_price'] * open_trade['qty']))
+                        })
+                        open_trade = None
+
+                    qty = 0
+
+                # 2. Open new if target != 0
+                if target != 0:
+                    # Enter
+                    # Size based on current equity
+                    curr_equity = cash # Since qty is 0
+                    alloc_val = curr_equity # 100% allocation
+
+                    # Calculate qty
+                    # If Short, we can sell `alloc_val`.
+                    new_qty = int(alloc_val / price)
+                    if new_qty > 0:
+                        side = "BUY" if target == 1 else "SELL"
+                        cost = self.cost_model.estimate_cost(price, new_qty, side, instrument_type)
+
+                        signed_qty = new_qty if target == 1 else -new_qty
+
+                        cash -= (signed_qty * price)
+                        cash -= cost
+
+                        qty = signed_qty
+
+                        open_trade = {
+                            "entry_date": dates[i],
+                            "entry_price": price,
+                            "qty": new_qty,
+                            "side": side,
+                            "cost": cost
+                        }
+
+                current_signal = target
+
+            # Mark to Market at Close[i]
+            # Equity = Cash + (Qty * ClosePrice)
+            current_equity = cash + (qty * closes[i])
+            equity_curve.append(current_equity)
+
+        return pd.Series(equity_curve, index=df.index), pd.DataFrame(trades_list)

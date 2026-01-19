@@ -1,0 +1,122 @@
+[
+  {
+    "id": "fd3971442b099605c05b4edac41d7682",
+    "description": "Rules: [SupertrendTrend(period=14, multiplier=1.5)] | Filters: [AdxFilter(period=14, threshold=20)] | Risk: {'atr_stop_mult': 3.0, 'max_bars': 10}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": 0.0,
+      "avg_oos_cagr": 0.0,
+      "avg_oos_calmar": 0.0,
+      "stability": 100.0,
+      "full_metrics": "{'total_return': -0.9503844043474077, 'cagr': -0.4656969212526655, 'annualized_vol': 0.42673342230021033, 'sharpe': -0.4530916867831738, 'sortino': -0.03856765483935283, 'max_drawdown': -0.9503844043474077, 'calmar': -0.4900090101672508, 'sharpe_stability': 0.19514746171078223, 'trades': 1, 'win_rate': 0.0, 'profit_factor': 0.0, 'avg_trade_return': -0.014232266216906998}"
+    }
+  },
+  {
+    "id": "c904bd5e1e6039cd50a72cafbc12b7ce",
+    "description": "Rules: [EmaCross(fast=21, slow=21)] | Filters: [] | Risk: {'atr_stop_mult': 1.5, 'max_bars': 10}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": -0.15768415133139668,
+      "avg_oos_cagr": -0.34897445478123484,
+      "avg_oos_calmar": -0.48674502023035576,
+      "stability": 2.152656672367248,
+      "full_metrics": "{'total_return': -0.4450128985661164, 'cagr': -0.11562955109889483, 'annualized_vol': 0.74595410374889, 'sharpe': 0.2766544976245162, 'sortino': 0.30355798607202183, 'max_drawdown': -0.7902308126430305, 'calmar': -0.1463237692695842, 'sharpe_stability': 1.4631152954550297, 'trades': 4, 'win_rate': 1.0, 'profit_factor': 0.0, 'avg_trade_return': 0.1361226238674912}"
+    }
+  },
+  {
+    "id": "743e1fa22f199b284a970adce626a63a",
+    "description": "Rules: [SupertrendTrend(period=14, multiplier=1.5)] | Filters: [] | Risk: {'atr_stop_mult': 1.5, 'max_bars': 50}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": 0.0,
+      "avg_oos_cagr": 0.0,
+      "avg_oos_calmar": 0.0,
+      "stability": 100.0,
+      "full_metrics": "{'total_return': -1.0078859535209714, 'cagr': 0.0, 'annualized_vol': 0.6097862084689042, 'sharpe': -0.03663715593333091, 'sortino': -0.006879822828329405, 'max_drawdown': -1.0041062557412206, 'calmar': 0.0, 'sharpe_stability': 0.16691340474584848, 'trades': 2, 'win_rate': 0.5, 'profit_factor': 0.08163410362811462, 'avg_trade_return': -0.011687705637413622}"
+    }
+  },
+  {
+    "id": "57e88003ece6061e0eb5fbfc02765fe6",
+    "description": "Rules: [EmaCross(fast=5, slow=55)] | Filters: [] | Risk: {'atr_stop_mult': 3.0, 'max_bars': 20}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": -0.15768415133139668,
+      "avg_oos_cagr": -0.34897445478123484,
+      "avg_oos_calmar": -0.48674502023035576,
+      "stability": 2.152656672367248,
+      "full_metrics": "{'total_return': -0.4450128985661164, 'cagr': -0.11562955109889483, 'annualized_vol': 0.74595410374889, 'sharpe': 0.2766544976245162, 'sortino': 0.30355798607202183, 'max_drawdown': -0.7902308126430305, 'calmar': -0.1463237692695842, 'sharpe_stability': 1.4631152954550297, 'trades': 4, 'win_rate': 1.0, 'profit_factor': 0.0, 'avg_trade_return': 0.1361226238674912}"
+    }
+  },
+  {
+    "id": "c44883557a3983952802c16f65e14ab9",
+    "description": "Rules: [SupertrendTrend(period=14, multiplier=2.0)] | Filters: [] | Risk: {'atr_stop_mult': 1.5, 'max_bars': 5}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": 0.0,
+      "avg_oos_cagr": 0.0,
+      "avg_oos_calmar": 0.0,
+      "stability": 100.0,
+      "full_metrics": "{'total_return': -1.0078859535209714, 'cagr': 0.0, 'annualized_vol': 0.6097862084689042, 'sharpe': -0.03663715593333091, 'sortino': -0.006879822828329405, 'max_drawdown': -1.0041062557412206, 'calmar': 0.0, 'sharpe_stability': 0.16691340474584848, 'trades': 2, 'win_rate': 0.5, 'profit_factor': 0.08163410362811462, 'avg_trade_return': -0.011687705637413622}"
+    }
+  },
+  {
+    "id": "cb4906ef60d7a504e2f5aa9d0ebceecb",
+    "description": "Rules: [EmaCross(fast=5, slow=21)] | Filters: [] | Risk: {'atr_stop_mult': 2.0, 'max_bars': 20}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": -0.15768415133139668,
+      "avg_oos_cagr": -0.34897445478123484,
+      "avg_oos_calmar": -0.48674502023035576,
+      "stability": 2.152656672367248,
+      "full_metrics": "{'total_return': -0.4450128985661164, 'cagr': -0.11562955109889483, 'annualized_vol': 0.74595410374889, 'sharpe': 0.2766544976245162, 'sortino': 0.30355798607202183, 'max_drawdown': -0.7902308126430305, 'calmar': -0.1463237692695842, 'sharpe_stability': 1.4631152954550297, 'trades': 4, 'win_rate': 1.0, 'profit_factor': 0.0, 'avg_trade_return': 0.1361226238674912}"
+    }
+  },
+  {
+    "id": "f2716be59080efdec3780fc908316c70",
+    "description": "Rules: [SupertrendTrend(period=10, multiplier=1.5)] | Filters: [] | Risk: {'atr_stop_mult': 4.0, 'max_bars': 10}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": 0.0,
+      "avg_oos_cagr": 0.0,
+      "avg_oos_calmar": 0.0,
+      "stability": 100.0,
+      "full_metrics": "{'total_return': -1.0078859535209714, 'cagr': 0.0, 'annualized_vol': 0.6097862084689042, 'sharpe': -0.03663715593333091, 'sortino': -0.006879822828329405, 'max_drawdown': -1.0041062557412206, 'calmar': 0.0, 'sharpe_stability': 0.16691340474584848, 'trades': 2, 'win_rate': 0.5, 'profit_factor': 0.08163410362811462, 'avg_trade_return': -0.011687705637413622}"
+    }
+  },
+  {
+    "id": "4cf05619b97545c834ba8b2656167545",
+    "description": "Rules: [EmaCross(fast=21, slow=89)] | Filters: [AdxFilter(period=14, threshold=20)] | Risk: {'atr_stop_mult': 3.0, 'max_bars': 5}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": -0.013097344522830873,
+      "avg_oos_cagr": -0.5887435893943915,
+      "avg_oos_calmar": -0.6379898687344595,
+      "stability": 3.612396653728895,
+      "full_metrics": "{'total_return': -0.9523880472129531, 'cagr': -0.47027355883700395, 'annualized_vol': 1.0714647431456918, 'sharpe': 0.36260185192011546, 'sortino': 0.3740606351829859, 'max_drawdown': -0.9927911310966778, 'calmar': -0.47368831580668985, 'sharpe_stability': 1.385707190858813, 'trades': 7, 'win_rate': 0.5714285714285714, 'profit_factor': 16.24268652562085, 'avg_trade_return': 0.07490345143645076}"
+    }
+  },
+  {
+    "id": "ec350701e59615602a01f56c62af1a78",
+    "description": "Rules: [SupertrendTrend(period=14, multiplier=1.5)] | Filters: [AdxFilter(period=14, threshold=20)] | Risk: {'atr_stop_mult': 4.0, 'max_bars': 50}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": 0.0,
+      "avg_oos_cagr": 0.0,
+      "avg_oos_calmar": 0.0,
+      "stability": 100.0,
+      "full_metrics": "{'total_return': -0.9503844043474077, 'cagr': -0.4656969212526655, 'annualized_vol': 0.42673342230021033, 'sharpe': -0.4530916867831738, 'sortino': -0.03856765483935283, 'max_drawdown': -0.9503844043474077, 'calmar': -0.4900090101672508, 'sharpe_stability': 0.19514746171078223, 'trades': 1, 'win_rate': 0.0, 'profit_factor': 0.0, 'avg_trade_return': -0.014232266216906998}"
+    }
+  },
+  {
+    "id": "e6069169eb5731fdf646707dc1ff066b",
+    "description": "Rules: [EmaCross(fast=5, slow=34)] | Filters: [AdxFilter(period=14, threshold=20)] | Risk: {'atr_stop_mult': 1.5, 'max_bars': 10}",
+    "metrics": {
+      "valid": 1.0,
+      "avg_oos_sharpe": -0.015131743292784217,
+      "avg_oos_cagr": -0.5939097302020535,
+      "avg_oos_calmar": -0.6424973928781312,
+      "stability": 3.5860426281147,
+      "full_metrics": "{'total_return': -0.9621721171585395, 'cagr': -0.49510319089977406, 'annualized_vol': 1.0720321271081683, 'sharpe': 0.36074373184076053, 'sortino': 0.371689091626043, 'max_drawdown': -0.9942640282047774, 'calmar': -0.49795947238855875, 'sharpe_stability': 1.3856756433360808, 'trades': 7, 'win_rate': 0.5714285714285714, 'profit_factor': 16.155274453032817, 'avg_trade_return': 0.07469534037083193}"
+    }
+  }
+]

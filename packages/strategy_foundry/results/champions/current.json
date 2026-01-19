@@ -1,0 +1,52 @@
+{
+  "timestamp": "20260119_005216",
+  "id": "fd3971442b099605c05b4edac41d7682",
+  "score": 15.0,
+  "metrics": {
+    "valid": true,
+    "avg_oos_sharpe": 0.0,
+    "avg_oos_cagr": 0.0,
+    "avg_oos_calmar": 0.0,
+    "stability": 100.0,
+    "full_metrics": {
+      "total_return": -0.9503844043474077,
+      "cagr": -0.4656969212526655,
+      "annualized_vol": 0.42673342230021033,
+      "sharpe": -0.4530916867831738,
+      "sortino": -0.03856765483935283,
+      "max_drawdown": -0.9503844043474077,
+      "calmar": -0.4900090101672508,
+      "sharpe_stability": 0.19514746171078223,
+      "trades": 1,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "avg_trade_return": -0.014232266216906998
+    }
+  },
+  "strategy": {
+    "id": "fd3971442b099605c05b4edac41d7682",
+    "description": "Rules: [SupertrendTrend(period=14, multiplier=1.5)] | Filters: [AdxFilter(period=14, threshold=20)] | Risk: {'atr_stop_mult': 3.0, 'max_bars': 10}",
+    "entry_rules": [
+      {
+        "name": "SupertrendTrend",
+        "params": {
+          "period": 14,
+          "multiplier": 1.5
+        }
+      }
+    ],
+    "filters": [
+      {
+        "name": "AdxFilter",
+        "params": {
+          "period": 14,
+          "threshold": 20
+        }
+      }
+    ],
+    "risk_params": {
+      "atr_stop_mult": 3.0,
+      "max_bars": 10
+    }
+  }
+}

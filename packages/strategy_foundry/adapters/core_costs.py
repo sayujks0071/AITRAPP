@@ -1,22 +1,58 @@
+"""
+Adapter for costs and taxes.
+"""
+from packages.core.config import TaxConfig
+
 class CostAdapter:
-    """
-    Provides cost assumptions for backtesting.
-    Defaults if core config is missing or too complex.
-    """
-    # Default assumptions for NIFTY/SENSEX
-    SLIPPAGE_BPS = 2.0  # 0.02% per side
-    COMMISSION_BPS = 1.0  # ~0.01% per side (STT is higher on delivery, but this is index/derivatives proxy)
+    @staticmethod
+    def estimate_costs(instrument_type: str, price: float, quantity: int, turnover: float) -> float:
+        """
+        Estimate costs for a single side of a trade (buy or sell).
+        This is a simplified version of `RiskManager.estimate_fees` adapted for backtesting use.
+        """
+        fees = 0.0
 
-    # STT on Sell for Futures: 0.0125%
-    # STT on Sell for Options: 0.0625% (on premium)
-    # Since we are simulating "Strategy" on Index, we'll model it as Futures-like exposure.
-    # Total round trip cost ~ 3-4 bps.
+        # Base brokerage (simplified assumption: 20 Rs flat or 0.03%)
+        # For backtesting, we often care about bps impact.
+        # But let's try to be precise if we can.
 
-    ALL_IN_COST_BPS = 3.5
+        # Exchange Txn Charges
+        txn_charges = 0.0
+        stt = 0.0
+
+        if instrument_type == "EQUITY":
+            txn_charges = turnover * TaxConfig.TXN_NSE_EQUITY
+            # STT is only on Sell for Intraday Equity
+            # We will assume this is called per side, so the caller needs to handle STT application (usually on sell)
+            # But wait, TaxConfig defines STT rates.
+            pass
+        elif instrument_type == "FUTURES":
+            txn_charges = turnover * TaxConfig.TXN_NSE_FUTURES
+        elif instrument_type == "OPTIONS":
+            txn_charges = turnover * TaxConfig.TXN_NSE_OPTIONS
+
+        fees += txn_charges
+
+        # GST
+        fees *= (1 + TaxConfig.GST_RATE)
+
+        # SEBI
+        fees += turnover * TaxConfig.SEBI_CHARGES
+
+        return fees
 
     @staticmethod
-    def get_costs():
-        return {
-            "slippage_bps": CostAdapter.SLIPPAGE_BPS,
-            "all_in_cost_bps": CostAdapter.ALL_IN_COST_BPS
-        }
+    def get_stt_rate(instrument_type: str, side: str) -> float:
+        """
+        Return STT rate as a fraction of turnover.
+        """
+        if side != "SELL":
+            return 0.0
+
+        if instrument_type == "EQUITY":
+            return TaxConfig.STT_EQUITY_INTRADAY_SELL
+        elif instrument_type == "FUTURES":
+            return TaxConfig.STT_FUTURES_SELL
+        elif instrument_type == "OPTIONS":
+            return TaxConfig.STT_OPTIONS_SELL
+        return 0.0

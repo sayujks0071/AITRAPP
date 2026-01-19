@@ -1,31 +1,38 @@
-# Deployment & Consumption
+# Deployment & Live Signals
 
-## Live Signal
-The foundry produces a signal artifact at `packages/strategy_foundry/results/live_signal.json`.
+## Architecture
+Strategy Foundry operates in isolation from the execution core. It produces a JSON artifact (`live_signal.json`) which acts as the interface.
 
-### Schema
+## Live Signal JSON
+Location: `packages/strategy_foundry/results/live_signal.json`
+
+Schema:
 ```json
 {
-  "timestamp_ist": "2023-10-27T10:00:00+05:30",
-  "champion_id": "a1b2c3d4",
-  "timeframe": "5m",
+  "timestamp_ist": "2025-01-01T10:00:00+05:30",
+  "champion_id": "...",
   "instrument": "NIFTY",
-  "proxy_symbol_live": "NSE:NIFTY50-FUT",
-  "signal": 1, // 1 = LONG, 0 = FLAT
-  "status": "OK",
-  "reason": "Signal Generated"
+  "signal": 1,         // 1 (Long), -1 (Short), 0 (Flat)
+  "rule_summary": "...",
+  "status": "OK",      // or "SKIPPED"
+  "reason": "..."
 }
 ```
 
-## Consumption
-Core execution systems should:
-1. Poll `live_signal.json` (or watch for file changes).
-2. Verify `timestamp_ist` is fresh (within last 5-15 mins).
-3. Verify `status` is "OK".
-4. execute the target position indicated by `signal`.
+## Gating Logic
+A signal is only published if:
+1. **Market is Open**: 09:15 - 15:30 IST (Mon-Fri, non-holiday).
+2. **Champion Exists**: A champion strategy has been selected.
+3. **Champion is Eligible**:
+   - OOS Sharpe >= 1.0
+   - Max Drawdown <= 25%
+   - Consistent profitability in OOS folds.
 
-## Safety Gates
-- **Live Trading Flag**: Must be enabled via `ENABLE_LIVE=true` env var in the consumer.
-- **Approval File**: Must exist at `approvals/ALLOW_LIVE.txt`.
-- **Market Hours**: Foundry only publishes during market hours.
-- **Performance Gates**: Signals are only generated if the Champion strategy meets strict OOS performance criteria (Sharpe > 1.2, Low Drawdown).
+## Consumption (Bridge)
+To enable live trading based on this signal:
+1. An external orchestrator (in `packages.core`) must read `live_signal.json`.
+2. `ENABLE_LIVE=true` must be set in environment.
+3. `approvals/ALLOW_LIVE.txt` must exist.
+4. Core risk checks must pass.
+
+By default, Strategy Foundry **does not** connect to any broker.

@@ -1,75 +1,55 @@
-import numpy as np
+"""
+Adapter for core indicators.
+Reuses `packages.core.indicators.IndicatorCalculator` to ensure consistency.
+"""
+from typing import Dict, Optional
 import pandas as pd
+import numpy as np
 from packages.core.indicators import IndicatorCalculator
 
-class VectorIndicatorCalculator(IndicatorCalculator):
-    """
-    Adapter for core IndicatorCalculator to support vectorized backtesting
-    with dynamic parameters per call.
-    """
+class IndicatorsAdapter:
+    def __init__(self):
+        # We initialize with default params, but many methods below might override or compute specifically.
+        # The core calculator is stateful regarding periods initialized in __init__.
+        # For strategy foundry, we might want dynamic periods per call or per strategy instance.
+        # However, the core `compute_all` uses the init params.
+        # So we might need to instantiate IndicatorCalculator per strategy or use its low-level methods.
+        pass
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def compute_all_with_params(self, df: pd.DataFrame, params: Dict[str, int]) -> Dict[str, float]:
+        """
+        Compute indicators using specific parameters.
+        This instantiates a new calculator for the specific params.
+        """
+        calc = IndicatorCalculator(
+            atr_period=params.get("atr_period", 14),
+            rsi_period=params.get("rsi_period", 14),
+            adx_period=params.get("adx_period", 14),
+            ema_fast=params.get("ema_fast", 34),
+            ema_slow=params.get("ema_slow", 89),
+            supertrend_period=params.get("supertrend_period", 10),
+            supertrend_multiplier=params.get("supertrend_multiplier", 3.0),
+            bb_period=params.get("bb_period", 20),
+            bb_std=params.get("bb_std", 2.0)
+        )
+        return calc.compute_all(df)
 
-    def rsi(self, df: pd.DataFrame, period: int) -> np.ndarray:
-        # Save state
-        old_period = self.rsi_period
-        # Set new state
-        self.rsi_period = period
-        try:
-            return self.rsi_series(df)
-        finally:
-            # Restore state
-            self.rsi_period = old_period
+    # Expose individual vectorized series calculations for the backtest engine
+    # We use a default calculator instance for access to methods that don't depend on self state or where we pass it.
+    # Actually, most methods in IndicatorCalculator use self.* params.
+    # So we should likely create a calculator instance on the fly or allow passing it.
 
-    def atr(self, df: pd.DataFrame, period: int) -> np.ndarray:
-        old_period = self.atr_period
-        self.atr_period = period
-        try:
-            return self.atr_series(df)
-        finally:
-            self.atr_period = old_period
+    @staticmethod
+    def get_calculator(params: Dict[str, any]) -> IndicatorCalculator:
+        return IndicatorCalculator(
+            atr_period=params.get("atr_period", 14),
+            rsi_period=params.get("rsi_period", 14),
+            adx_period=params.get("adx_period", 14),
+            ema_fast=params.get("ema_fast", 34),
+            ema_slow=params.get("ema_slow", 89),
+            supertrend_period=params.get("supertrend_period", 10),
+            supertrend_multiplier=params.get("supertrend_multiplier", 3.0),
+            bb_period=params.get("bb_period", 20),
+            bb_std=params.get("bb_std", 2.0)
+        )
 
-    def adx(self, df: pd.DataFrame, period: int) -> np.ndarray:
-        old_period = self.adx_period
-        self.adx_period = period
-        try:
-            return self.adx_series(df)
-        finally:
-            self.adx_period = old_period
-
-    def ema(self, series: pd.Series, period: int) -> pd.Series:
-        # Base class _ema uses self.ema_fast/slow but ema_series takes period arg?
-        # Let's check base class.
-        # def ema_series(self, series: pd.Series, period: int) -> pd.Series:
-        # It takes period! So we can just call it.
-        return self.ema_series(series, period)
-
-    def sma(self, series: pd.Series, period: int) -> pd.Series:
-        return series.rolling(window=period).mean()
-
-    def bollinger_bands(self, series: pd.Series, period: int, std: float) -> tuple[pd.Series, pd.Series, pd.Series]:
-        old_period = self.bb_period
-        old_std = self.bb_std
-        self.bb_period = period
-        self.bb_std = std
-        try:
-            return self.bollinger_bands_series(series)
-        finally:
-            self.bb_period = old_period
-            self.bb_std = old_std
-
-    def donchian(self, df: pd.DataFrame, period: int) -> tuple[pd.Series, pd.Series]:
-        # donchian_series takes period arg
-        return self.donchian_series(df, period)
-
-    def supertrend(self, df: pd.DataFrame, period: int, multiplier: float) -> tuple[np.ndarray, np.ndarray]:
-        old_period = self.supertrend_period
-        old_mult = self.supertrend_multiplier
-        self.supertrend_period = period
-        self.supertrend_multiplier = multiplier
-        try:
-            return self.supertrend_series(df)
-        finally:
-            self.supertrend_period = old_period
-            self.supertrend_multiplier = old_mult
