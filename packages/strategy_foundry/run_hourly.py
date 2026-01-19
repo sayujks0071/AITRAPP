@@ -1,169 +1,185 @@
+"""
+Hourly Runner for Strategy Foundry.
+"""
 import os
 import sys
-import pandas as pd
+import json
 import logging
+import pandas as pd
 from datetime import datetime
-import pytz
+from pathlib import Path
+import structlog
 
-# Setup Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("FoundryRunner")
+# Setup logging
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer()
+    ],
+    logger_factory=structlog.PrintLoggerFactory(),
+)
+logger = structlog.get_logger()
 
 from packages.strategy_foundry.data.loader import DataLoader
 from packages.strategy_foundry.factory.generator import StrategyGenerator
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.walkforward import WalkForwardEvaluator
-from packages.strategy_foundry.backtest.sanity import check_sanity
+from packages.strategy_foundry.factory.registry import CandidateRegistry
+from packages.strategy_foundry.backtest.walkforward import WalkForwardAnalyst
+from packages.strategy_foundry.backtest.sanity import SanityChecker
 from packages.strategy_foundry.selection.ranker import Ranker
 from packages.strategy_foundry.selection.champion_store import ChampionStore
+from packages.strategy_foundry.selection.promote import should_promote, is_live_eligible
 from packages.strategy_foundry.live.signal_publisher import SignalPublisher
 
 def main():
     # 1. Config
-    fast_mode = os.environ.get("FAST_MODE", "0") == "1"
-    n_candidates = 15 if fast_mode else 80
-    n_folds = 2 if fast_mode else 4
+    fast_mode = os.getenv("FAST_MODE", "0") == "1"
 
-    logger.info(f"Starting Foundry Run. FastMode={fast_mode}, N={n_candidates}, Folds={n_folds}")
+    # Pr run detection (CI usually sets CI=true)
+    if os.getenv("CI") == "true" and os.getenv("GITHUB_EVENT_NAME") == "pull_request":
+        fast_mode = True
 
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = f"packages/strategy_foundry/results/runs/{run_ts}"
-    os.makedirs(results_dir, exist_ok=True)
+    n_candidates = 10 if fast_mode else 50
+    folds = 2 if fast_mode else 3
 
-    # 2. Data
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(f"packages/strategy_foundry/results/runs/{timestamp}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Starting Strategy Foundry Run", mode="FAST" if fast_mode else "FULL", timestamp=timestamp)
+
+    # 2. Load Data
     loader = DataLoader()
-    # Fetch NIFTY 15m and 5m
-    logger.info("Fetching data...")
-    df_15m = loader.fetch_data("NIFTY", "15m", force_refresh=True)
-    df_5m = loader.fetch_data("NIFTY", "5m", force_refresh=True)
-    df_1d = loader.fetch_data("NIFTY", "1d", force_refresh=True) # For sanity check
+    try:
+        # Update cache if needed
+        # In CI, we might want to force download if cache empty.
+        df_nifty = loader.get_nifty()
+        # df_sensex = loader.get_sensex() # Optional
+    except Exception as e:
+        logger.error("Failed to load data", error=str(e))
+        sys.exit(1)
 
-    # 3. Generate
+    # 3. Generate Candidates
     generator = StrategyGenerator()
-    candidates = generator.generate_candidates(n_candidates)
-    logger.info(f"Generated {len(candidates)} candidates.")
+    registry = CandidateRegistry()
 
-    # 4. Evaluate
-    engine = BacktestEngine()
-    evaluator = WalkForwardEvaluator(engine)
-    ranker = Ranker()
+    logger.info(f"Generating {n_candidates} candidates...")
 
+    unique_count = 0
+    attempts = 0
+    while unique_count < n_candidates and attempts < n_candidates * 5:
+        strat = generator.generate_candidate()
+        if registry.add(strat):
+            unique_count += 1
+        attempts += 1
+
+    # 4. Backtest & Evaluate
+    wfa = WalkForwardAnalyst(folds=folds)
     results = []
 
-    for i, spec in enumerate(candidates):
-        if i % 10 == 0: logger.info(f"Processing {i}/{len(candidates)}")
+    candidates = list(registry.candidates.values())
+    for i, strat in enumerate(candidates):
+        res = wfa.evaluate(strat, df_nifty)
 
-        # 15m Run
-        metrics_15m = evaluator.evaluate(df_15m, spec, folds=n_folds) if not df_15m.empty else {}
-        # Use returned sanity or default
-        sanity_15m = metrics_15m.get("sanity", {"late_day_dependence": True, "min_trades": False, "overtrade": True})
+        if not res["valid"]:
+            continue
 
-        # Ensure min trades check uses updated metrics
-        sanity_15m["min_trades"] = metrics_15m.get("total_trades", 0) >= (40 if fast_mode else 40)
+        # Sanity Checks
+        full_metrics = res.get("full_metrics", {})
+        trades_df = res.get("full_trades", pd.DataFrame())
 
-        score_15m = ranker.score_candidate(metrics_15m, sanity_15m) if metrics_15m else 0
+        # Check min trades (sanity)
+        min_trades = 1 if fast_mode else 30
+        if not SanityChecker.check_min_trades(trades_df, min_trades):
+            logger.info("Rejected: min_trades", got=len(trades_df), needed=min_trades, id=strat.id)
+            continue
 
-        # 5m Run
-        metrics_5m = evaluator.evaluate(df_5m, spec, folds=n_folds) if not df_5m.empty else {}
-        sanity_5m = metrics_5m.get("sanity", {"late_day_dependence": True, "min_trades": False, "overtrade": True})
+        max_dd_limit = 1000.0 if fast_mode else 35.0
+        if not SanityChecker.check_max_drawdown(full_metrics, max_dd_pct=max_dd_limit):
+            logger.info("Rejected: max_dd", got=full_metrics.get("max_drawdown"), id=strat.id)
+            continue
 
-        sanity_5m["min_trades"] = metrics_5m.get("total_trades", 0) >= (80 if fast_mode else 80)
-
-        score_5m = ranker.score_candidate(metrics_5m, sanity_5m) if metrics_5m else 0
-
-        # Blend
-        final_score = ranker.blend_scores(score_15m, score_5m)
-
-        is_eligible = ranker.is_eligible(metrics_15m, metrics_5m, sanity_15m, sanity_5m)
+        if not SanityChecker.check_oos_consistency(res["folds"]):
+            if not fast_mode: # Strict check in full mode
+                 continue
 
         results.append({
-            "spec": spec,
-            "metrics_15m": metrics_15m,
-            "score_15m": score_15m,
-            "metrics_5m": metrics_5m,
-            "score_5m": score_5m,
-            "final_score": final_score,
-            "eligible": is_eligible
+            "strategy_id": strat.id,
+            "strategy": strat,
+            "metrics": res
         })
 
+        if (i+1) % 10 == 0:
+            logger.info(f"Processed {i+1}/{len(candidates)}")
+
+    logger.info(f"Qualified candidates: {len(results)}")
+
     # 5. Rank
-    results.sort(key=lambda x: x["final_score"], reverse=True)
+    leaderboard = Ranker.rank_candidates(results)
 
-    # 6. Daily Sanity Overlay (Top 10)
-    if not df_1d.empty:
-        logger.info("Running 1D Sanity Check on Top 10...")
-        top_n = min(len(results), 10)
-        for i in range(top_n):
-            res = results[i]
-            if not res["eligible"]: continue
+    if leaderboard.empty:
+        logger.warning("No candidates qualified.")
+        sys.exit(0)
 
-            # Run 1D Backtest (Full, no WFE needed as it's sanity)
-            run_res_1d = engine.run(df_1d, res["spec"])
-            m_1d = run_res_1d["metrics"]
+    # Save Run Candidates
+    candidates_data = []
+    for res in results:
+        candidates_data.append({
+            "id": res["strategy_id"],
+            "description": res["strategy"].describe(),
+            "metrics": {k: float(v) if isinstance(v, (int, float)) else str(v) for k, v in res["metrics"].items() if k not in ["full_equity", "full_trades", "folds"]}
+        })
 
-            # Penalize if catastrophically negative
-            # Sharpe < -0.2 or MaxDD > 45%
-            if m_1d["sharpe"] < -0.2 or m_1d["max_dd"] > 0.45:
-                logger.warning(f"Candidate {res['spec']['id']} failed 1D sanity. Sharpe={m_1d['sharpe']:.2f}, MaxDD={m_1d['max_dd']:.2f}")
-                res["final_score"] -= 50 # Penalty
-                res["eligible"] = False # Disqualify
-                res["failed_1d"] = True
-            else:
-                res["failed_1d"] = False
+    with open(run_dir / "candidates.json", "w") as f:
+        json.dump(candidates_data, f, indent=2)
 
-        # Re-sort after penalties
-        results.sort(key=lambda x: x["final_score"], reverse=True)
+    # Save Leaderboard
+    leaderboard.to_csv(run_dir / "leaderboard.csv", index=False)
+    leaderboard.to_csv("packages/strategy_foundry/results/leaderboard.csv", index=False) # Latest
 
-    # Save Metrics CSV
-    csv_data = []
-    for r in results:
-        row = {
-            "id": r["spec"]["id"],
-            "score": r["final_score"],
-            "eligible": r["eligible"],
-            "sharpe_15m": r["metrics_15m"].get("sharpe", 0),
-            "trades_15m": r["metrics_15m"].get("total_trades", 0),
-            "sharpe_5m": r["metrics_5m"].get("sharpe", 0),
-            "trades_5m": r["metrics_5m"].get("total_trades", 0),
-            "strategy_type": r["spec"]["strategy_type"],
-            "failed_1d": r.get("failed_1d", False)
-        }
-        csv_data.append(row)
+    # Generate Leaderboard MD
+    md_content = "# Strategy Foundry Leaderboard\n\n"
+    md_content += f"Run: {timestamp} (Mode: {'FAST' if fast_mode else 'FULL'})\n\n"
+    md_content += leaderboard.head(20).to_markdown(index=False)
+    with open("packages/strategy_foundry/results/leaderboard.md", "w") as f:
+        f.write(md_content)
 
-    pd.DataFrame(csv_data).to_csv(f"{results_dir}/metrics.csv", index=False)
+    # 6. Champion Selection
+    champ_store = ChampionStore()
+    current_champ = champ_store.load_current_champion()
 
-    # 7. Champion Selection
-    store = ChampionStore()
-    if results:
-        top_candidate = results[0]
-        logger.info(f"Top Candidate: {top_candidate['spec']['id']} Score: {top_candidate['final_score']}")
+    top_candidate_row = leaderboard.iloc[0]
+    top_candidate_res = next(r for r in results if r["strategy_id"] == top_candidate_row["id"])
 
-        if top_candidate["eligible"]:
-            # Check Promotion
-            combined_metrics = {
-                "15m": top_candidate["metrics_15m"],
-                "5m": top_candidate["metrics_5m"]
-            }
-            if store.should_promote(top_candidate["final_score"], combined_metrics):
-                logger.info("Promoting new Champion!")
-                store.save_new_champion(
-                    top_candidate["spec"],
-                    combined_metrics,
-                    top_candidate["final_score"],
-                    run_ts
-                )
-            else:
-                logger.info("Top candidate did not beat current champion.")
-        else:
-            logger.info("Top candidate not eligible for champion status.")
+    top_candidate_blob = {
+        "score": top_candidate_row["score"],
+        "metrics": top_candidate_res["metrics"]
+    }
 
-    # 8. Publish Signal
-    if not fast_mode:
-        publisher = SignalPublisher()
-        publisher.publish()
-        logger.info("Signal publication step completed.")
+    if should_promote(top_candidate_blob, current_champ):
+        logger.info("New Champion Promoted!", id=top_candidate_row["id"], score=top_candidate_row["score"])
+
+        strat_serial = champ_store.serialize_strategy(top_candidate_res["strategy"])
+
+        # Strip heavy data from metrics for storage
+        metrics_lite = top_candidate_res["metrics"].copy()
+        metrics_lite.pop("full_equity", None)
+        metrics_lite.pop("full_trades", None)
+        metrics_lite.pop("folds", None) # Store fold summary?
+
+        champ_store.save_champion(
+            strategy_data=strat_serial,
+            metrics=metrics_lite,
+            score=top_candidate_row["score"],
+            timestamp=timestamp
+        )
     else:
-        logger.info("Skipping signal publication in FAST_MODE")
+        logger.info("Current champion retained.")
+
+    # 7. Publish Live Signal
+    publisher = SignalPublisher()
+    publisher.publish()
+
+    logger.info("Run Complete.")
 
 if __name__ == "__main__":
     main()

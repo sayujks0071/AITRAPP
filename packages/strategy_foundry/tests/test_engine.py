@@ -1,55 +1,46 @@
-import unittest
+import pytest
 import pandas as pd
 import numpy as np
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import StrategyType, FilterType, ExitType
+from packages.strategy_foundry.factory.grammar import Strategy
 
-class TestEngine(unittest.TestCase):
-    def setUp(self):
-        self.engine = BacktestEngine()
-        # Create dummy data
-        dates = pd.date_range(start="2023-01-01 09:15", periods=100, freq="5min")
-        self.df = pd.DataFrame({
-            "open": np.arange(100, 200),
-            "high": np.arange(101, 201),
-            "low": np.arange(99, 199),
-            "close": np.arange(100.5, 200.5),
-            "volume": 1000
-        }, index=dates)
+# Mock Strategy
+class MockStrat:
+    def generate_positions(self, df):
+        # Long from day 1 to day 3
+        # indices: 0, 1, 2, 3...
+        # s[1]=1, s[2]=1.
+        s = pd.Series(0, index=df.index)
+        s.iloc[1:3] = 1
+        print("\nS values:", s.values)
+        return s
 
-    def test_run_breakout(self):
-        spec = {
-            "strategy_type": StrategyType.BREAKOUT_DONCHIAN.value,
-            "strategy_params": {"period": 10},
-            "filter_type": FilterType.NO_FILTER.value,
-            "filter_params": {},
-            "exit_type": ExitType.FIXED_RR.value,
-            "exit_params": {"sl_mult": 2.0, "tp_mult": 4.0},
-            "session_close_time": "15:25"
-        }
+    def apply_risk_overlay(self, df, s):
+        return s
 
-        # Donchian will have period 10.
-        # Data is constantly rising.
-        # Breakout should trigger constantly after period 10.
+def test_engine_simple_trade():
+    dates = pd.date_range("2023-01-01", periods=10)
 
-        res = self.engine.run(self.df, spec)
-        trades = res["trades"]
-        # Should have trades
-        self.assertTrue(len(trades) > 0)
+    opens = [100.0] * 10
+    opens[4] = 110.0 # Exit at 110
 
-        # Check Final Position
-        self.assertIn("final_position", res)
+    df = pd.DataFrame({
+        "open": opens,
+        "high": [105]*10,
+        "low": [95]*10,
+        "close": [100]*10,
+        "volume": [1000]*10
+    }, index=dates)
 
-    def test_sanity_metrics(self):
-        # Empty run
-        spec = {
-            "strategy_type": StrategyType.BREAKOUT_DONCHIAN.value,
-            "strategy_params": {"period": 200}, # Period longer than data
-            "filter_type": FilterType.NO_FILTER.value,
-            "filter_params": {},
-            "exit_type": ExitType.FIXED_RR.value,
-            "exit_params": {"sl_mult": 2.0, "tp_mult": 4.0}
-        }
-        res = self.engine.run(self.df, spec)
-        self.assertEqual(len(res["trades"]), 0)
-        self.assertEqual(res["metrics"]["sharpe"], -99.9) # Default for no trades
+    engine = BacktestEngine(initial_capital=10000)
+    strat = MockStrat()
+    eq, trades = engine.run(strat, df)
+
+    print("Dates:", dates)
+    print("Trades:", trades)
+
+    assert not trades.empty
+    trade = trades.iloc[0]
+
+    assert trade["entry_price"] == 100.0
+    assert trade["exit_price"] == 110.0

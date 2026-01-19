@@ -1,38 +1,34 @@
-"""Simple Cost Model"""
-import pandas as pd
-import numpy as np
+"""
+Cost model for backtesting.
+"""
+from packages.strategy_foundry.adapters.core_costs import CostAdapter
 
-class CostModel:
-    def __init__(self, slippage_bps: float = 5.0, brokerage: float = 20.0, tax_bps: float = 3.0):
-        self.slippage_pct = slippage_bps / 10000.0
-        self.brokerage = brokerage
-        self.tax_pct = tax_bps / 10000.0
-
-    def apply(self, price: float, quantity: int, side: int) -> float:
+class BacktestCostModel:
+    def __init__(self, slippage_bps: int = 5, all_in_cost_bps: int = None):
         """
-        Returns net price after costs.
-        Side: 1 for Buy, -1 for Sell
+        If all_in_cost_bps is provided, it overrides granular fee calculation.
+        Otherwise uses CostAdapter.
         """
-        val = price * quantity
+        self.slippage_bps = slippage_bps
+        self.all_in_cost_bps = all_in_cost_bps
 
-        # Slippage: Buy higher, Sell lower
-        exec_price = price * (1 + (side * self.slippage_pct))
-        exec_val = exec_price * quantity
+    def estimate_cost(self, price: float, quantity: int, side: str, instrument_type: str = "EQUITY") -> float:
+        """
+        Returns total cost in currency units (e.g. INR) for this transaction leg.
+        Includes Slippage + Fees.
+        """
+        turnover = price * quantity
 
-        # Taxes
-        taxes = exec_val * self.tax_pct
+        # Slippage cost
+        slippage_cost = turnover * (self.slippage_bps / 10000.0)
 
-        # Total Cost
-        total_cost = taxes + self.brokerage
-
-        # If Buy: You pay execution value + costs
-        # If Sell: You receive execution value - costs
-
-        if side == 1:
-            return - (exec_val + total_cost)
+        # Fee cost
+        if self.all_in_cost_bps is not None:
+            fee_cost = turnover * (self.all_in_cost_bps / 10000.0)
         else:
-            return exec_val - total_cost
+            fee_cost = CostAdapter.estimate_costs(instrument_type, price, quantity, turnover)
+            # Add STT if Sell side
+            stt_rate = CostAdapter.get_stt_rate(instrument_type, side)
+            fee_cost += turnover * stt_rate
 
-    def estimate_bps_drag(self) -> float:
-        """Rough estimate of round-trip drag in bps"""
-        return (self.slippage_pct * 2 + self.tax_pct * 2) * 10000 + 2 # +2 for brokerage buffer
+        return slippage_cost + fee_cost

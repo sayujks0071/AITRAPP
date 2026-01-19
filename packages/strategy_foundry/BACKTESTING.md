@@ -1,29 +1,29 @@
 # Backtesting Methodology
 
-## Assumptions
-- **Execution**: Signal on Close -> Execute on Next Open.
-- **Slippage**: 5 bps per side (configurable).
-- **Costs**: 5 bps per side (configurable, covers brokerage + taxes).
-- **Data**: 5-minute and 15-minute OHLCV.
-- **Session**: 09:15 to 15:30 IST.
-- **Forced Exit**: All positions closed by 15:25 IST.
+## Engine
+- **Timeframe**: Daily (1D).
+- **Execution**: Orders are generated at Close (signal) and executed at the **Next Open**.
+- **Costs**:
+  - **Slippage**: 5 bps per side.
+  - **Fees**: Estimated using `packages.core.risk` models (STT, Exchange Txn, GST, SEBI).
+  - **Rebalancing**: Position changes trigger costs on the delta quantity.
 
-## Walk-Forward Evaluation
-To prevent overfitting, we use Walk-Forward Evaluation (WFE) or Cross-Validation:
-- Data is split into multiple folds (default 4).
-- Strategy is evaluated on each fold as an "Out-of-Sample" (OOS) period.
-- Ranking is based on the average OOS performance.
+## Walk-Forward Analysis (WFA)
+To prevent overfitting, strategies are evaluated using Walk-Forward Analysis.
+- Data is split into N folds (default 3).
+- Strategies are "trained" (evaluated) on historical segments and validated on Out-Of-Sample (OOS) segments.
+- Ranking is based **strictly** on OOS metrics.
 
 ## Metrics
-- **Sharpe Ratio**: Annualized (Risk-Free Rate = 0).
-- **Calmar Ratio**: Annualized CAGR / Max Drawdown.
-- **Stability**: Standard deviation of Sharpe across folds.
-- **Turnover**: Average return per trade (Proxy for trade quality).
+- **CAGR**: Compound Annual Growth Rate.
+- **Sharpe Ratio**: Risk-adjusted return (Rf=0).
+- **Calmar Ratio**: CAGR / Max Drawdown.
+- **Stability**: Inverse of rolling Sharpe dispersion.
 
-## Rejection Criteria
-Strategies are rejected if:
-- **Trades**: < 80 (5m) or < 40 (15m).
-- **Drawdown**: > 30%.
-- **Profit Factor**: < 1.1 (OOS).
-- **Sanity Check**: > 50% of PnL comes from the last 30 minutes of the day ("Late Day Dependence").
-- **Overtrading**: > 10 trades per day on average.
+## Sanity Checks
+Strategies must pass sanity checks to be considered:
+- **Min Trades**: Must generate sufficient trade frequency (default 30).
+- **Max Drawdown**: Must not exceed 35% drawdown.
+- **Consistency**: Must be profitable in at least 2 OOS folds.
+
+*Note: In FAST_MODE, these checks are relaxed.*

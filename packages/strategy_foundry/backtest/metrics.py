@@ -1,77 +1,88 @@
+"""
+Performance metrics calculation.
+"""
 import pandas as pd
 import numpy as np
 
-def calculate_metrics(trades_df: pd.DataFrame, daily_returns: pd.Series, initial_capital: float = 100000.0):
+def calculate_metrics(equity_curve: pd.Series, trades: pd.DataFrame) -> dict:
     """
-    Calculates performance metrics from trades and daily returns.
+    Calculate full suite of metrics from equity curve and trades.
+    equity_curve: Series of daily equity values.
+    trades: DataFrame of trades.
     """
-    if trades_df.empty:
-        return {
-            "cagr": 0.0,
-            "sharpe": -99.9,
-            "sortino": -99.9,
-            "calmar": -99.9,
-            "max_dd": 0.0,
-            "win_rate": 0.0,
-            "profit_factor": 0.0,
-            "trades": 0,
-            "avg_trade_pct": 0.0
-        }
+    if equity_curve.empty:
+        return {}
 
-    # Trade-based metrics
-    wins = trades_df[trades_df["pnl"] > 0]
-    losses = trades_df[trades_df["pnl"] <= 0]
-
-    win_rate = len(wins) / len(trades_df) if len(trades_df) > 0 else 0
-    gross_profit = wins["pnl"].sum()
-    gross_loss = abs(losses["pnl"].sum())
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-
-    avg_trade_pct = trades_df["return_pct"].mean()
-
-    # Time-series metrics
-    # Resample to daily if intraday
-    # daily_returns should be % returns series
+    # Returns
+    initial_equity = equity_curve.iloc[0]
+    final_equity = equity_curve.iloc[-1]
+    total_return = (final_equity - initial_equity) / initial_equity
 
     # CAGR
-    # Assuming daily_returns index is datetime
-    if len(daily_returns) > 1:
-        total_ret = (1 + daily_returns).prod() - 1
-        days = (daily_returns.index[-1] - daily_returns.index[0]).days
-        if days > 0:
-            cagr = (1 + total_ret) ** (365 / days) - 1
-        else:
-            cagr = 0.0
+    n_days = (equity_curve.index[-1] - equity_curve.index[0]).days
+    if n_days > 0 and initial_equity > 0 and final_equity > 0:
+        cagr = (final_equity / initial_equity) ** (365 / n_days) - 1
     else:
         cagr = 0.0
 
-    # Sharpe
-    mean_ret = daily_returns.mean()
-    std_ret = daily_returns.std()
-    sharpe = (mean_ret / std_ret * np.sqrt(252)) if std_ret > 0 else 0.0
+    # Volatility (Annualized)
+    daily_returns = equity_curve.pct_change().dropna()
+    ann_vol = daily_returns.std() * np.sqrt(252)
+
+    # Sharpe (Rf=0)
+    if ann_vol > 0:
+        sharpe = (cagr) / ann_vol # Simplified Sharpe using CAGR as return proxy or mean daily return?
+        # Standard: mean(daily_ret) / std(daily_ret) * sqrt(252)
+        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+    else:
+        sharpe = 0.0
 
     # Sortino
-    downside_ret = daily_returns[daily_returns < 0]
-    std_down = downside_ret.std()
-    sortino = (mean_ret / std_down * np.sqrt(252)) if std_down > 0 else 0.0
+    downside_returns = daily_returns[daily_returns < 0]
+    downside_std = downside_returns.std() * np.sqrt(252)
+    if downside_std > 0:
+        sortino = (daily_returns.mean() * 252) / downside_std
+    else:
+        sortino = 0.0
 
-    # Max Drawdown
-    cum_ret = (1 + daily_returns).cumprod()
-    peak = cum_ret.cummax()
-    drawdown = (cum_ret - peak) / peak
-    max_dd = abs(drawdown.min())
+    # Drawdown
+    running_max = equity_curve.cummax()
+    drawdown = (equity_curve - running_max) / running_max
+    max_dd = drawdown.min() # Negative value
 
     # Calmar
-    calmar = cagr / max_dd if max_dd > 0 else 0.0
+    if max_dd < 0:
+        calmar = cagr / abs(max_dd)
+    else:
+        calmar = 0.0
+
+    # Stability (R2 of equity log curve)
+    # Or Rolling Sharpe dispersion as requested in prompt: "rolling 252D Sharpe dispersion"
+    # But for single metric summary, R2 is good for stability.
+    # Prompt asks for "Stability (low dispersion)" -> rolling Sharpe dispersion.
+
+    rolling_sharpe = daily_returns.rolling(252).apply(lambda x: x.mean() / x.std() * np.sqrt(252) if x.std() > 0 else 0)
+    stability_score = 1.0 / (rolling_sharpe.std() + 0.01) # Inverse of dispersion?
+    # Or just return the std dev of rolling sharpe.
+    sharpe_volatility = rolling_sharpe.std()
+
+    # Trade Stats
+    num_trades = len(trades)
+    win_rate = len(trades[trades['pnl'] > 0]) / num_trades if num_trades > 0 else 0.0
+    profit_factor = abs(trades[trades['pnl'] > 0]['pnl'].sum() / trades[trades['pnl'] < 0]['pnl'].sum()) if num_trades > 0 and trades[trades['pnl'] < 0]['pnl'].sum() != 0 else 0.0
+    avg_trade_ret = trades['return_pct'].mean() if num_trades > 0 else 0.0
 
     return {
+        "total_return": total_return,
         "cagr": cagr,
+        "annualized_vol": ann_vol,
         "sharpe": sharpe,
         "sortino": sortino,
+        "max_drawdown": max_dd,
         "calmar": calmar,
-        "max_dd": max_dd,
+        "sharpe_stability": sharpe_volatility,
+        "trades": num_trades,
         "win_rate": win_rate,
         "profit_factor": profit_factor,
-        "trades": len(trades_df),
-        "avg_trade_pct": avg_trade_pct
+        "avg_trade_return": avg_trade_ret
     }

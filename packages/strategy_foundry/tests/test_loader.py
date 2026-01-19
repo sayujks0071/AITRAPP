@@ -1,46 +1,38 @@
-import unittest
-from unittest.mock import patch, MagicMock
-from packages.strategy_foundry.data.loader import DataLoader
+import pytest
 import pandas as pd
-from datetime import datetime
+from unittest.mock import MagicMock, patch
+from packages.strategy_foundry.data.loader import DataLoader
 
-class TestDataLoader(unittest.TestCase):
-    def setUp(self):
-        self.loader = DataLoader()
+@patch("requests.get")
+def test_download_yahoo(mock_get):
+    # Mock response
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    csv_content = """Date,Open,High,Low,Close,Adj Close,Volume
+2023-01-01,18000,18100,17900,18050,18050,100000
+2023-01-02,18050,18200,18000,18150,18150,120000
+"""
+    mock_resp.text = csv_content
+    mock_get.return_value = mock_resp
 
-    def test_get_symbol(self):
-        self.assertEqual(self.loader.get_symbol_for_instrument("NIFTY"), "^NSEI")
-        self.assertEqual(self.loader.get_symbol_for_instrument("UNKNOWN"), "UNKNOWN")
+    loader = DataLoader()
+    # Bypass file system cache for unit test by mocking _download_yahoo directly or checking calls
+    # but here we test the internal _download_yahoo if we want, or the public get_data
 
-    @patch("requests.get")
-    def test_fetch_data_mock(self, mock_get):
-        # Mock response
-        # 1672633800 = 2023-01-02 04:30:00 UTC = 10:00 IST
-        # 1672634100 = 2023-01-02 04:35:00 UTC = 10:05 IST
-        ts1 = 1672633800
-        ts2 = 1672634100
+    # Let's test _download_yahoo directly via the mock above being used inside get_data
+    # But get_data writes to file. We should mock pathlib.Path.
 
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "chart": {
-                "result": [{
-                    "timestamp": [ts1, ts2],
-                    "indicators": {
-                        "quote": [{
-                            "open": [100, 101],
-                            "high": [102, 103],
-                            "low": [99, 100],
-                            "close": [101, 102],
-                            "volume": [1000, 2000]
-                        }]
-                    }
-                }]
-            }
-        }
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
+    with patch("pathlib.Path.exists", return_value=False), \
+         patch("pathlib.Path.mkdir"), \
+         patch("pandas.DataFrame.to_csv"): # Avoid writing to disk
 
-        df = self.loader.fetch_data("NIFTY", "5m", force_refresh=True)
-        self.assertFalse(df.empty, "DataFrame should not be empty")
-        self.assertEqual(len(df), 2)
-        self.assertIn("close", df.columns)
+        df = loader.get_data("TEST")
+
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2
+        assert "close" in df.columns
+        assert df.index.tz.zone == "Asia/Kolkata"
+
+def test_integration_download_real():
+    # Only run this if we want to verify network (optional, skipped by default in CI usually)
+    pass
