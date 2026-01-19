@@ -1,7 +1,9 @@
 """Strategy Factory for Deserialization"""
 import re
-from .grammar import TrendFollowingRule, SupertrendRule, RSIReversionRule, StopLossRule
+
 from .generator import StrategyCandidate
+from .grammar import RSIReversionRule, StopLossRule, SupertrendRule, TrendFollowingRule
+
 
 class StrategyFactory:
     @staticmethod

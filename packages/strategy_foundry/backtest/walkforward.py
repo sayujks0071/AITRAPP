@@ -1,9 +1,12 @@
-import pandas as pd
+from typing import Any, Dict
+
 import numpy as np
-from typing import Dict, List, Any
+import pandas as pd
+
 from packages.strategy_foundry.backtest.engine import BacktestEngine
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
 from packages.strategy_foundry.backtest.sanity import check_sanity
+
 
 class WalkForwardEvaluator:
     def __init__(self, engine: BacktestEngine):

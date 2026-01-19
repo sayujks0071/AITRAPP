@@ -1,5 +1,7 @@
-from packages.core.market_hours import MarketHoursGuard, MARKET_OPEN, MARKET_CLOSE, HARD_CLOSE, IST
-from datetime import datetime, time
+from datetime import datetime
+
+from packages.core.market_hours import HARD_CLOSE, IST, MARKET_CLOSE, MARKET_OPEN, MarketHoursGuard
+
 
 class MarketSchedule:
     def __init__(self):

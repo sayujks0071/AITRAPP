@@ -1,9 +1,16 @@
-import random
 import hashlib
 import json
+import random
 from typing import List
-from packages.strategy_foundry.factory.grammar import StrategySpec, StrategyType, FilterType, ExitType
+
+from packages.strategy_foundry.factory.grammar import (
+    ExitType,
+    FilterType,
+    StrategySpec,
+    StrategyType,
+)
 from packages.strategy_foundry.factory.parameter_space import ParameterSpace
+
 
 class StrategyGenerator:
     def __init__(self):

@@ -1,7 +1,9 @@
-import os
 import json
+import os
 from typing import List
+
 from .grammar import StrategyCandidate
+
 
 class CandidateRegistry:
     def __init__(self, run_dir: str):

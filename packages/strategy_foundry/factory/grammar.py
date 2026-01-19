@@ -1,5 +1,6 @@
 from enum import Enum
-from typing import TypedDict, Dict, Any, Optional
+from typing import Any, Dict, TypedDict
+
 
 class StrategyType(Enum):
     BREAKOUT_DONCHIAN = "BREAKOUT_DONCHIAN"

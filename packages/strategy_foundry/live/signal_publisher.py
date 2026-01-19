@@ -1,13 +1,15 @@
 import json
 import os
-import yaml
 from datetime import datetime
+
 import pytz
+import yaml
+
 from packages.strategy_foundry.adapters.core_market_hours import MarketSchedule
-from packages.strategy_foundry.selection.champion_store import ChampionStore
-from packages.strategy_foundry.data.loader import DataLoader
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import StrategySpec
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.selection.champion_store import ChampionStore
+
 
 class SignalPublisher:
     def __init__(self):
@@ -40,17 +42,6 @@ class SignalPublisher:
         # But for simplicity, let's assume we run the Primary Timeframe (5m) if available, else 15m.
         # The champion metrics might have score_5m and score_15m.
         # Let's pick 5m if valid, else 15m.
-
-        # NOTE: The current generator/ranker structure produces a champion which is a SPEC.
-        # The spec doesn't hardcode timeframe. The metrics do.
-        metrics = champion.get("metrics", {})
-
-        # Decide timeframe
-        # If score_5m exists and is good, use 5m.
-        # Actually, let's look at the metrics keys. "metrics" in champion store is probably a dict of { "5m": {...}, "15m": {...} }?
-        # My Ranker/ChampionStore logic was:
-        # ChampionStore.save_new_champion(candidate_spec, metrics, score, ...)
-        # So 'metrics' is the full dict.
 
         target_tf = "5m"
         # Fallback logic could be better, but assuming 5m is primary as per requirements.
