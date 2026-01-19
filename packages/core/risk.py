@@ -285,7 +285,8 @@ class RiskManager:
         instrument: Instrument,
         quantity: int,
         entry_price: float,
-        exit_price: float
+        exit_price: float,
+        side: Optional[SignalSide] = None
     ) -> float:
         """
         Estimate trading fees for a round trip.
@@ -303,11 +304,13 @@ class RiskManager:
             quantity: Position quantity
             entry_price: Entry price
             exit_price: Exit price
+            side: SignalSide.LONG or SignalSide.SHORT (default LONG if None)
         
         Returns:
             Estimated total fees in INR
         """
         turnover = quantity * (entry_price + exit_price)
+        is_long = side == SignalSide.LONG if side is not None else True
         
         # Simplified fee calculation (Zerodha-like structure)
         fees = 0.0
@@ -342,23 +345,31 @@ class RiskManager:
         # GST on brokerage and transaction charges
         fees *= (1 + TaxConfig.GST_RATE)
 
-        # STT Calculation
+        # STT Calculation: Always on SELL side
         stt = 0.0
+        # Determine sell price based on direction
+        # Long: Sell is Exit
+        # Short: Sell is Entry
+        sell_price_for_stt = exit_price if is_long else entry_price
+
         if instrument.is_equity:
             # Assuming Intraday for now as safe default. For delivery it's higher (0.1% on both sides).
-            stt = (exit_price * quantity) * TaxConfig.STT_EQUITY_INTRADAY_SELL
+            stt = (sell_price_for_stt * quantity) * TaxConfig.STT_EQUITY_INTRADAY_SELL
         elif instrument.is_future:
-            stt = (exit_price * quantity) * TaxConfig.STT_FUTURES_SELL
+            stt = (sell_price_for_stt * quantity) * TaxConfig.STT_FUTURES_SELL
         elif instrument.is_option:
-            stt = (exit_price * quantity) * TaxConfig.STT_OPTIONS_SELL
+            stt = (sell_price_for_stt * quantity) * TaxConfig.STT_OPTIONS_SELL
 
         fees += stt
         
         # SEBI charges
         fees += turnover * TaxConfig.SEBI_CHARGES
         
-        # Stamp duty: on buy side
-        fees += (entry_price * quantity) * TaxConfig.STAMP_DUTY_BUY
+        # Stamp duty: Always on BUY side
+        # Long: Buy is Entry
+        # Short: Buy is Exit
+        buy_price_for_stamp = entry_price if is_long else exit_price
+        fees += (buy_price_for_stamp * quantity) * TaxConfig.STAMP_DUTY_BUY
         
         return fees
     

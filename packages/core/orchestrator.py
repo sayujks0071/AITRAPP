@@ -1005,7 +1005,8 @@ class TradingOrchestrator:
                     position.instrument,
                     position.quantity,
                     position.entry_price,
-                    exit_order.average_price
+                    exit_order.average_price,
+                    side=position.side
                 )
                 
                 position.realized_pnl = gross_pnl - fees
