@@ -1,89 +1,71 @@
+"""Manages champion persistence and promotion"""
 import json
 import os
+import shutil
 from datetime import datetime
-from typing import Any, Dict, Optional
-
+from typing import Optional, Dict
 
 class ChampionStore:
-    def __init__(self, base_dir="packages/strategy_foundry/results/champions"):
+    def __init__(self, base_dir: str = "packages/strategy_foundry/results/champions"):
         self.base_dir = base_dir
-        self.current_file = os.path.join(base_dir, "current.json")
-        os.makedirs(base_dir, exist_ok=True)
+        os.makedirs(self.base_dir, exist_ok=True)
+        self.current_path = os.path.join(self.base_dir, "current.json")
 
-    def load_current_champion(self) -> Optional[Dict[str, Any]]:
-        if os.path.exists(self.current_file):
+    def load_current(self) -> Optional[Dict]:
+        if os.path.exists(self.current_path):
             try:
-                with open(self.current_file, "r") as f:
+                with open(self.current_path, "r") as f:
                     return json.load(f)
             except Exception:
                 return None
         return None
 
-    def save_new_champion(self, candidate_spec: Dict, metrics: Dict, score: float, run_ts: str):
+    def save_champion(self, candidate_dict: Dict, metrics: Dict, score: float):
         """
-        Promotes a new champion.
+        Save new champion.
         """
-        champion_data = {
-            "spec": candidate_spec,
+        data = {
+            "timestamp": datetime.now().isoformat(),
+            "candidate": candidate_dict,
             "metrics": metrics,
-            "score": score,
-            "promoted_at": datetime.now().isoformat(),
-            "run_ts": run_ts
+            "score": score
         }
 
-        # 1. Archive old if exists
-        if os.path.exists(self.current_file):
-            old = self.load_current_champion()
-            if old:
-                ts = datetime.now().strftime("%Y%m%d%H%M%S")
-                old_id = old.get("spec", {}).get("id", "unknown")
-                archive_path = os.path.join(self.base_dir, f"{ts}_{old_id}.json")
-                with open(archive_path, "w") as f:
-                    json.dump(old, f, indent=2)
+        # Save as current
+        with open(self.current_path, "w") as f:
+            json.dump(data, f, indent=2)
 
-        # 2. Save new
-        with open(self.current_file, "w") as f:
-            json.dump(champion_data, f, indent=2)
+        # Save versioned
+        ts_safe = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cid = candidate_dict["id"]
+        v_path = os.path.join(self.base_dir, f"{ts_safe}_{cid}.json")
+        with open(v_path, "w") as f:
+            json.dump(data, f, indent=2)
 
-    def should_promote(self, new_score: float, new_metrics: Dict) -> bool:
+    def should_promote(self, new_score: float, new_dd: float, new_sharpe: float) -> bool:
         """
-        Decides if new candidate should replace current champion.
+        Promotion rule:
+        - New must beat current blended_score by >= 10%
+        - OR reduce MaxDD by >= 5% absolute while not degrading Sharpe meaningfully.
         """
-        current = self.load_current_champion()
+        current = self.load_current()
         if not current:
             return True
 
-        current_score = current.get("score", 0)
-        current_metrics = current.get("metrics", {})
+        curr_score = current.get("score", -99)
+        curr_metrics = current.get("metrics", {})
+        curr_dd = curr_metrics.get("max_dd", -1.0) # usually negative
+        curr_sharpe = curr_metrics.get("avg_sharpe", 0)
 
-        # Rule 1: New score >= Current + 10%
-        if new_score >= current_score * 1.10:
+        # Score improvement
+        if new_score > curr_score * 1.10:
             return True
 
-        # Rule 2: Reduce MaxDD by >= 5% absolute, Sharpe within 10%
-        # Check for 5m first (Primary)
-        tf = "5m"
-        # If either is missing the primary timeframe data, fallback to 15m
-        if tf not in new_metrics or tf not in current_metrics:
-            tf = "15m"
-
-        if tf in new_metrics and tf in current_metrics:
-            new_m = new_metrics[tf]
-            curr_m = current_metrics[tf]
-
-            # Check if metrics are populated
-            if not new_m or not curr_m:
-                return False
-
-            new_dd = new_m.get("max_dd", 1.0)
-            curr_dd = curr_m.get("max_dd", 1.0)
-            new_sharpe = new_m.get("sharpe", 0.0)
-            curr_sharpe = curr_m.get("sharpe", 0.0)
-
-            # Reduce MaxDD by >= 5% absolute (e.g. 0.25 -> 0.20)
-            if (curr_dd - new_dd) >= 0.05:
-                # Sharpe not degrading meaningfully (>= 90% of current)
-                if new_sharpe >= curr_sharpe * 0.90:
-                     return True
+        # DD improvement (MaxDD is negative, so closer to 0 is better)
+        # e.g. Current -30%, New -20%. diff = (-0.20) - (-0.30) = +0.10 > 0.05
+        if (new_dd - curr_dd) > 0.05:
+            # Check Sharpe not degraded meaningfully (e.g. > 90% of current)
+            if new_sharpe >= curr_sharpe * 0.9:
+                return True
 
         return False

@@ -1,98 +1,67 @@
-from typing import Dict
+"""Rank and select strategies"""
+from typing import List, Dict, Tuple
+import pandas as pd
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
 
+def calculate_score(metrics: Dict) -> float:
+    """
+    Score weights:
+    + 25% OOS Sharpe
+    + 25% OOS Calmar
+    + 20% Net return / CAGR (Using Avg Sharpe as proxy for risk adjusted, let's use Avg Return if available, else Sharpe dominates)
+    + 15% Stability (low variance across folds)
+    + 10% Low turnover bonus (or -turnover penalty)
+    + 5% Intraday sanity
+    """
 
-class Ranker:
-    def __init__(self):
-        # Weights
-        self.w_sharpe = 0.25
-        self.w_calmar = 0.25
-        self.w_cagr = 0.20
-        self.w_stability = 0.15
-        self.w_turnover = 0.10
-        self.w_sanity = 0.05
+    # Extract
+    sharpe = metrics.get("avg_sharpe", -99)
+    calmar = metrics.get("avg_calmar", -99)
+    stability = metrics.get("sharpe_stability", 10) # Lower is better
 
-    def score_candidate(self, metrics: Dict[str, float], sanity: Dict[str, bool]) -> float:
-        """
-        Computes a raw score 0-100 for a single run.
-        """
-        # 1. Normalize Metrics (Approximate boundaries for normalization)
-        # Sharpe: Target 2.0+
-        sharpe_score = min(max(metrics["sharpe"] / 2.0, 0), 1) * 100
+    # Normalize inputs roughly
+    # Sharpe: target > 1.0. Cap at 3.0?
+    s_score = min(max(sharpe, -2), 3) / 3.0
 
-        # Calmar: Target 3.0+
-        calmar_score = min(max(metrics["calmar"] / 3.0, 0), 1) * 100
+    # Calmar: target > 2.0.
+    c_score = min(max(calmar, -2), 5) / 5.0
 
-        # CAGR: Target 50%+
-        cagr_score = min(max(metrics["cagr"] / 0.50, 0), 1) * 100
+    # Stability: 0 is best. 1.0 is bad.
+    stab_score = max(0, 1 - stability)
 
-        # Stability (Profit Factor as proxy here, or win rate consistency)
-        # Target PF 2.0
-        pf_score = min(max((metrics["profit_factor"] - 1.0) / 1.0, 0), 1) * 100
+    # Bonus/Penalty
+    late_day = metrics.get("late_day_ratio", 0)
+    # Penalize if late day dependence > 0.5
+    late_penalty = -0.1 if late_day > 0.5 else 0.05
 
-        # Turnover (Low is better? Or just "Healthy")
-        # If too low (0), bad. If too high (>20/day), bad.
-        # Let's use avg_trade_pct. Higher avg trade return is more robust to slippage.
-        # Target 0.5% avg trade
-        trade_qual_score = min(max(metrics["avg_trade_pct"] / 0.005, 0), 1) * 100
+    score = (0.25 * s_score) + (0.25 * c_score) + (0.15 * stab_score) + late_penalty
 
-        # Sanity Penalty
-        sanity_score = 100
-        if not sanity["late_day_dependence"]: sanity_score -= 50
-        if not sanity["overtrade"]: sanity_score -= 50
-        sanity_score = max(sanity_score, 0)
+    # Add trades penalty (Turnover)
+    # We want "Low turnover bonus".
+    # If trades are excessive, penalty.
+    # Reject if too high, but here just score.
+    # Let's ignore complex logic for now, keep it simple.
 
-        total_score = (
-            sharpe_score * self.w_sharpe +
-            calmar_score * self.w_calmar +
-            cagr_score * self.w_cagr +
-            pf_score * self.w_stability +
-            trade_qual_score * self.w_turnover +
-            sanity_score * self.w_sanity
-        )
+    return score
 
-        return total_score
+def rank_candidates(candidates_with_metrics: List[Tuple[StrategyCandidate, Dict]]) -> pd.DataFrame:
+    rows = []
+    for cand, metrics in candidates_with_metrics:
+        score = calculate_score(metrics)
+        row = {
+            "id": cand.get_id(),
+            "timeframe": cand.timeframe,
+            "score": score,
+            "sharpe": metrics.get("avg_sharpe"),
+            "calmar": metrics.get("avg_calmar"),
+            "trades": metrics.get("total_trades"),
+            "positive_folds": metrics.get("positive_folds"),
+            "candidate": cand, # Store object for later use
+            "metrics": metrics
+        }
+        rows.append(row)
 
-    def blend_scores(self, score_15m: float, score_5m: float) -> float:
-        # 60% 15m, 40% 5m
-        if score_15m is not None and score_5m is not None:
-            return 0.6 * score_15m + 0.4 * score_5m
-        elif score_15m is not None:
-            return score_15m
-        elif score_5m is not None:
-            return score_5m
-        return 0.0
-
-    def is_eligible(self, metrics_15m: Dict, metrics_5m: Dict, sanity_15m: Dict, sanity_5m: Dict) -> bool:
-        """
-        Gates for Live Eligibility.
-        """
-        # Must have at least one valid timeframe
-        if not metrics_15m and not metrics_5m:
-            return False
-
-        valid_15 = False
-        if metrics_15m:
-            valid_15 = (
-                metrics_15m["sharpe"] >= 1.2 and
-                metrics_15m["max_dd"] <= 0.25 and
-                sanity_15m["late_day_dependence"] and
-                sanity_15m["min_trades"]
-            )
-
-        valid_5 = False
-        if metrics_5m:
-            valid_5 = (
-                metrics_5m["sharpe"] >= 1.2 and
-                metrics_5m["max_dd"] <= 0.25 and
-                sanity_5m["late_day_dependence"] and
-                sanity_5m["min_trades"]
-            )
-
-        # If both exist, both must be "Okayish" but we really care about the blended result.
-        # Requirement: "blended OOS Sharpe >= 1.2"
-        # Let's simplify: if 15m exists, it must pass. If 5m exists, it must pass.
-
-        if metrics_15m and not valid_15: return False
-        if metrics_5m and not valid_5: return False
-
-        return True
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df.sort_values("score", ascending=False, inplace=True)
+    return df

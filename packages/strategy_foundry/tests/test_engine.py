@@ -1,58 +1,56 @@
 import unittest
-
-import numpy as np
 import pandas as pd
-
+import numpy as np
+import datetime
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.factory.grammar import ExitType, FilterType, StrategyType
-
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, StrategyBlock
 
 class TestEngine(unittest.TestCase):
     def setUp(self):
-        self.engine = BacktestEngine()
-        # Create dummy data
-        dates = pd.date_range(start="2023-01-01 09:15", periods=100, freq="5min")
+        # Create Synthetic Data
+        # 100 bars
+        dates = pd.date_range("2023-01-01 09:15", periods=100, freq="15min")
+
+        # Flat then massive jump
+        open_arr = np.array([100.0] * 100)
+        # Jump at index 10 (09:15 + 2.5h = 11:45) - Valid time
+        open_arr[10:] = 120.0
+
+        high_arr = open_arr + 1.0
+        low_arr = open_arr - 1.0
+        close_arr = open_arr + 0.5
+
         self.df = pd.DataFrame({
-            "open": np.arange(100, 200),
-            "high": np.arange(101, 201),
-            "low": np.arange(99, 199),
-            "close": np.arange(100.5, 200.5),
-            "volume": 1000
+            "open": open_arr,
+            "high": high_arr,
+            "low": low_arr,
+            "close": close_arr,
+            "volume": [1000] * 100
         }, index=dates)
 
-    def test_run_breakout(self):
-        spec = {
-            "strategy_type": StrategyType.BREAKOUT_DONCHIAN.value,
-            "strategy_params": {"period": 10},
-            "filter_type": FilterType.NO_FILTER.value,
-            "filter_params": {},
-            "exit_type": ExitType.FIXED_RR.value,
-            "exit_params": {"sl_mult": 2.0, "tp_mult": 4.0},
-            "session_close_time": "15:25"
-        }
+        # Simple Strategy: Breakout
+        entry = StrategyBlock("DonchianBreakout", {"period": 5}) # Lower period
+        # Exit: Time Stop 5 bars
+        exits = [StrategyBlock("TimeStop", {"max_bars": 5})]
+        # No filter
+        filters = []
 
-        # Donchian will have period 10.
-        # Data is constantly rising.
-        # Breakout should trigger constantly after period 10.
+        self.candidate = StrategyCandidate(entry, exits, filters, "15m")
 
-        res = self.engine.run(self.df, spec)
+    def test_run_simple(self):
+        engine = BacktestEngine(self.df)
+        res = engine.run(self.candidate)
+
         trades = res["trades"]
-        # Should have trades
-        self.assertTrue(len(trades) > 0)
+        self.assertFalse(trades.empty)
+        self.assertIn("pnl_pct", trades.columns)
 
-        # Check Final Position
-        self.assertIn("final_position", res)
+    def test_indicators_computed(self):
+        engine = BacktestEngine(self.df)
+        engine._compute_indicators(self.df, self.candidate)
 
-    def test_sanity_metrics(self):
-        # Empty run
-        spec = {
-            "strategy_type": StrategyType.BREAKOUT_DONCHIAN.value,
-            "strategy_params": {"period": 200}, # Period longer than data
-            "filter_type": FilterType.NO_FILTER.value,
-            "filter_params": {},
-            "exit_type": ExitType.FIXED_RR.value,
-            "exit_params": {"sl_mult": 2.0, "tp_mult": 4.0}
-        }
-        res = self.engine.run(self.df, spec)
-        self.assertEqual(len(res["trades"]), 0)
-        self.assertEqual(res["metrics"]["sharpe"], -99.9) # Default for no trades
+        # Check if Donchian cols exist
+        self.assertIn("dc_upper_5", self.df.columns)
+
+if __name__ == '__main__':
+    unittest.main()

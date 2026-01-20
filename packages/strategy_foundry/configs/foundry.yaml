@@ -1,23 +1,21 @@
-foundry:
-  max_candidates: 80
-  fast_mode_candidates: 15
-  timeframes: ["5m", "15m", "1d"]
-  data_days_intraday: 59
-  data_days_daily: 3650
-  folds: 4
-  fast_mode_folds: 2
+# Core Intraday Lab Settings
+# These defaults drive the factory and backtest engine.
 
-execution:
-  slippage_bps_per_side: 5.0
-  brokerage_per_order: 20.0
-  spread_guard_bps: 2.0
-  tax_bps: 3.0 # Approx STT + GST etc.
+timeframes:
+  - "5m"
+  - "15m"
 
-selection:
-  min_trades_5m: 80 # Updated to match requirement
-  min_trades_15m: 40 # Updated to match requirement
-  max_drawdown: 0.30
-  min_profit_factor: 1.1
-  min_win_rate: 0.35
-  sanity_daily_min_sharpe: -0.5
-  sanity_daily_max_dd: 0.45
+generation:
+  candidates_per_run_full: 80
+  candidates_per_run_fast: 15
+  folds_full: 4
+  folds_fast: 2
+
+costs:
+  bps_per_side: 5.0
+  slippage_bps: 5.0
+
+gate:
+  min_oos_sharpe: 1.2
+  max_dd_pct: 20
+  min_positive_folds: 3

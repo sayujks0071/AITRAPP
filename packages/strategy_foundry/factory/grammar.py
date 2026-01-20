@@ -1,41 +1,60 @@
-from enum import Enum
-from typing import Any, Dict, TypedDict
+"""Strategy grammar and components"""
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+import hashlib
+import json
+import random
 
+@dataclass
+class StrategyBlock:
+    name: str
+    params: Dict[str, Any]
 
-class StrategyType(Enum):
-    BREAKOUT_DONCHIAN = "BREAKOUT_DONCHIAN"
-    TREND_EMA_CROSS = "TREND_EMA_CROSS"
-    MEAN_REV_RSI = "MEAN_REV_RSI"
-    MEAN_REV_BB = "MEAN_REV_BB"
-    VOL_EXPANSION_ATR = "VOL_EXPANSION_ATR"
-    SUPERTREND_FOLLOW = "SUPERTREND_FOLLOW"
+    def to_dict(self):
+        return {"name": self.name, "params": self.params}
 
-class FilterType(Enum):
-    NO_FILTER = "NO_FILTER"
-    REGIME_EMA = "REGIME_EMA" # Close > EMA(200)
-    VOLATILITY_ADX = "VOLATILITY_ADX" # ADX > 20
-    RSI_FILTER = "RSI_FILTER" # RSI < 70 for Long
+@dataclass
+class StrategyCandidate:
+    entry_block: StrategyBlock
+    exit_blocks: List[StrategyBlock]
+    filter_blocks: List[StrategyBlock]
+    timeframe: str
 
-class ExitType(Enum):
-    FIXED_RR = "FIXED_RR" # SL and TP based on ATR
-    TRAILING_ATR = "TRAILING_ATR" # Trailing stop
-    TIME_BASED = "TIME_BASED" # Exit after N bars
+    def get_id(self) -> str:
+        """Stable hash based on content"""
+        # Sort exit and filter blocks to ensure stability regardless of order
+        # (though order might matter for execution, for ID generation let's keep it stable based on content)
+        # Actually, let's strictly serialize as is.
 
-class StrategySpec(TypedDict):
-    id: str
-    direction: str # LONG or SHORT (default LONG)
+        data = {
+            "entry": self.entry_block.to_dict(),
+            "exits": [b.to_dict() for b in self.exit_blocks],
+            "filters": [b.to_dict() for b in self.filter_blocks],
+            "timeframe": self.timeframe
+        }
+        s = json.dumps(data, sort_keys=True)
+        return hashlib.sha256(s.encode()).hexdigest()[:12]
 
-    # Entry Logic
-    strategy_type: str
-    strategy_params: Dict[str, Any]
+    def to_dict(self):
+        return {
+            "id": self.get_id(),
+            "entry": self.entry_block.to_dict(),
+            "exits": [b.to_dict() for b in self.exit_blocks],
+            "filters": [b.to_dict() for b in self.filter_blocks],
+            "timeframe": self.timeframe
+        }
 
-    # Filter Logic
-    filter_type: str
-    filter_params: Dict[str, Any]
+    @classmethod
+    def from_dict(cls, data: Dict):
+        entry = StrategyBlock(**data["entry"])
+        exits = [StrategyBlock(**b) for b in data["exits"]]
+        filters = [StrategyBlock(**b) for b in data["filters"]]
+        return cls(entry_block=entry, exit_blocks=exits, filter_blocks=filters, timeframe=data["timeframe"])
 
-    # Exit Logic
-    exit_type: str
-    exit_params: Dict[str, Any]
-
-    # Global Constraints
-    session_close_time: str # "15:25"
+    def describe(self) -> str:
+        parts = [f"TF: {self.timeframe}"]
+        parts.append(f"Entry: {self.entry_block.name} {self.entry_block.params}")
+        if self.filter_blocks:
+            parts.append("Filters: " + ", ".join([f"{f.name}" for f in self.filter_blocks]))
+        parts.append("Exits: " + ", ".join([f"{e.name}" for e in self.exit_blocks]))
+        return " | ".join(parts)
