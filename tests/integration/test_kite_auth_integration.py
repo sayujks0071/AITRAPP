@@ -8,6 +8,7 @@ from scripts import kite_auth_bootstrap
 from scripts.kite_auth_bootstrap import main, start_server
 
 class TestKiteAuthIntegration:
+    """Integration tests for the Kite Auth bootstrap script."""
 
     @pytest.fixture
     def mock_env(self):

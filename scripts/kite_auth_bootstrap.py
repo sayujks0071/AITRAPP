@@ -35,7 +35,7 @@ logger = logging.getLogger("kite_auth_bootstrap")
 
 # Global variable to store captured token
 captured_request_token = None
-server_stop_event = threading.Event()
+server_stop_event = threading.Event() # Used for clean shutdown if needed
 
 class CallbackHandler(BaseHTTPRequestHandler):
     """

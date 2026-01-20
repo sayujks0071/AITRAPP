@@ -14,7 +14,7 @@ class KiteAuth:
 
     This class ensures that:
     1. We validate the existing session before prompting for login.
-    2. We generate the correct login URL.
+    2. We generate the correct login URL using the configured API key.
     3. We exchange the request token for an access token securely.
     4. We persist the token to the environment (.env) for use by the application.
     """
