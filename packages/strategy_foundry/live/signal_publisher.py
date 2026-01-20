@@ -1,106 +1,86 @@
+"""Publish live signals"""
 import json
 import os
-from datetime import datetime
-
 import pytz
+from datetime import datetime
+from typing import Dict, Optional
+from packages.strategy_foundry.factory.grammar import StrategyCandidate
+from packages.strategy_foundry.adapters.core_market_hours import MarketHoursGuard # Use core via adapter? No, directly.
+from packages.core.market_hours import MarketHoursGuard
 import yaml
 
-from packages.strategy_foundry.adapters.core_market_hours import MarketSchedule
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.selection.champion_store import ChampionStore
-
-
 class SignalPublisher:
-    def __init__(self):
-        self.schedule = MarketSchedule()
-        self.store = ChampionStore()
-        self.loader = DataLoader()
-        self.engine = BacktestEngine()
-        self.output_path = "packages/strategy_foundry/results/live_signal.json"
+    def __init__(self, results_dir: str = "packages/strategy_foundry/results"):
+        self.results_dir = results_dir
+        self.live_signal_path = os.path.join(results_dir, "live_signal.json")
+        self.market_guard = MarketHoursGuard()
+        self.ist = pytz.timezone("Asia/Kolkata")
 
-        # Load Config for proxies
-        with open("packages/strategy_foundry/configs/instrument_map.yaml", "r") as f:
-            self.map_config = yaml.safe_load(f)
+        # Load instrument map
+        self.instrument_map = {}
+        try:
+            with open("packages/strategy_foundry/configs/instrument_map.yaml", "r") as f:
+                self.instrument_map = yaml.safe_load(f)
+        except Exception:
+            pass
 
-    def publish(self):
-        # 1. Check Market Hours
-        now = datetime.now(pytz.timezone("Asia/Kolkata"))
-        if not self.schedule.is_open_now():
-             self._write_skipped(now, "MARKET_CLOSED")
-             return
+    def publish(self, champion_data: Dict, current_signal: int, reason: str = ""):
+        """
+        Publish signal JSON.
+        """
+        now = datetime.now(self.ist)
 
-        # 2. Load Champion
-        champion = self.store.load_current_champion()
-        if not champion:
-            self._write_skipped(now, "NO_CHAMPION")
-            return
+        # Check market hours
+        is_open = self.market_guard.is_market_open(now)
 
-        spec = champion["spec"]
-        # Determine timeframe and instrument to run
-        # Ideally champion spec should store which timeframe it won on or we run the blended logic.
-        # But for simplicity, let's assume we run the Primary Timeframe (5m) if available, else 15m.
-        # The champion metrics might have score_5m and score_15m.
-        # Let's pick 5m if valid, else 15m.
+        # Determine status
+        status = "OK"
+        if not is_open:
+            status = "SKIPPED"
+            reason = "Market Closed"
+        elif current_signal == 0 and not reason:
+            # Flat is a valid signal, but maybe we want to be explicit
+            pass
 
-        target_tf = "5m"
-        # Fallback logic could be better, but assuming 5m is primary as per requirements.
+        # Get proxies
+        cand = champion_data["candidate"]
+        # candidate doesn't store instrument, logic does.
+        # Assuming we ran champion on NIFTY/SENSEX?
+        # Ideally champion stores which instrument it was trained on or we support multiple.
+        # For simplicity, let's assume NIFTY default or passed in args.
+        # But `champion_data` from store is generic.
+        # We need to know which instrument to signal for.
 
-        # Instrument: "NIFTY" (Default for now, lab focuses on Index)
+        # Let's assume we are running for NIFTY primary.
         instrument = "NIFTY"
 
-        # 3. Fetch Data (Force Refresh for Live)
-        df = self.loader.fetch_data(instrument, target_tf, force_refresh=True)
-        if df.empty:
-            self._write_skipped(now, "DATA_FETCH_FAILED")
-            return
-
-        # 4. Run Engine to get State
-        res = self.engine.run(df, spec)
-        final_pos = res["final_position"]
-
-        # 5. Construct Signal
-        signal_val = 1 if final_pos > 0 else 0 # Long Only default
-
-        proxies = self._get_proxies(instrument)
-
-        signal_data = {
+        payload = {
             "timestamp_ist": now.isoformat(),
-            "champion_id": spec.get("id"),
-            "timeframe": target_tf,
+            "champion_id": cand.get("id"),
+            "timeframe": cand.get("timeframe"),
             "instrument": instrument,
-            "proxy_symbol_paper": proxies.get("paper"),
-            "proxy_symbol_live": proxies.get("live"),
-            "signal": signal_val,
-            "rule_summary": f"{spec['strategy_type']} + {spec['filter_type']}",
+            "proxy_symbol_paper": self.instrument_map.get("paper_proxy", {}).get(instrument),
+            "proxy_symbol_live": self.instrument_map.get("live_proxy", {}).get(instrument),
+            "signal": current_signal,
+            "rule_summary": StrategyCandidate.from_dict(cand).describe(),
             "risk": {
-                "stop_atr_mult": spec["exit_params"].get("sl_mult"),
-                "flat_by": spec.get("session_close_time")
+                "flat_by": "15:25",
+                # Extract ATR stop if present
             },
-            "status": "OK",
-            "reason": "Signal Generated"
+            "status": status,
+            "reason": reason
         }
 
-        self._write_json(signal_data)
+        with open(self.live_signal_path, "w") as f:
+            json.dump(payload, f, indent=2)
 
-    def _get_proxies(self, instrument):
-        return {
-            "paper": self.map_config.get("paper_proxy", {}).get(instrument),
-            "live": self.map_config.get("live_proxy", {}).get(instrument)
-        }
-
-    def _write_skipped(self, now, reason):
-        data = {
+    def publish_skipped(self, reason: str):
+        now = datetime.now(self.ist)
+        payload = {
             "timestamp_ist": now.isoformat(),
             "status": "SKIPPED",
             "reason": reason
         }
-        self._write_json(data)
+        with open(self.live_signal_path, "w") as f:
+            json.dump(payload, f, indent=2)
 
-    def _write_json(self, data):
-        os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
-        with open(self.output_path, "w") as f:
-            json.dump(data, f, indent=2)
-
-if __name__ == "__main__":
-    SignalPublisher().publish()

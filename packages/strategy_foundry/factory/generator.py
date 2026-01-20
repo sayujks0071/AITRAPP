@@ -1,116 +1,61 @@
-import hashlib
-import json
+"""Generates strategy candidates"""
 import random
 from typing import List
-
-from packages.strategy_foundry.factory.grammar import (
-    ExitType,
-    FilterType,
-    StrategySpec,
-    StrategyType,
-)
-from packages.strategy_foundry.factory.parameter_space import ParameterSpace
-
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, StrategyBlock
+from packages.strategy_foundry.factory.parameter_space import ENTRY_BLOCKS, EXIT_BLOCKS, FILTER_BLOCKS
 
 class StrategyGenerator:
     def __init__(self):
         pass
 
-    def generate_candidates(self, n: int = 10) -> List[StrategySpec]:
+    def generate(self, count: int = 10, timeframes: List[str] = ["15m"]) -> List[StrategyCandidate]:
         candidates = []
-        hashes = set()
-
-        attempts = 0
-        while len(candidates) < n and attempts < n * 5:
-            attempts += 1
-            spec = self._generate_single()
-            spec_id = self._compute_hash(spec)
-
-            if spec_id not in hashes:
-                spec["id"] = spec_id
-                candidates.append(spec)
-                hashes.add(spec_id)
-
+        for _ in range(count):
+            tf = random.choice(timeframes)
+            candidates.append(self._generate_one(tf))
         return candidates
 
-    def _generate_single(self) -> StrategySpec:
-        st_type = random.choice(list(StrategyType))
-        st_params = {}
+    def _generate_one(self, timeframe: str) -> StrategyCandidate:
+        # 1. Entry
+        entry_name = random.choice(list(ENTRY_BLOCKS.keys()))
+        entry_params = {p.name: p.sample() for p in ENTRY_BLOCKS[entry_name]}
+        entry_block = StrategyBlock(name=entry_name, params=entry_params)
 
-        if st_type == StrategyType.BREAKOUT_DONCHIAN:
-            st_params["period"] = ParameterSpace.get_random_param("DONCHIAN_PERIODS")
+        # 2. Exits (Always include EODExit for Intraday)
+        exit_blocks = []
 
-        elif st_type == StrategyType.TREND_EMA_CROSS:
-            # fast < slow
-            # Ensure fast is not the largest available period
-            available_fast = [p for p in ParameterSpace.EMA_PERIODS if p < max(ParameterSpace.EMA_PERIODS)]
-            fast = random.choice(available_fast)
+        # EOD Exit
+        exit_blocks.append(StrategyBlock(name="EODExit", params={}))
 
-            available_slow = [p for p in ParameterSpace.EMA_PERIODS if p > fast]
-            slow = random.choice(available_slow)
+        # Stop Loss (ATR or Fixed) - High probability of having one
+        if random.random() < 0.9:
+            sl_name = "ATRStop"
+            sl_params = {p.name: p.sample() for p in EXIT_BLOCKS[sl_name]}
+            exit_blocks.append(StrategyBlock(name=sl_name, params=sl_params))
 
-            st_params["fast_period"] = fast
-            st_params["slow_period"] = slow
+        # Target (Optional)
+        if random.random() < 0.5:
+            tp_name = "ProfitTarget"
+            tp_params = {p.name: p.sample() for p in EXIT_BLOCKS[tp_name]}
+            exit_blocks.append(StrategyBlock(name=tp_name, params=tp_params))
 
-        elif st_type == StrategyType.MEAN_REV_RSI:
-            st_params["period"] = ParameterSpace.get_random_param("RSI_PERIODS")
-            st_params["oversold"] = ParameterSpace.get_random_param("RSI_OVERSOLD")
-            st_params["overbought"] = ParameterSpace.get_random_param("RSI_OVERBOUGHT")
+        # Time Stop (Optional)
+        if random.random() < 0.3:
+            ts_name = "TimeStop"
+            ts_params = {p.name: p.sample() for p in EXIT_BLOCKS[ts_name]}
+            exit_blocks.append(StrategyBlock(name=ts_name, params=ts_params))
 
-        elif st_type == StrategyType.MEAN_REV_BB:
-            st_params["period"] = ParameterSpace.get_random_param("BB_PERIODS")
-            st_params["std"] = ParameterSpace.get_random_param("BB_STD")
+        # 3. Filters (Optional)
+        filter_blocks = []
+        if random.random() < 0.5:
+             # Pick one filter
+             f_name = random.choice(list(FILTER_BLOCKS.keys()))
+             f_params = {p.name: p.sample() for p in FILTER_BLOCKS[f_name]}
+             filter_blocks.append(StrategyBlock(name=f_name, params=f_params))
 
-        elif st_type == StrategyType.VOL_EXPANSION_ATR:
-            st_params["period"] = ParameterSpace.get_random_param("ATR_PERIODS")
-
-        elif st_type == StrategyType.SUPERTREND_FOLLOW:
-            st_params["period"] = ParameterSpace.get_random_param("SUPERTREND_PERIODS")
-            st_params["multiplier"] = ParameterSpace.get_random_param("SUPERTREND_MULTIPLIERS")
-
-        # Filters
-        ft_type = random.choice(list(FilterType))
-        ft_params = {}
-        if ft_type == FilterType.REGIME_EMA:
-            ft_params["period"] = ParameterSpace.get_random_param("SMA_PERIODS")
-        elif ft_type == FilterType.VOLATILITY_ADX:
-            ft_params["period"] = ParameterSpace.get_random_param("ADX_PERIODS")
-            ft_params["threshold"] = ParameterSpace.get_random_param("ADX_THRESHOLD")
-        elif ft_type == FilterType.RSI_FILTER:
-             ft_params["period"] = ParameterSpace.get_random_param("RSI_PERIODS")
-             ft_params["max_val"] = 70 # Hardcoded simple filter for long
-
-        # Exits
-        ex_type = random.choice(list(ExitType))
-        ex_params = {}
-        ex_params["sl_mult"] = ParameterSpace.get_random_param("STOP_LOSS_ATR_MULT")
-        ex_params["tp_mult"] = ParameterSpace.get_random_param("TAKE_PROFIT_ATR_MULT")
-
-        if ex_type == ExitType.TIME_BASED:
-            ex_params["max_bars"] = ParameterSpace.get_random_param("MAX_BARS_HOLD")
-
-        # Mandatory intraday close
-        session_close = "15:25"
-
-        return {
-            "id": "", # Set later
-            "direction": "LONG", # Default Long-only
-            "strategy_type": st_type.value,
-            "strategy_params": st_params,
-            "filter_type": ft_type.value,
-            "filter_params": ft_params,
-            "exit_type": ex_type.value,
-            "exit_params": ex_params,
-            "session_close_time": session_close
-        }
-
-    def _compute_hash(self, spec: StrategySpec) -> str:
-        # Create a deterministic string representation
-        # Exclude ID if present
-        s = spec.copy()
-        if "id" in s:
-            del s["id"]
-
-        # Sort keys for stable JSON
-        s_str = json.dumps(s, sort_keys=True)
-        return hashlib.sha256(s_str.encode("utf-8")).hexdigest()[:16]
+        return StrategyCandidate(
+            entry_block=entry_block,
+            exit_blocks=exit_blocks,
+            filter_blocks=filter_blocks,
+            timeframe=timeframe
+        )
