@@ -185,7 +185,9 @@ class BacktestEngine:
         times_minutes = times.minute
 
         for i in range(n - 1): # Stop at n-1 to execute next open
-            current_time = times[i]
+            # Lazy load timestamp: Only access times[i] when needing to record a trade.
+            # Accessing times[i] creates a pd.Timestamp which is slow if done every iteration.
+
             equity_values[i] = equity # Mark to market roughly
 
             # 1. Manage Existing Position
@@ -238,7 +240,7 @@ class BacktestEngine:
 
                     trades.append({
                         "entry_time": entry_time,
-                        "exit_time": current_time,
+                        "exit_time": times[i], # Access timestamp only on exit
                         "entry_price": entry_price,
                         "exit_price": eff_exit_price,
                         "pnl": pnl,
@@ -262,7 +264,7 @@ class BacktestEngine:
                 # Enter next Open
                 entry_price_raw = opens[i+1]
                 entry_price = entry_price_raw * (1 + self.slippage_pct)
-                entry_time = times[i+1]
+                entry_time = times[i+1] # Capture entry time
                 position = 1
                 bars_held = 0
 
