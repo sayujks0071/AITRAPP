@@ -5,6 +5,7 @@ from src.auth.kite_auth import KiteAuth
 from kiteconnect import KiteConnect, exceptions
 
 class TestKiteAuthUnit(unittest.TestCase):
+    """Unit tests for KiteAuth class."""
 
     @patch.dict(os.environ, {"KITE_API_KEY": "test_key", "KITE_API_SECRET": "test_secret"})
     @patch("src.auth.kite_auth.KiteConnect")
