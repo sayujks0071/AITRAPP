@@ -1,36 +1,34 @@
-# Strategy Foundry (Intraday)
+# Strategy Foundry
 
-Automated research lab for generating, backtesting, and ranking aggressive intraday strategies for NIFTY/SENSEX.
+A self-generating strategy lab that runs hourly to discover, backtest, and select trading strategies for Indian markets (NIFTY/SENSEX).
 
-## Overview
-This module runs hourly to:
-1. Fetch latest 5m/15m data (falling back to Yahoo Finance).
-2. Generate random strategy candidates based on a defined grammar.
-3. Backtest candidates using a vectorized engine with Walk-Forward Evaluation.
-4. Rank candidates based on OOS Sharpe, Calmar, Stability, and Turnover.
-5. Promote a "Champion" strategy if it beats the incumbent.
-6. Publish a `live_signal.json` artifact for potential execution.
+## Features
+- **Daily Timeframe**: Focus on 1D swing strategies.
+- **Self-Generating**: Uses a grammar to generate random strategy candidates (Trend, Mean Reversion, Volatility).
+- **Walk-Forward Evaluation**: Validates strategies on Out-of-Sample (OOS) data to prevent overfitting.
+- **Champion Selection**: Automatically promotes strategies that beat the incumbent score.
+- **Paper-First**: Publishes signals to a JSON file (`results/live_signal.json`) without executing live orders.
+- **Zero Heavy Deps**: Uses `requests` and `pandas` (no `yfinance` library).
 
 ## Usage
 
-### Run Manually
+### Local Run
 ```bash
-# Full Mode
-python -m packages.strategy_foundry.run_hourly
-
-# Fast Mode (fewer candidates, fewer folds)
-FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
+python packages/strategy_foundry/run_hourly.py
 ```
 
-### Outputs
-Results are stored in `results/`:
-- `runs/<timestamp>/`: Contains `metrics.csv`, candidates, and run logs.
-- `champions/current.json`: The current reigning champion strategy.
-- `live_signal.json`: The latest trading signal (only generated during market hours if eligible).
+### Fast Mode (for CI/Testing)
+```bash
+FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
+```
 
-## Architecture
-- **Data**: `data/loader.py` (Yahoo Finance + Cache).
-- **Factory**: `factory/generator.py` (Strategy Grammar).
-- **Backtest**: `backtest/engine.py` (Vectorized, Hybrid Loop).
-- **Selection**: `selection/ranker.py` (OOS Scoring).
-- **Live**: `live/signal_publisher.py` (Signal Generation).
+## Directory Structure
+- `data/`: Data loader and cache.
+- `factory/`: Strategy grammar and generator.
+- `backtest/`: Engine and metrics.
+- `selection/`: Ranking and champion store.
+- `live/`: Signal publisher.
+- `results/`: Run artifacts and signals.
+
+## CI/CD
+Runs hourly via GitHub Actions to continuously explore the strategy space.

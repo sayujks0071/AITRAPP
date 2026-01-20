@@ -1,31 +1,37 @@
-# Deployment & Consumption
+# Deployment & Live Signals
 
-## Live Signal
-The foundry produces a signal artifact at `packages/strategy_foundry/results/live_signal.json`.
+## Philosophy
+Strategy Foundry is a "Paper First" environment. It **never** places orders directly. It only produces artifacts.
+
+## Signal Artifact
+The live signal is published to `packages/strategy_foundry/results/live_signal.json`.
 
 ### Schema
 ```json
 {
-  "timestamp_ist": "2023-10-27T10:00:00+05:30",
-  "champion_id": "a1b2c3d4",
-  "timeframe": "5m",
+  "timestamp_ist": "2023-10-27T09:15:00",
+  "champion_id": "1a2b3c4d",
   "instrument": "NIFTY",
-  "proxy_symbol_live": "NSE:NIFTY50-FUT",
-  "signal": 1, // 1 = LONG, 0 = FLAT
-  "status": "OK",
-  "reason": "Signal Generated"
+  "signal": 1,
+  "rule_summary": "EMA_CROSS -> ENTRY Signal",
+  "risk": { "type": "ATR", "params": {...} },
+  "status": "OK"
 }
 ```
+- `signal`: 1 (Long), 0 (Flat/Exit).
+- `status`: "OK" or "SKIPPED".
 
-## Consumption
-Core execution systems should:
-1. Poll `live_signal.json` (or watch for file changes).
-2. Verify `timestamp_ist` is fresh (within last 5-15 mins).
-3. Verify `status` is "OK".
-4. execute the target position indicated by `signal`.
+## Consumption (Bridge)
+To trade these signals live:
+1. Enable `ENABLE_LIVE=true` in your execution environment.
+2. Create approval file `approvals/ALLOW_LIVE.txt`.
+3. Implement a reader in `packages/core` that polls `live_signal.json`.
+4. Ensure the reader validates the timestamp (freshness) and `status == "OK"`.
 
-## Safety Gates
-- **Live Trading Flag**: Must be enabled via `ENABLE_LIVE=true` env var in the consumer.
-- **Approval File**: Must exist at `approvals/ALLOW_LIVE.txt`.
-- **Market Hours**: Foundry only publishes during market hours.
-- **Performance Gates**: Signals are only generated if the Champion strategy meets strict OOS performance criteria (Sharpe > 1.2, Low Drawdown).
+**Note**: The default `packages/core` does NOT contain this wiring. It must be added explicitly by the user.
+
+## Gating
+Signals are only published if:
+- Market is Open (or Pre-open).
+- A Champion exists.
+- The Champion is "Live Eligible" (High OOS Sharpe, Low DD).

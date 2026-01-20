@@ -1,29 +1,21 @@
 from datetime import datetime
+from packages.core.market_hours import MarketHoursGuard, IST
+from packages.core.nse_holidays import get_trading_holidays
 
-from packages.core.market_hours import HARD_CLOSE, IST, MARKET_CLOSE, MARKET_OPEN, MarketHoursGuard
+class MarketHoursAdapter:
+    """Adapter for Market Hours logic"""
 
-
-class MarketSchedule:
     def __init__(self):
         self.guard = MarketHoursGuard()
+        self.holidays = get_trading_holidays()
 
-    def is_open_now(self):
+    def is_market_open(self) -> bool:
+        """Check if market is currently open"""
         return self.guard.is_market_open()
 
-    def is_market_hours(self, dt: datetime):
-        return self.guard.is_market_open(dt)
+    def get_holidays(self) -> set:
+        return self.holidays
 
-    def is_weekend(self, dt: datetime):
-        if dt.tzinfo is None:
-            dt = IST.localize(dt)
-        return dt.weekday() >= 5
-
-    def get_open_time(self):
-        return MARKET_OPEN
-
-    def get_close_time(self):
-        # Entry close
-        return MARKET_CLOSE
-
-    def get_hard_close_time(self):
-        return HARD_CLOSE
+    def is_holiday(self, date_obj) -> bool:
+        date_str = date_obj.strftime("%Y-%m-%d")
+        return date_str in self.holidays

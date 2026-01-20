@@ -1,89 +1,88 @@
 import json
 import os
-from datetime import datetime
-from typing import Any, Dict, Optional
+import logging
+from typing import Dict, Any
 
+logger = logging.getLogger(__name__)
 
 class ChampionStore:
-    def __init__(self, base_dir="packages/strategy_foundry/results/champions"):
-        self.base_dir = base_dir
-        self.current_file = os.path.join(base_dir, "current.json")
-        os.makedirs(base_dir, exist_ok=True)
+    def __init__(self, champions_dir="packages/strategy_foundry/results/champions"):
+        self.champions_dir = champions_dir
+        self.current_file = os.path.join(champions_dir, "current.json")
+        os.makedirs(champions_dir, exist_ok=True)
 
-    def load_current_champion(self) -> Optional[Dict[str, Any]]:
+    def get_champion(self, instrument: str) -> Dict[str, Any]:
+        """Load current champion for instrument"""
+        if os.path.exists(self.current_file):
+            with open(self.current_file, "r") as f:
+                all_champs = json.load(f)
+                return all_champs.get(instrument)
+        return None
+
+    def save_champion(self, instrument: str, candidate: Dict[str, Any], score: float, metrics: Dict[str, Any]):
+        """Save new champion"""
+        # Load existing
+        all_champs = {}
         if os.path.exists(self.current_file):
             try:
                 with open(self.current_file, "r") as f:
-                    return json.load(f)
-            except Exception:
-                return None
-        return None
+                    all_champs = json.load(f)
+            except:
+                pass
 
-    def save_new_champion(self, candidate_spec: Dict, metrics: Dict, score: float, run_ts: str):
-        """
-        Promotes a new champion.
-        """
-        champion_data = {
-            "spec": candidate_spec,
-            "metrics": metrics,
+        # Update
+        entry = {
+            "candidate": candidate,
             "score": score,
-            "promoted_at": datetime.now().isoformat(),
-            "run_ts": run_ts
+            "metrics": metrics,
+            "promoted_at": self._get_timestamp()
         }
+        all_champs[instrument] = entry
 
-        # 1. Archive old if exists
-        if os.path.exists(self.current_file):
-            old = self.load_current_champion()
-            if old:
-                ts = datetime.now().strftime("%Y%m%d%H%M%S")
-                old_id = old.get("spec", {}).get("id", "unknown")
-                archive_path = os.path.join(self.base_dir, f"{ts}_{old_id}.json")
-                with open(archive_path, "w") as f:
-                    json.dump(old, f, indent=2)
-
-        # 2. Save new
+        # Save Current
         with open(self.current_file, "w") as f:
-            json.dump(champion_data, f, indent=2)
+            json.dump(all_champs, f, indent=2)
 
-    def should_promote(self, new_score: float, new_metrics: Dict) -> bool:
+        # Archive
+        archive_name = f"{instrument}_{entry['promoted_at']}_{candidate['id']}.json"
+        with open(os.path.join(self.champions_dir, archive_name), "w") as f:
+            json.dump(entry, f, indent=2)
+
+        logger.info(f"New Champion promoted for {instrument}: {candidate['id']} (Score: {score:.2f})")
+
+    def should_promote(self, instrument: str, new_score: float, new_metrics: Dict[str, Any]) -> bool:
         """
-        Decides if new candidate should replace current champion.
+        Promotion rule:
+        - Must exceed current score by >= 10%
+        - OR Lower MaxDD materially (>= 5% absolute reduction) without degrading Sharpe > 10%
         """
-        current = self.load_current_champion()
+        current = self.get_champion(instrument)
         if not current:
             return True
 
-        current_score = current.get("score", 0)
-        current_metrics = current.get("metrics", {})
+        current_score = current["score"]
+        current_metrics = current["metrics"]
 
-        # Rule 1: New score >= Current + 10%
+        # Rule 1: Score improvement
         if new_score >= current_score * 1.10:
+            logger.info(f"Promoting: Score {new_score:.2f} beats {current_score:.2f} by >10%")
             return True
 
-        # Rule 2: Reduce MaxDD by >= 5% absolute, Sharpe within 10%
-        # Check for 5m first (Primary)
-        tf = "5m"
-        # If either is missing the primary timeframe data, fallback to 15m
-        if tf not in new_metrics or tf not in current_metrics:
-            tf = "15m"
+        # Rule 2: Risk reduction
+        curr_dd = current_metrics.get("max_dd", 1.0)
+        new_dd = new_metrics.get("max_dd", 1.0)
 
-        if tf in new_metrics and tf in current_metrics:
-            new_m = new_metrics[tf]
-            curr_m = current_metrics[tf]
+        if (curr_dd - new_dd) >= 0.05: # 5% absolute reduction
+             # Check Sharpe degradation
+             curr_sharpe = current_metrics.get("sharpe", 0)
+             new_sharpe = new_metrics.get("sharpe", 0)
 
-            # Check if metrics are populated
-            if not new_m or not curr_m:
-                return False
-
-            new_dd = new_m.get("max_dd", 1.0)
-            curr_dd = curr_m.get("max_dd", 1.0)
-            new_sharpe = new_m.get("sharpe", 0.0)
-            curr_sharpe = curr_m.get("sharpe", 0.0)
-
-            # Reduce MaxDD by >= 5% absolute (e.g. 0.25 -> 0.20)
-            if (curr_dd - new_dd) >= 0.05:
-                # Sharpe not degrading meaningfully (>= 90% of current)
-                if new_sharpe >= curr_sharpe * 0.90:
-                     return True
+             if new_sharpe >= curr_sharpe * 0.90:
+                 logger.info("Promoting: MaxDD improved by >5% with stable Sharpe")
+                 return True
 
         return False
+
+    def _get_timestamp(self):
+        from datetime import datetime
+        return datetime.now().strftime("%Y%m%d_%H%M%S")

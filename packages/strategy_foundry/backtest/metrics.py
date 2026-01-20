@@ -1,78 +1,104 @@
 import numpy as np
 import pandas as pd
+from typing import Dict, Any
 
+def calculate_cagr(start_value, end_value, years):
+    if start_value <= 0 or years <= 0:
+        return 0.0
+    return (end_value / start_value) ** (1 / years) - 1
 
-def calculate_metrics(trades_df: pd.DataFrame, daily_returns: pd.Series, initial_capital: float = 100000.0):
+def calculate_metrics(trades_df: pd.DataFrame, daily_returns: pd.Series, initial_capital: float = 100000.0) -> Dict[str, Any]:
     """
-    Calculates performance metrics from trades and daily returns.
+    Calculate performance metrics from trades and daily returns.
     """
-    if trades_df.empty:
-        return {
-            "cagr": 0.0,
-            "sharpe": -99.9,
-            "sortino": -99.9,
-            "calmar": -99.9,
-            "max_dd": 0.0,
-            "win_rate": 0.0,
-            "profit_factor": 0.0,
-            "trades": 0,
-            "avg_trade_pct": 0.0
-        }
+    metrics = {}
 
-    # Trade-based metrics
-    wins = trades_df[trades_df["pnl"] > 0]
-    losses = trades_df[trades_df["pnl"] <= 0]
+    # 1. Trade Metrics
+    total_trades = len(trades_df)
+    metrics["total_trades"] = total_trades
 
-    win_rate = len(wins) / len(trades_df) if len(trades_df) > 0 else 0
-    gross_profit = wins["pnl"].sum()
-    gross_loss = abs(losses["pnl"].sum())
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+    if total_trades > 0:
+        winners = trades_df[trades_df["pnl"] > 0]
+        losers = trades_df[trades_df["pnl"] <= 0]
 
-    avg_trade_pct = trades_df["return_pct"].mean()
+        metrics["win_rate"] = len(winners) / total_trades
+        metrics["avg_trade"] = trades_df["pnl"].mean()
+        metrics["avg_return"] = trades_df["return_pct"].mean()
 
-    # Time-series metrics
-    # Resample to daily if intraday
-    # daily_returns should be % returns series
+        gross_profit = winners["pnl"].sum()
+        gross_loss = abs(losers["pnl"].sum())
 
-    # CAGR
-    # Assuming daily_returns index is datetime
-    if len(daily_returns) > 1:
-        total_ret = (1 + daily_returns).prod() - 1
-        days = (daily_returns.index[-1] - daily_returns.index[0]).days
-        if days > 0:
-            cagr = (1 + total_ret) ** (365 / days) - 1
-        else:
-            cagr = 0.0
+        metrics["profit_factor"] = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+
     else:
-        cagr = 0.0
+        metrics["win_rate"] = 0.0
+        metrics["avg_trade"] = 0.0
+        metrics["avg_return"] = 0.0
+        metrics["profit_factor"] = 0.0
 
-    # Sharpe
-    mean_ret = daily_returns.mean()
-    std_ret = daily_returns.std()
-    sharpe = (mean_ret / std_ret * np.sqrt(252)) if std_ret > 0 else 0.0
+    # 2. Return/Risk Metrics (from Daily Returns)
+    if not daily_returns.empty:
+        total_days = len(daily_returns)
+        # Annualization factor for daily data (crypto 365, stocks 252)
+        # We assume 252 for NIFTY/SENSEX
+        ann_factor = 252
 
-    # Sortino
-    downside_ret = daily_returns[daily_returns < 0]
-    std_down = downside_ret.std()
-    sortino = (mean_ret / std_down * np.sqrt(252)) if std_down > 0 else 0.0
+        cumulative_return = (1 + daily_returns).prod() - 1
+        metrics["total_return"] = cumulative_return
 
-    # Max Drawdown
-    cum_ret = (1 + daily_returns).cumprod()
-    peak = cum_ret.cummax()
-    drawdown = (cum_ret - peak) / peak
-    max_dd = abs(drawdown.min())
+        # CAGR
+        years = total_days / ann_factor
+        metrics["cagr"] = calculate_cagr(initial_capital, initial_capital * (1 + cumulative_return), years)
 
-    # Calmar
-    calmar = cagr / max_dd if max_dd > 0 else 0.0
+        # Volatility
+        vol = daily_returns.std() * np.sqrt(ann_factor)
+        metrics["annual_volatility"] = vol
 
-    return {
-        "cagr": cagr,
-        "sharpe": sharpe,
-        "sortino": sortino,
-        "calmar": calmar,
-        "max_dd": max_dd,
-        "win_rate": win_rate,
-        "profit_factor": profit_factor,
-        "trades": len(trades_df),
-        "avg_trade_pct": avg_trade_pct
-    }
+        # Sharpe (Rf=0)
+        if vol > 0:
+            metrics["sharpe"] = (metrics["cagr"] / vol) # Using CAGR for Sharpe numerator is common in some contexts, or mean return * 252.
+            # Standard Sharpe: mean(daily_ret) * 252 / (std(daily_ret) * sqrt(252)) = mean/std * sqrt(252)
+            metrics["sharpe"] = (daily_returns.mean() / daily_returns.std()) * np.sqrt(ann_factor)
+        else:
+            metrics["sharpe"] = 0.0
+
+        # Sortino
+        downside_returns = daily_returns[daily_returns < 0]
+        downside_vol = downside_returns.std() * np.sqrt(ann_factor)
+        if downside_vol > 0:
+            metrics["sortino"] = (daily_returns.mean() * ann_factor) / downside_vol
+        else:
+            metrics["sortino"] = 0.0 # Infinite if no downside
+            if metrics["sharpe"] > 0: metrics["sortino"] = 100.0 # Cap
+
+        # Max Drawdown
+        cum_returns = (1 + daily_returns).cumprod()
+        peak = cum_returns.cummax()
+        drawdown = (cum_returns - peak) / peak
+        metrics["max_dd"] = abs(drawdown.min())
+
+        # Calmar
+        if metrics["max_dd"] > 0:
+            metrics["calmar"] = metrics["cagr"] / metrics["max_dd"]
+        else:
+            metrics["calmar"] = 0.0 # Or infinite
+
+        # Stability (R2 of equity curve)
+        # Simplified: variance of rolling sharpe or just use total return linearity
+        # Let's use standard deviation of rolling 252d returns?
+        # Plan asked for "rolling 252D Sharpe dispersion".
+        if len(daily_returns) > 300:
+             rolling_sharpe = daily_returns.rolling(252).apply(lambda x: x.mean()/x.std()*np.sqrt(252) if x.std()>0 else 0)
+             metrics["stability"] = 1.0 / (rolling_sharpe.std() + 0.01) # Higher is better
+        else:
+             metrics["stability"] = 1.0
+
+    else:
+        metrics["total_return"] = 0.0
+        metrics["cagr"] = 0.0
+        metrics["sharpe"] = 0.0
+        metrics["max_dd"] = 0.0
+        metrics["calmar"] = 0.0
+        metrics["stability"] = 0.0
+
+    return metrics
