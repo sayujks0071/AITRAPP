@@ -1,131 +1,90 @@
-from typing import Any, Dict
-
-import numpy as np
 import pandas as pd
-
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.metrics import calculate_metrics
-from packages.strategy_foundry.backtest.sanity import check_sanity
-
+import numpy as np
 
 class WalkForwardEvaluator:
-    def __init__(self, engine: BacktestEngine):
+    def __init__(self, engine):
         self.engine = engine
 
-    def evaluate(self, df: pd.DataFrame, spec: Any, folds: int = 4) -> Dict[str, Any]:
+    def evaluate(self, df: pd.DataFrame, spec: dict, folds: int = 4, train_ratio: float = 0.7) -> dict:
         """
-        Performs Walk Forward Evaluation.
-        Returns aggregated OOS metrics.
-        """
-        if df.empty or len(df) < 500: # Min bars requirement
-            return {}
+        Walk-forward evaluation.
+        Splits data into K folds.
+        Train on fold i, Test on fold i (OOS).
+        Actually WFE usually: Train on [0..i], Test on [i+1].
+        Or Rolling Window: Train [i-W..i], Test [i..i+S].
 
-        # Split indices
+        We will use Anchored Walk Forward for simplicity and robustness:
+        Fold 1: Train 0-50%, Test 50-60%
+        Fold 2: Train 0-60%, Test 60-70%
+        ...
+        """
         n = len(df)
-        fold_size = n // (folds + 1) # Simple equal split
+        if n < 500: # Min data requirement
+             return {}
 
-        # We need at least 1 chunk for initial train (warmup) and 'folds' chunks for testing
-        # Segments: [Train_Init] [Test_1] [Test_2] [Test_3] [Test_4]
+        # Split data into folds
+        # e.g. 4 folds over the last 40% of data?
+        # Let's say we reserve first 50% for initial training.
+        # Remaining 50% divided into 'folds' chunks.
 
-        oos_metrics_list = []
-        positive_folds = 0
+        oos_start_idx = int(n * (1 - 1/(folds+1))) # Just a heuristic?
+        # Better:
+        # Total OOS period = 40% of data.
+        # Split that 40% into `folds` segments.
 
-        # We only care about OOS performance for ranking
-        # We don't necessarily need to "Train" (optimize parameters) since we are generating random params.
-        # We just need to "Validate" on OOS chunks.
-        # But usually strategy is picked on IS and validated on OOS.
-        # Here we are skipping optimization. We are just testing the candidate on multiple time periods.
-        # So essentially k-fold cross validation or simply sliding window testing.
+        oos_ratio = 0.4
+        oos_total_len = int(n * oos_ratio)
+        fold_len = oos_total_len // folds
+        start_oos = n - oos_total_len
 
-        # Let's treat each fold as an OOS period.
-        # To avoid lookahead bias or regime bias, we test on multiple disjoint periods?
-        # Or sequential?
-        # Requirement: "Walk-forward OOS"
+        fold_metrics = []
+        aggregate_equity = []
 
-        # Implementation:
-        # Iterate folds.
-        # Test period i: start = i * fold_size, end = (i+1) * fold_size
-        # We can just run the engine on the slice.
-        # Important: Engine needs warmup data for indicators.
-        # So pass [start - warmup : end] but only count trades in [start : end].
+        for i in range(folds):
+            train_end = start_oos + (i * fold_len)
+            test_end = train_end + fold_len
 
-        warmup = 200
+            # Train (In-Sample) - Optional: Optimize here?
+            # The prompt says "Walk-forward evaluation... Ranking uses OUT-OF-SAMPLE metrics only."
+            # It implies we just *test* the candidate on OOS.
+            # The candidate (spec) is already generated (fixed params).
+            # So we don't need to re-optimize params on Train. We just need to validate performance on OOS.
+            # So we can simply run the strategy on the OOS segment.
+            # Wait, usually WFE implies optimization.
+            # But here we are generating random candidates.
+            # So the "Training" is implicit in the generation/selection?
+            # Or does "Generate N candidates" mean we generated them with random params, and we just want to see if they hold up?
+            # Yes, "Ranking uses OUT-OF-SAMPLE metrics".
+            # So we strictly care about OOS performance.
+            # We can run the strategy on the full OOS period?
+            # Or do we want to simulate the experience of "We picked this strategy at time T, how did it do T+1?"
 
-        full_trades = []
+            # If we just test on one OOS block, it's simple Hold-Out.
+            # WFE implies multiple steps.
+            # Let's run on each OOS fold and aggregate.
 
-        for i in range(1, folds + 1):
-            test_start_idx = i * fold_size
-            test_end_idx = (i + 1) * fold_size if i < folds else n
+            test_df = df.iloc[train_end:test_end]
+            res = self.engine.run(test_df, spec)
+            m = res["metrics"]
+            m["fold"] = i + 1
+            fold_metrics.append(m)
 
-            # Slice with warmup
-            slice_start = max(0, test_start_idx - warmup)
-            df_slice = df.iloc[slice_start:test_end_idx].copy()
+        # Aggregate OOS metrics
+        # We can average them or re-calculate from concatenated trades
+        # Re-calc is better.
 
-            # Run Engine
-            res = self.engine.run(df_slice, spec)
+        # But we don't have concatenated trades easily unless we store them.
+        # Let's just average Sharpe, etc. or count success.
 
-            # Filter trades that started inside the test window
-            # Trade entry time >= df.index[test_start_idx]
-            test_start_time = df.index[test_start_idx]
+        avg_sharpe = np.mean([m.get("sharpe", 0) for m in fold_metrics])
+        positive_folds = sum(1 for m in fold_metrics if m.get("total_return", 0) > 0)
 
-            slice_trades = [t for t in res["trades"] if t["entry_time"] >= test_start_time]
+        # Also run on FULL OOS to get total stats?
+        full_oos_df = df.iloc[start_oos:]
+        oos_res = self.engine.run(full_oos_df, spec)
+        oos_metrics = oos_res["metrics"]
 
-            if slice_trades:
-                # Calculate metrics for this fold
-                t_df = pd.DataFrame(slice_trades)
+        oos_metrics["avg_fold_sharpe"] = avg_sharpe
+        oos_metrics["positive_folds"] = positive_folds
 
-                # Equity curve for this slice (need to reconstruct)
-                # Approximate daily returns from trades for Sharpe
-                # It's hard to get exact daily returns without full equity curve.
-                # Use engine's equity curve but sliced?
-                eq_curve = res["equity_curve"]
-                eq_curve = eq_curve[eq_curve.index >= test_start_time]
-
-                d_eq = eq_curve.resample('D').last().dropna()
-                d_ret = d_eq.pct_change().dropna()
-
-                m = calculate_metrics(t_df, d_ret)
-                oos_metrics_list.append(m)
-
-                if m["pnl_net"] > 0 if "pnl_net" in m else m["profit_factor"] > 1.0:
-                    positive_folds += 1
-
-                full_trades.extend(slice_trades)
-            else:
-                # No trades in this fold
-                pass
-
-        # Aggregate OOS Metrics
-        if not oos_metrics_list:
-            return {}
-
-        # Average Sharpe, CAGR, MaxDD
-        avg_sharpe = np.mean([m["sharpe"] for m in oos_metrics_list])
-        avg_calmar = np.mean([m["calmar"] for m in oos_metrics_list])
-        avg_cagr = np.mean([m["cagr"] for m in oos_metrics_list])
-        max_dd_worst = np.max([m["max_dd"] for m in oos_metrics_list])
-
-        # Total Trades Sanity
-        total_trades_df = pd.DataFrame(full_trades)
-        sanity = check_sanity(total_trades_df, "mixed") # Timeframe str ambiguous here
-
-        # Stability: standard deviation of Sharpe across folds
-        sharpe_std = np.std([m["sharpe"] for m in oos_metrics_list])
-
-        # Aggregate Return
-        # Re-calculate aggregate metrics from full_trades list?
-        # That's better for "Net Result".
-        # But average of folds is better for "Robustness".
-
-        return {
-            "sharpe": avg_sharpe,
-            "calmar": avg_calmar,
-            "cagr": avg_cagr,
-            "max_dd": max_dd_worst,
-            "sharpe_std": sharpe_std,
-            "positive_folds": positive_folds,
-            "total_trades": len(full_trades),
-            "profit_factor": np.mean([m["profit_factor"] for m in oos_metrics_list]),
-            "avg_trade_pct": np.mean([m["avg_trade_pct"] for m in oos_metrics_list]),
-            "sanity": sanity
-        }
+        return oos_metrics

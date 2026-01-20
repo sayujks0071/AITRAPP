@@ -1,22 +1,25 @@
+from dataclasses import dataclass
+
+@dataclass
+class TransactionCosts:
+    slippage_bps_per_side: float = 5.0
+    brokerage_per_order: float = 0.0 # Can be set to 20 or similar
+    tax_bps: float = 0.0 # STT, etc. if we want simple bps model
+
+    # Simplified "All-in" cost
+    all_in_cost_bps_per_side: float = 10.0
+
 class CostAdapter:
     """
-    Provides cost assumptions for backtesting.
-    Defaults if core config is missing or too complex.
+    Adapter for cost calculations.
     """
-    # Default assumptions for NIFTY/SENSEX
-    SLIPPAGE_BPS = 2.0  # 0.02% per side
-    COMMISSION_BPS = 1.0  # ~0.01% per side (STT is higher on delivery, but this is index/derivatives proxy)
+    def __init__(self, slippage_bps: float = 5.0, all_in_cost_bps: float = 10.0):
+        self.costs = TransactionCosts(
+            slippage_bps_per_side=slippage_bps,
+            all_in_cost_bps_per_side=all_in_cost_bps
+        )
 
-    # STT on Sell for Futures: 0.0125%
-    # STT on Sell for Options: 0.0625% (on premium)
-    # Since we are simulating "Strategy" on Index, we'll model it as Futures-like exposure.
-    # Total round trip cost ~ 3-4 bps.
-
-    ALL_IN_COST_BPS = 3.5
-
-    @staticmethod
-    def get_costs():
-        return {
-            "slippage_bps": CostAdapter.SLIPPAGE_BPS,
-            "all_in_cost_bps": CostAdapter.ALL_IN_COST_BPS
-        }
+    def estimate_total_cost_bps(self) -> float:
+        """Total round-trip cost in bps (slippage + fees)"""
+        # 2 sides
+        return (self.costs.slippage_bps_per_side + self.costs.all_in_cost_bps_per_side) * 2

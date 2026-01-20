@@ -1,48 +1,47 @@
 from typing import Any, Dict, List, Tuple
-
 import numpy as np
 import pandas as pd
-
-from packages.strategy_foundry.adapters.core_indicators import VectorIndicatorCalculator
+from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
+from packages.strategy_foundry.adapters.core_costs import CostAdapter
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
-from packages.strategy_foundry.factory.grammar import (
-    ExitType,
-    FilterType,
-    StrategySpec,
-    StrategyType,
-)
-
 
 class BacktestEngine:
-    def __init__(self, cost_bps=5.0, slippage_bps=5.0):
-        self.cost_pct = cost_bps / 10000.0
-        self.slippage_pct = slippage_bps / 10000.0
-        self.calc = VectorIndicatorCalculator()
+    """
+    Daily Backtest Engine.
+    Executes signals at Next Open.
+    """
+    def __init__(self, slippage_bps=5.0, all_in_cost_bps=10.0):
+        self.costs = CostAdapter(slippage_bps, all_in_cost_bps)
+        self.indicators = IndicatorsAdapter()
 
-    def run(self, df: pd.DataFrame, spec: StrategySpec) -> Dict[str, Any]:
+    def run(self, df: pd.DataFrame, spec: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Run backtest for a single candidate on provided data.
-        Returns metrics and trades.
+        Run backtest.
+
+        Args:
+            df: OHLCV DataFrame
+            spec: Strategy specification (dict)
+
+        Returns:
+            Dict with metrics, trades, equity curve.
         """
-        # Working copy
-        data = df.copy()
+        if df.empty:
+            return {}
 
         # 1. Prepare Indicators
+        data = df.copy()
         self._prepare_indicators(data, spec)
 
-        # 2. Generate Entry Signals
-        self._generate_entry_signal(data, spec)
+        # 2. Generate Signals
+        self._generate_signals(data, spec)
 
         # 3. Simulate Execution
-        trades, equity_curve, final_position = self._simulate(data, spec)
+        trades, equity_curve, final_pos = self._simulate(data, spec)
 
         # 4. Calculate Metrics
         trades_df = pd.DataFrame(trades)
-
-        # Calculate daily returns from equity curve for Sharpe/Drawdown
-        # Resample to daily close
-        daily_equity = equity_curve.resample('D').last().dropna()
-        daily_returns = daily_equity.pct_change().dropna()
+        daily_equity = equity_curve # Already daily
+        daily_returns = daily_equity.pct_change().fillna(0)
 
         metrics = calculate_metrics(trades_df, daily_returns)
 
@@ -50,230 +49,260 @@ class BacktestEngine:
             "metrics": metrics,
             "trades": trades,
             "equity_curve": equity_curve,
-            "final_position": final_position
+            "final_position": final_pos
         }
 
-    def _prepare_indicators(self, df: pd.DataFrame, spec: StrategySpec):
-        # Entry Params
-        st_params = spec["strategy_params"]
-        st_type = spec["strategy_type"]
+    def _prepare_indicators(self, df: pd.DataFrame, spec: Dict[str, Any]):
+        # This will be delegated to the Strategy Factory/Grammar usually,
+        # but for now we implement the interpretation here.
+        # Actually, the grammar should probably produce "signals" or the engine should use the grammar to compute them.
+        # The prompt says: "Unified interface every strategy must implement ... generate_positions(df)".
+        # BUT the prompt also says "Implement strategy grammar...".
+        # If I strictly follow the prompt "Unified interface", the `spec` should be an object that has `generate_positions`.
+        # However, to keep it serializable (JSON), `spec` is likely a dict, and we interpret it.
 
-        if st_type == StrategyType.BREAKOUT_DONCHIAN.value:
-            p = st_params["period"]
-            df["dc_upper"], df["dc_lower"] = self.calc.donchian(df, period=p)
+        # I'll implement a simple interpreter for the components described in the prompt.
+        # "Trend: EMA/SMA cross...", "Mean reversion: RSI...", "Filters..."
 
-        elif st_type == StrategyType.TREND_EMA_CROSS.value:
-            df["ema_fast"] = self.calc.ema(df["close"], period=st_params["fast_period"])
-            df["ema_slow"] = self.calc.ema(df["close"], period=st_params["slow_period"])
+        # To avoid massive if-else here, I'll rely on the `spec` having parameters that `IndicatorsAdapter` can use.
+        # I'll compute common indicators lazily or based on keys.
 
-        elif st_type == StrategyType.MEAN_REV_RSI.value:
-            df["rsi"] = self.calc.rsi(df, period=st_params["period"])
+        # Assuming spec has "components" list or similar.
+        # For simplicity, let's assume spec structure:
+        # {
+        #   "type": "EMA_CROSS",
+        #   "params": { "fast": 20, "slow": 50 },
+        #   "filter": { "type": "RSI", "params": {"period": 14, "threshold": 30} },
+        #   "stop": { "type": "ATR", "params": {"period": 14, "mult": 2.0} }
+        # }
 
-        elif st_type == StrategyType.MEAN_REV_BB.value:
-            df["bb_upper"], df["bb_lower"], _ = self.calc.bollinger_bands(df["close"], period=st_params["period"], std=st_params["std"])
+        pass # Indicators calculated on fly or in generate_signals
 
-        elif st_type == StrategyType.VOL_EXPANSION_ATR.value:
-            df["atr"] = self.calc.atr(df, period=st_params["period"])
-
-        elif st_type == StrategyType.SUPERTREND_FOLLOW.value:
-            df["supertrend"], df["st_dir"] = self.calc.supertrend(df, period=st_params["period"], multiplier=st_params["multiplier"])
-
-        # Filter Params
-        ft_type = spec["filter_type"]
-        ft_params = spec["filter_params"]
-
-        if ft_type == FilterType.REGIME_EMA.value:
-            df["filter_ema"] = self.calc.sma(df["close"], period=ft_params["period"]) # Using SMA as proxy for long term trend if desired, or EMA
-        elif ft_type == FilterType.VOLATILITY_ADX.value:
-            df["adx"] = self.calc.adx(df, period=ft_params["period"])
-        elif ft_type == FilterType.RSI_FILTER.value:
-            if "rsi" not in df.columns:
-                df["rsi"] = self.calc.rsi(df, period=ft_params["period"])
-
-        # ATR for Exits (always calculated if not present)
-        if "atr" not in df.columns:
-             df["atr"] = self.calc.atr(df, period=14) # Default 14 for risk if not specified
-
-    def _generate_entry_signal(self, df: pd.DataFrame, spec: StrategySpec):
+    def _generate_signals(self, df: pd.DataFrame, spec: Dict[str, Any]):
         # Initialize
-        df["entry_long"] = False
+        df["signal"] = 0 # 1 (Long), -1 (Short), 0 (Flat)
 
-        st_type = spec["strategy_type"]
-        st_params = spec["strategy_params"]
+        # Interpreter
+        st_type = spec.get("type")
+        params = spec.get("params", {})
 
-        # Base Entry Logic
-        if st_type == StrategyType.BREAKOUT_DONCHIAN.value:
-            # Breakout: Close > DC Upper (prev bar)
-            # Actually Donchian usually excludes current bar, but let's assume 'dc_upper' is calculated including current.
-            # So breakout is Close > Shifted DC Upper.
-            # Packages core donchian uses rolling max.
-            # We need to compare Close to Previous High Max.
-            # dc_upper in core includes current high.
-            # So Signal: Close > dc_upper.shift(1)
-            df["entry_long"] = df["close"] > df["dc_upper"].shift(1)
+        entry_long = pd.Series(False, index=df.index)
+        exit_long = pd.Series(False, index=df.index) # Logic exit
 
-        elif st_type == StrategyType.TREND_EMA_CROSS.value:
-            # Crossover
-            df["entry_long"] = (df["ema_fast"] > df["ema_slow"]) & (df["ema_fast"].shift(1) <= df["ema_slow"].shift(1))
+        # --- Entry Logic ---
+        if st_type == "EMA_CROSS":
+            fast = self.indicators.ema(df["close"], params.get("fast", 20))
+            slow = self.indicators.ema(df["close"], params.get("slow", 50))
+            # Cross over
+            entry_long = (fast > slow) & (fast.shift(1) <= slow.shift(1))
+            exit_long = (fast < slow)
 
-        elif st_type == StrategyType.MEAN_REV_RSI.value:
-            # RSI < Oversold
-            df["entry_long"] = df["rsi"] < st_params["oversold"]
+        elif st_type == "RSI_REVERSION":
+            rsi = self.indicators.rsi(df, params.get("period", 14))
+            entry_long = rsi < params.get("lower", 30)
+            exit_long = rsi > params.get("upper", 70)
 
-        elif st_type == StrategyType.MEAN_REV_BB.value:
-            # Close < Lower Band
-            df["entry_long"] = df["close"] < df["bb_lower"]
+        elif st_type == "DONCHIAN_BREAKOUT":
+            upper, lower, _ = self.indicators.donchian(df, params.get("period", 20))
+            # Breakout: Close > prev upper
+            entry_long = df["close"] > upper.shift(1)
+            exit_long = df["close"] < lower.shift(1) # Stop and reverse or just exit?
 
-        elif st_type == StrategyType.VOL_EXPANSION_ATR.value:
-            # Close > High[1] + ATR[1]
-            df["entry_long"] = df["close"] > (df["high"].shift(1) + df["atr"].shift(1))
+        elif st_type == "SUPERTREND":
+            st, direction = self.indicators.supertrend(df, params.get("period", 10), params.get("multiplier", 3.0))
+            entry_long = (direction == 1) & (direction.shift(1) == -1)
+            exit_long = (direction == -1)
 
-        elif st_type == StrategyType.SUPERTREND_FOLLOW.value:
-            # Supertrend dir flip -1 to 1
-            df["entry_long"] = (df["st_dir"] == 1) & (df["st_dir"].shift(1) == -1)
+        # --- Filters ---
+        filter_spec = spec.get("filter")
+        if filter_spec:
+            f_type = filter_spec.get("type")
+            f_params = filter_spec.get("params", {})
 
-        # Apply Filters
-        ft_type = spec["filter_type"]
-        ft_params = spec["filter_params"]
+            if f_type == "RSI":
+                rsi = self.indicators.rsi(df, f_params.get("period", 14))
+                if f_params.get("mode") == "below":
+                    entry_long = entry_long & (rsi < f_params.get("threshold", 70))
+                else:
+                    entry_long = entry_long & (rsi > f_params.get("threshold", 30))
+            elif f_type == "ADX":
+                adx = self.indicators.adx(df, f_params.get("period", 14))
+                entry_long = entry_long & (adx > f_params.get("threshold", 25))
+            elif f_type == "REGIME_SMA":
+                sma = self.indicators.sma(df["close"], f_params.get("period", 200))
+                entry_long = entry_long & (df["close"] > sma)
 
-        if ft_type == FilterType.REGIME_EMA.value:
-            df["entry_long"] = df["entry_long"] & (df["close"] > df["filter_ema"])
+        df["entry_long"] = entry_long
+        df["exit_logic"] = exit_long
 
-        elif ft_type == FilterType.VOLATILITY_ADX.value:
-            df["entry_long"] = df["entry_long"] & (df["adx"] > ft_params["threshold"])
+        # Calculate ATR for Stops if needed
+        stop_spec = spec.get("stop")
+        if stop_spec and stop_spec.get("type") == "ATR":
+             df["atr"] = self.indicators.atr(df, stop_spec.get("params", {}).get("period", 14))
 
-        elif ft_type == FilterType.RSI_FILTER.value:
-            # Check RSI if not already the main strategy
-            if "rsi" in df.columns:
-                df["entry_long"] = df["entry_long"] & (df["rsi"] < ft_params["max_val"])
-
-    def _simulate(self, df: pd.DataFrame, spec: StrategySpec) -> Tuple[List, pd.Series, int]:
+    def _simulate(self, df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[List, pd.Series, int]:
+        """
+        Simulate trades (Long Only for now as per default).
+        Execution: Signal at Close[i] -> Trade at Open[i+1].
+        """
         trades = []
         equity = 100000.0
+        equity_curve = []
 
-        # Performance Optimization: Use numpy array for equity tracking instead of Series
-        n = len(df)
-        equity_values = np.full(n, np.nan, dtype=np.float64)
-
-        position = 0 # 0 or 1
+        position = 0 # 0, 1
         entry_price = 0.0
-        entry_time = None
+        entry_idx = None
         sl_price = 0.0
         tp_price = 0.0
         bars_held = 0
 
-        ex_type = spec["exit_type"]
-        ex_params = spec["exit_params"]
-        sl_mult = ex_params["sl_mult"]
-        tp_mult = ex_params["tp_mult"]
+        stop_spec = spec.get("stop", {})
+        stop_type = stop_spec.get("type", "NONE")
+        stop_params = stop_spec.get("params", {})
 
-        # Mandatory Close
-        close_time_str = spec.get("session_close_time", "15:25")
-        close_hour, close_minute = map(int, close_time_str.split(":"))
-
-        # Pre-convert to numpy for speed
+        closes = df["close"].values
         opens = df["open"].values
         highs = df["high"].values
         lows = df["low"].values
-        closes = df["close"].values
-        atrs = df["atr"].values
         entries = df["entry_long"].values
-        times = df.index
+        exits_logic = df["exit_logic"].values
+        atrs = df["atr"].values if "atr" in df.columns else np.zeros(len(df))
 
-        # Pre-compute time checks to avoid repeated attribute access
-        times_hours = times.hour
-        times_minutes = times.minute
+        timestamps = df.index
 
-        for i in range(n - 1): # Stop at n-1 to execute next open
-            current_time = times[i]
-            equity_values[i] = equity # Mark to market roughly
+        n = len(df)
 
-            # 1. Manage Existing Position
-            if position > 0:
+        total_cost_bps = self.costs.estimate_total_cost_bps()
+        cost_pct = total_cost_bps / 10000.0
+
+        for i in range(n - 1): # Can't trade on last bar for next open
+            # Mark to market
+            current_equity = equity
+            if position == 1:
+                # Unrealized PnL based on Close
+                change = (closes[i] - entry_price) / entry_price
+                current_equity = equity * (1 + change)
+
+            equity_curve.append(current_equity)
+
+            # 1. Manage Open Position
+            if position == 1:
                 bars_held += 1
                 exit_price = None
-                exit_reason = ""
+                reason = ""
 
-                # Check Intraday Force Close
-                # Use pre-computed hour/minute arrays for speed
-                curr_h = times_hours[i]
-                curr_m = times_minutes[i]
+                # Check Logic Exit (Signal at Close[i] -> Exit Open[i+1])
+                # Check Stops (Hit Intra-day [i] or Gap [i])
+                # Actually, if we execute at Open[i+1], we check stops on Bar[i+1]?
+                # No, we held through Bar[i].
+                # If we entered at Open[i], we check stops on Bar[i].
+                # Wait, loop index i represents "Today".
+                # If I entered at Open[i] (decided at i-1), I check stops on Bar[i].
+                # My loop structure: "i" is "Today".
+                # If position=1, it means I am ALREADY holding at start of "Today".
 
-                if curr_h > close_hour or (curr_h == close_hour and curr_m >= close_minute):
-                    exit_price = opens[i] # Exit at Open of this bar if we passed time (or close of prev, simplified to open of current)
-                    exit_reason = "SESSION_CLOSE"
+                # Check SL/TP on Today's OHLC
+                # Assumes SL/TP orders are active during the day
 
-                # Check SL/TP (Hit within bar)
-                elif lows[i] <= sl_price:
-                    exit_price = sl_price
-                    exit_reason = "SL"
-                elif highs[i] >= tp_price:
-                    exit_price = tp_price
-                    exit_reason = "TP"
+                sl_hit = (lows[i] <= sl_price)
+                tp_hit = (highs[i] >= tp_price) if tp_price > 0 else False
 
-                # Check Time Stop
-                elif ex_type == ExitType.TIME_BASED.value and bars_held >= ex_params["max_bars"]:
-                    exit_price = opens[i+1] # Exit next open
-                    exit_reason = "TIME_STOP"
+                if sl_hit:
+                    exit_price = min(opens[i], sl_price) # Gap handling: if open < sl, we exit at open
+                    reason = "SL"
+                elif tp_hit:
+                    exit_price = max(opens[i], tp_price) # Gap handling
+                    reason = "TP"
+                elif exits_logic[i]:
+                    # Logic signal at Close[i] -> Exit Open[i+1]
+                    # We will exit tomorrow Open. Mark for exit.
+                    pass
+                elif stop_type == "TIME" and bars_held >= stop_params.get("max_bars", 10):
+                    # Time stop: Exit Open[i+1]
+                    pass
+                elif stop_type == "TRAILING_ATR":
+                     # Update SL
+                     new_sl = closes[i] - (atrs[i] * stop_params.get("mult", 3.0))
+                     if new_sl > sl_price:
+                         sl_price = new_sl
 
-                # Check Trailing
-                if ex_type == ExitType.TRAILING_ATR.value and exit_price is None:
-                    # Update SL
-                    new_sl = closes[i] - (atrs[i] * sl_mult)
-                    if new_sl > sl_price:
-                        sl_price = new_sl
-
-                # Execute Exit
                 if exit_price is not None:
-                    # Apply costs
-                    # Exit Price adjustment for slippage
-                    eff_exit_price = exit_price * (1 - self.slippage_pct)
-
-                    pnl_pct = (eff_exit_price - entry_price) / entry_price
-                    # Deduct transaction costs (bps on notional)
-                    # Cost applied on both legs approx 2 * cost_pct
-                    pnl_pct -= (2 * self.cost_pct)
-
-                    pnl = equity * pnl_pct # Fixed fractional of current equity? Or fixed initial? Let's use compounding.
-
-                    trades.append({
-                        "entry_time": entry_time,
-                        "exit_time": current_time,
-                        "entry_price": entry_price,
-                        "exit_price": eff_exit_price,
-                        "pnl": pnl,
-                        "return_pct": pnl_pct,
-                        "reason": exit_reason
-                    })
-
+                    # Executed TODAY
+                    # PnL
+                    ret = (exit_price - entry_price) / entry_price
+                    ret_net = ret - cost_pct
+                    pnl = equity * ret_net
                     equity += pnl
                     position = 0
+                    trades.append({
+                        "entry_time": timestamps[entry_idx],
+                        "exit_time": timestamps[i],
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "pnl": pnl,
+                        "return_pct": ret_net,
+                        "reason": reason
+                    })
+                    continue # Done for this bar
+
+                # Check if we need to exit Next Open due to Logic or Time
+                exit_next_open = False
+                exit_reason_next = ""
+
+                if exits_logic[i]:
+                    exit_next_open = True
+                    exit_reason_next = "SIGNAL"
+                elif stop_type == "TIME" and bars_held >= stop_params.get("max_bars", 10):
+                    exit_next_open = True
+                    exit_reason_next = "TIME"
+
+                if exit_next_open:
+                    exit_price = opens[i+1]
+                    ret = (exit_price - entry_price) / entry_price
+                    ret_net = ret - cost_pct
+                    pnl = equity * ret_net
+                    equity += pnl
+                    position = 0
+                    trades.append({
+                        "entry_time": timestamps[entry_idx],
+                        "exit_time": timestamps[i+1],
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "pnl": pnl,
+                        "return_pct": ret_net,
+                        "reason": exit_reason_next
+                    })
+                    continue
+
+            # 2. Check Entry (if flat)
+            if position == 0:
+                if entries[i]:
+                    # Signal at Close[i] -> Enter Open[i+1]
+                    entry_price = opens[i+1]
+                    entry_idx = i+1
+                    position = 1
                     bars_held = 0
-                    continue # Position closed, can't enter same bar (simplified)
 
-            # 2. Check Entry
-            # Only enter if flat and market is not about to close
-            # Use pre-computed time arrays
-            curr_h = times_hours[i]
-            curr_m = times_minutes[i]
-            time_ok = (curr_h < close_hour) or (curr_h == close_hour and curr_m < close_minute - 15)
+                    # Set Initial Stops based on Bar[i] (Signal Bar)
+                    if stop_type == "ATR":
+                        atr_val = atrs[i]
+                        sl_price = entry_price - (atr_val * stop_params.get("sl_mult", 2.0))
+                        if "tp_mult" in stop_params:
+                            tp_price = entry_price + (atr_val * stop_params.get("tp_mult"))
+                        else:
+                            tp_price = 0.0 # No TP
+                    elif stop_type == "TRAILING_ATR":
+                         atr_val = atrs[i]
+                         sl_price = entry_price - (atr_val * stop_params.get("mult", 3.0))
+                         tp_price = 0.0
+                    else:
+                        sl_price = 0.0 # No SL
+                        tp_price = 0.0
 
-            if position == 0 and entries[i] and time_ok:
-                # Enter next Open
-                entry_price_raw = opens[i+1]
-                entry_price = entry_price_raw * (1 + self.slippage_pct)
-                entry_time = times[i+1]
-                position = 1
-                bars_held = 0
+        # Last bar equity
+        equity_curve.append(equity)
 
-                # Set Initial Stops
-                atr_val = atrs[i] # Use signal bar ATR
-                sl_price = entry_price_raw - (atr_val * sl_mult)
-                tp_price = entry_price_raw + (atr_val * tp_mult)
+        # Series
+        equity_series = pd.Series(equity_curve, index=timestamps[:len(equity_curve)])
 
-        # Fill last equity
-        equity_values[-1] = equity
-
-        # Convert back to Series
-        equity_series = pd.Series(equity_values, index=df.index)
         return trades, equity_series, position

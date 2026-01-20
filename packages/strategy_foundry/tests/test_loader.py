@@ -1,65 +1,43 @@
-import os
 import unittest
-from unittest.mock import patch
-
+from unittest.mock import patch, MagicMock
 import pandas as pd
-
+import os
+import shutil
 from packages.strategy_foundry.data.loader import DataLoader
-
 
 class TestDataLoader(unittest.TestCase):
     def setUp(self):
-        self.loader = DataLoader(cache_dir="/tmp/test_foundry_cache")
+        self.test_cache = "packages/strategy_foundry/tests/temp_cache"
+        self.loader = DataLoader(cache_dir=self.test_cache)
 
     def tearDown(self):
-        import shutil
-        if os.path.exists("/tmp/test_foundry_cache"):
-            shutil.rmtree("/tmp/test_foundry_cache")
+        if os.path.exists(self.test_cache):
+            shutil.rmtree(self.test_cache)
 
-    def test_get_symbol(self):
-        self.assertEqual(self.loader.get_symbol_for_instrument("NIFTY"), "^NSEI")
-        self.assertEqual(self.loader.get_symbol_for_instrument("UNKNOWN"), "UNKNOWN")
+    @patch('requests.get')
+    def test_download_and_cache(self, mock_get):
+        # Mock Yahoo CSV response
+        csv_content = """Date,Open,High,Low,Close,Adj Close,Volume
+2023-01-01,18000,18100,17900,18050,18050,100000
+2023-01-02,18050,18200,18000,18150,18150,150000
+"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = csv_content
+        mock_get.return_value = mock_response
 
-    @patch("packages.strategy_foundry.data.loader.DataLoader._download_yahoo")
-    def test_fetch_data_mock(self, mock_download):
-        # Mock successful download
-        df_mock = pd.DataFrame({
-            "open": [100, 101],
-            "high": [102, 103],
-            "low": [99, 100],
-            "close": [101, 102],
-            "volume": [1000, 2000]
-        }, index=pd.to_datetime(["2023-01-01 10:00", "2023-01-01 10:05"]))
+        df = self.loader.fetch_data("NIFTY", force_refresh=True)
 
-        mock_download.return_value = df_mock
-
-        df = self.loader.fetch_data("NIFTY", "5m", force_refresh=True)
-        self.assertFalse(df.empty, "DataFrame should not be empty")
+        self.assertFalse(df.empty)
         self.assertEqual(len(df), 2)
-        mock_download.assert_called_with("^NSEI", "5m")
+        self.assertIn("open", df.columns)
+        self.assertTrue(os.path.exists(os.path.join(self.test_cache, "NIFTY_1D.csv")))
 
-    @patch("packages.strategy_foundry.data.loader.DataLoader._download_yahoo")
-    def test_fetch_data_fallback(self, mock_download):
-        # Mock failure for primary, success for fallback
-        def side_effect(symbol, timeframe):
-            if symbol == "^NSEI":
-                return None
-            if symbol == "NIFTYBEES.NS":
-                return pd.DataFrame({
-                    "open": [50, 51],
-                    "high": [52, 53],
-                    "low": [49, 50],
-                    "close": [51, 52],
-                    "volume": [100, 200]
-                }, index=pd.to_datetime(["2023-01-01 10:00", "2023-01-01 10:05"]))
-            return None
+        # Test loading from cache
+        df_cached = self.loader.fetch_data("NIFTY", force_refresh=False)
+        self.assertEqual(len(df_cached), 2)
+        # Check timezone
+        self.assertEqual(str(df_cached.index.tz), "Asia/Kolkata")
 
-        mock_download.side_effect = side_effect
-
-        df = self.loader.fetch_data("NIFTY", "5m", force_refresh=True)
-        self.assertFalse(df.empty, "DataFrame should not be empty")
-        self.assertEqual(df["close"].iloc[0], 51)
-
-        # Verify calls
-        # Should call primary then fallback
-        self.assertTrue(mock_download.call_count >= 2)
+if __name__ == "__main__":
+    unittest.main()

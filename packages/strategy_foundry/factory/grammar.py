@@ -1,41 +1,101 @@
 from enum import Enum
-from typing import Any, Dict, TypedDict
-
+import random
+from typing import Any, Dict, List
 
 class StrategyType(Enum):
-    BREAKOUT_DONCHIAN = "BREAKOUT_DONCHIAN"
-    TREND_EMA_CROSS = "TREND_EMA_CROSS"
-    MEAN_REV_RSI = "MEAN_REV_RSI"
-    MEAN_REV_BB = "MEAN_REV_BB"
-    VOL_EXPANSION_ATR = "VOL_EXPANSION_ATR"
-    SUPERTREND_FOLLOW = "SUPERTREND_FOLLOW"
+    EMA_CROSS = "EMA_CROSS"
+    RSI_REVERSION = "RSI_REVERSION"
+    DONCHIAN_BREAKOUT = "DONCHIAN_BREAKOUT"
+    SUPERTREND = "SUPERTREND"
 
 class FilterType(Enum):
-    NO_FILTER = "NO_FILTER"
-    REGIME_EMA = "REGIME_EMA" # Close > EMA(200)
-    VOLATILITY_ADX = "VOLATILITY_ADX" # ADX > 20
-    RSI_FILTER = "RSI_FILTER" # RSI < 70 for Long
+    NONE = "NONE"
+    RSI = "RSI"
+    ADX = "ADX"
+    REGIME_SMA = "REGIME_SMA"
 
-class ExitType(Enum):
-    FIXED_RR = "FIXED_RR" # SL and TP based on ATR
-    TRAILING_ATR = "TRAILING_ATR" # Trailing stop
-    TIME_BASED = "TIME_BASED" # Exit after N bars
+class StopType(Enum):
+    ATR = "ATR"
+    TRAILING_ATR = "TRAILING_ATR"
+    TIME = "TIME"
 
-class StrategySpec(TypedDict):
-    id: str
-    direction: str # LONG or SHORT (default LONG)
+class ParameterSpace:
+    """Defines valid ranges for parameters"""
 
-    # Entry Logic
-    strategy_type: str
-    strategy_params: Dict[str, Any]
+    @staticmethod
+    def get_ema_cross_params():
+        fast = random.choice([5, 9, 10, 20])
+        slow = random.choice([20, 50, 100, 200])
+        if fast >= slow: fast, slow = slow, fast
+        if fast == slow: slow += 10
+        return {"fast": fast, "slow": slow}
 
-    # Filter Logic
-    filter_type: str
-    filter_params: Dict[str, Any]
+    @staticmethod
+    def get_rsi_reversion_params():
+        return {
+            "period": random.choice([7, 14, 21]),
+            "lower": random.choice([20, 25, 30, 35]),
+            "upper": random.choice([65, 70, 75, 80])
+        }
 
-    # Exit Logic
-    exit_type: str
-    exit_params: Dict[str, Any]
+    @staticmethod
+    def get_donchian_params():
+        return {"period": random.choice([10, 20, 55])}
 
-    # Global Constraints
-    session_close_time: str # "15:25"
+    @staticmethod
+    def get_supertrend_params():
+        return {
+            "period": random.choice([7, 10, 14]),
+            "multiplier": random.choice([2.0, 3.0, 4.0])
+        }
+
+    @staticmethod
+    def get_filter_params(ft: FilterType):
+        if ft == FilterType.RSI:
+            return {
+                "type": "RSI",
+                "params": {
+                    "period": random.choice([14]),
+                    "mode": random.choice(["below", "above"]),
+                    "threshold": random.choice([30, 50, 70])
+                }
+            }
+        elif ft == FilterType.ADX:
+            return {
+                "type": "ADX",
+                "params": {
+                    "period": 14,
+                    "threshold": random.choice([20, 25, 30])
+                }
+            }
+        elif ft == FilterType.REGIME_SMA:
+            return {
+                "type": "REGIME_SMA",
+                "params": {"period": 200}
+            }
+        return None
+
+    @staticmethod
+    def get_stop_params(st: StopType):
+        if st == StopType.ATR:
+            return {
+                "type": "ATR",
+                "params": {
+                    "period": 14,
+                    "sl_mult": random.choice([1.5, 2.0, 3.0]),
+                    "tp_mult": random.choice([2.0, 3.0, 5.0]) # Optional TP
+                }
+            }
+        elif st == StopType.TRAILING_ATR:
+            return {
+                "type": "TRAILING_ATR",
+                "params": {
+                    "mult": random.choice([2.0, 3.0, 4.0])
+                }
+            }
+        elif st == StopType.TIME:
+            return {
+                "type": "TIME",
+                "params": {"max_bars": random.choice([5, 10, 20])}
+            }
+        return {"type": "NONE", "params": {}}

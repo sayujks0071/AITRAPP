@@ -1,29 +1,35 @@
 # Backtesting Methodology
 
-## Assumptions
-- **Execution**: Signal on Close -> Execute on Next Open.
-- **Slippage**: 5 bps per side (configurable).
-- **Costs**: 5 bps per side (configurable, covers brokerage + taxes).
-- **Data**: 5-minute and 15-minute OHLCV.
-- **Session**: 09:15 to 15:30 IST.
-- **Forced Exit**: All positions closed by 15:25 IST.
+## Engine
+- **Timeframe**: Daily (1D).
+- **Execution**: Signal generated at `Close[i]` is executed at `Open[i+1]`.
+- **Costs**:
+  - Slippage: 5 bps per side.
+  - All-in Cost: 10 bps per side (covering Brokerage, STT, Exchange Fees, Stamp Duty).
+  - Total Round Trip Drag: ~30 bps.
 
 ## Walk-Forward Evaluation
-To prevent overfitting, we use Walk-Forward Evaluation (WFE) or Cross-Validation:
-- Data is split into multiple folds (default 4).
-- Strategy is evaluated on each fold as an "Out-of-Sample" (OOS) period.
-- Ranking is based on the average OOS performance.
+To avoid overfitting, we use Anchored Walk-Forward Evaluation.
+- **Folds**: Data is split into 4 OOS folds (default).
+- **Training**: Candidates are generated with random parameters (implicit training).
+- **Validation**: Performance is measured strictly on the OOS folds.
+- **Ranking**: Based on OOS metrics only.
 
 ## Metrics
-- **Sharpe Ratio**: Annualized (Risk-Free Rate = 0).
-- **Calmar Ratio**: Annualized CAGR / Max Drawdown.
-- **Stability**: Standard deviation of Sharpe across folds.
-- **Turnover**: Average return per trade (Proxy for trade quality).
+- **CAGR**: Compound Annual Growth Rate.
+- **Sharpe Ratio**: Daily Returns / Volatility (Annualized).
+- **Calmar Ratio**: CAGR / Max Drawdown.
+- **Stability**: Inverse of rolling Sharpe dispersion.
+- **Turnover**: Penalized if excessive.
 
-## Rejection Criteria
-Strategies are rejected if:
-- **Trades**: < 80 (5m) or < 40 (15m).
-- **Drawdown**: > 30%.
-- **Profit Factor**: < 1.1 (OOS).
-- **Sanity Check**: > 50% of PnL comes from the last 30 minutes of the day ("Late Day Dependence").
-- **Overtrading**: > 10 trades per day on average.
+## Ranking Score
+Composite score calculated as:
+```
+Score = 0.3*Sharpe + 0.25*Calmar + 0.2*CAGR + 0.15*Stability - Penalty
+```
+
+## Sanity Checks
+Candidates are rejected if:
+- Total trades < 30 (Insufficient sample).
+- Max Drawdown > 35%.
+- Fewer than 2 positive OOS folds.
