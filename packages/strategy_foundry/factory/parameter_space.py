@@ -17,6 +17,7 @@ class ParameterSpace:
     DONCHIAN_PERIODS = [20, 40, 60]
     SUPERTREND_PERIODS = [10, 14]
     SUPERTREND_MULTIPLIERS = [2.0, 3.0, 4.0]
+    ORB_MINUTES = [15, 30, 60]
 
     # Thresholds
     RSI_OVERBOUGHT = [70, 75, 80]

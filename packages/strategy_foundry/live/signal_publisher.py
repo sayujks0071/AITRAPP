@@ -30,48 +30,69 @@ class SignalPublisher:
              self._write_skipped(now, "MARKET_CLOSED")
              return
 
-        # 2. Load Champion
-        champion = self.store.load_current_champion()
-        if not champion:
-            self._write_skipped(now, "NO_CHAMPION")
+        # 2. Iterate Instruments
+        instruments = ["NIFTY", "SENSEX"]
+        candidates = []
+
+        for instrument in instruments:
+            champion = self.store.load_current_champion(instrument)
+            if not champion:
+                continue
+
+            spec = champion["spec"]
+            target_tf = "5m"
+
+            # 3. Fetch Data (Force Refresh for Live)
+            df = self.loader.fetch_data(instrument, target_tf, force_refresh=True)
+            if df.empty:
+                continue
+
+            # 4. Run Engine to get State
+            res = self.engine.run(df, spec)
+            final_pos = res["final_position"]
+            signal_val = 1 if final_pos > 0 else 0
+
+            # Only consider if there is an active signal (1 or -1 if short allowed)
+            # Actually, we should publish state even if Flat (0), but if we want to pick "The One",
+            # we likely prioritize active signals.
+            # But "status": "OK" with signal 0 is also valid "Flat" signal.
+
+            candidates.append({
+                "instrument": instrument,
+                "champion": champion,
+                "signal": signal_val,
+                "score": champion.get("score", 0)
+            })
+
+        if not candidates:
+            self._write_skipped(now, "NO_DATA_OR_CHAMPIONS")
             return
 
-        spec = champion["spec"]
-        # Determine timeframe and instrument to run
-        # Ideally champion spec should store which timeframe it won on or we run the blended logic.
-        # But for simplicity, let's assume we run the Primary Timeframe (5m) if available, else 15m.
-        # The champion metrics might have score_5m and score_15m.
-        # Let's pick 5m if valid, else 15m.
+        # 5. Pick Best
+        # Priority: Active Signal > Higher Score
+        # Filter active signals
+        active = [c for c in candidates if c["signal"] != 0]
 
-        target_tf = "5m"
-        # Fallback logic could be better, but assuming 5m is primary as per requirements.
+        if active:
+            # Pick highest score among active
+            selected = max(active, key=lambda x: x["score"])
+        else:
+            # All flat, pick highest score champion to report flat state
+            selected = max(candidates, key=lambda x: x["score"])
 
-        # Instrument: "NIFTY" (Default for now, lab focuses on Index)
-        instrument = "NIFTY"
-
-        # 3. Fetch Data (Force Refresh for Live)
-        df = self.loader.fetch_data(instrument, target_tf, force_refresh=True)
-        if df.empty:
-            self._write_skipped(now, "DATA_FETCH_FAILED")
-            return
-
-        # 4. Run Engine to get State
-        res = self.engine.run(df, spec)
-        final_pos = res["final_position"]
-
-        # 5. Construct Signal
-        signal_val = 1 if final_pos > 0 else 0 # Long Only default
-
+        # 6. Construct Signal
+        spec = selected["champion"]["spec"]
+        instrument = selected["instrument"]
         proxies = self._get_proxies(instrument)
 
         signal_data = {
             "timestamp_ist": now.isoformat(),
             "champion_id": spec.get("id"),
-            "timeframe": target_tf,
+            "timeframe": "5m",
             "instrument": instrument,
             "proxy_symbol_paper": proxies.get("paper"),
             "proxy_symbol_live": proxies.get("live"),
-            "signal": signal_val,
+            "signal": selected["signal"],
             "rule_summary": f"{spec['strategy_type']} + {spec['filter_type']}",
             "risk": {
                 "stop_atr_mult": spec["exit_params"].get("sl_mult"),

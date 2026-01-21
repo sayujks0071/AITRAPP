@@ -40,6 +40,9 @@ class StrategyGenerator:
         if st_type == StrategyType.BREAKOUT_DONCHIAN:
             st_params["period"] = ParameterSpace.get_random_param("DONCHIAN_PERIODS")
 
+        elif st_type == StrategyType.BREAKOUT_ORB:
+            st_params["minutes"] = ParameterSpace.get_random_param("ORB_MINUTES")
+
         elif st_type == StrategyType.TREND_EMA_CROSS:
             # fast < slow
             # Ensure fast is not the largest available period

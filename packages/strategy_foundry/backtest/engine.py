@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
+from packages.strategy_foundry.adapters.core_costs import CostAdapter
 from packages.strategy_foundry.adapters.core_indicators import VectorIndicatorCalculator
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
 from packages.strategy_foundry.factory.grammar import (
@@ -14,9 +15,14 @@ from packages.strategy_foundry.factory.grammar import (
 
 
 class BacktestEngine:
-    def __init__(self, cost_bps=5.0, slippage_bps=5.0):
-        self.cost_pct = cost_bps / 10000.0
-        self.slippage_pct = slippage_bps / 10000.0
+    def __init__(self, cost_bps=None, slippage_bps=None):
+        defaults = CostAdapter.get_costs()
+
+        c_bps = cost_bps if cost_bps is not None else defaults["all_in_cost_bps"]
+        s_bps = slippage_bps if slippage_bps is not None else defaults["slippage_bps"]
+
+        self.cost_pct = c_bps / 10000.0
+        self.slippage_pct = s_bps / 10000.0
         self.calc = VectorIndicatorCalculator()
 
     def run(self, df: pd.DataFrame, spec: StrategySpec) -> Dict[str, Any]:
@@ -61,6 +67,39 @@ class BacktestEngine:
         if st_type == StrategyType.BREAKOUT_DONCHIAN.value:
             p = st_params["period"]
             df["dc_upper"], df["dc_lower"] = self.calc.donchian(df, period=p)
+
+        elif st_type == StrategyType.BREAKOUT_ORB.value:
+            minutes = st_params["minutes"]
+            df["orb_high"] = np.nan
+            # Group by date (slow but safe for ORB logic)
+            # Optimize: only run on days present
+            dates = pd.Series(df.index.date).unique()
+            for d in dates:
+                # Mask for the day
+                # Note: creating boolean mask for whole df inside loop is inefficient for huge data
+                # Better: iterate groups if possible. But dates list is small (60).
+                # To be safer with types (d is object or date), convert index to date
+                day_mask = df.index.date == d
+
+                # We need the first 'minutes' of data
+                # Find start time of this day in this df
+                day_times = df.index[day_mask]
+                if len(day_times) == 0: continue
+
+                start_time = day_times[0]
+                end_time = start_time + pd.Timedelta(minutes=minutes)
+
+                # Slice range
+                # We need high/low within [start_time, end_time)
+                # We can't use simple slice because boolean mask is already calculated
+                # Logical AND
+                range_mask = day_mask & (df.index < end_time)
+
+                if range_mask.any():
+                    h = df.loc[range_mask, "high"].max()
+                    # Assign to rest of day (after range) to avoid lookahead
+                    rest_of_day_mask = day_mask & (df.index >= end_time)
+                    df.loc[rest_of_day_mask, "orb_high"] = h
 
         elif st_type == StrategyType.TREND_EMA_CROSS.value:
             df["ema_fast"] = self.calc.ema(df["close"], period=st_params["fast_period"])
@@ -111,6 +150,10 @@ class BacktestEngine:
             # dc_upper in core includes current high.
             # So Signal: Close > dc_upper.shift(1)
             df["entry_long"] = df["close"] > df["dc_upper"].shift(1)
+
+        elif st_type == StrategyType.BREAKOUT_ORB.value:
+             # Close > ORB High
+             df["entry_long"] = df["close"] > df["orb_high"]
 
         elif st_type == StrategyType.TREND_EMA_CROSS.value:
             # Crossover

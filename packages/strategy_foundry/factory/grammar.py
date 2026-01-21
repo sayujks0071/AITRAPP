@@ -4,6 +4,7 @@ from typing import Any, Dict, TypedDict
 
 class StrategyType(Enum):
     BREAKOUT_DONCHIAN = "BREAKOUT_DONCHIAN"
+    BREAKOUT_ORB = "BREAKOUT_ORB"
     TREND_EMA_CROSS = "TREND_EMA_CROSS"
     MEAN_REV_RSI = "MEAN_REV_RSI"
     MEAN_REV_BB = "MEAN_REV_BB"

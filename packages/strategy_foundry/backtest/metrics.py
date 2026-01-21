@@ -15,8 +15,9 @@ def calculate_metrics(trades_df: pd.DataFrame, daily_returns: pd.Series, initial
             "max_dd": 0.0,
             "win_rate": 0.0,
             "profit_factor": 0.0,
-            "trades": 0,
-            "avg_trade_pct": 0.0
+            "total_trades": 0,
+            "avg_trade_pct": 0.0,
+            "pnl_net": 0.0
         }
 
     # Trade-based metrics
@@ -73,6 +74,7 @@ def calculate_metrics(trades_df: pd.DataFrame, daily_returns: pd.Series, initial
         "max_dd": max_dd,
         "win_rate": win_rate,
         "profit_factor": profit_factor,
-        "trades": len(trades_df),
-        "avg_trade_pct": avg_trade_pct
+        "total_trades": len(trades_df),
+        "avg_trade_pct": avg_trade_pct,
+        "pnl_net": trades_df["pnl"].sum()
     }
