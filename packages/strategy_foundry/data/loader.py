@@ -116,6 +116,16 @@ class DataLoader:
             # Drop NaN rows
             df.dropna(inplace=True)
 
+            # Sanity Checks
+            # 1. High >= Low
+            df = df[df["high"] >= df["low"]]
+            # 2. High >= Open and High >= Close
+            df = df[(df["high"] >= df["open"]) & (df["high"] >= df["close"])]
+            # 3. Low <= Open and Low <= Close
+            df = df[(df["low"] <= df["open"]) & (df["low"] <= df["close"])]
+            # 4. Volume >= 0
+            df = df[df["volume"] >= 0]
+
             # Basic Market Hours Filter (09:15 - 15:30) for intraday
             if timeframe in ["5m", "15m"]:
                 df = df.between_time("09:15", "15:29") # Inclusive start, inclusive end

@@ -1,12 +1,12 @@
 # Backtesting Methodology
 
 ## Assumptions
+- **Timeframe**: Daily (1D).
 - **Execution**: Signal on Close -> Execute on Next Open.
 - **Slippage**: 5 bps per side (configurable).
-- **Costs**: 5 bps per side (configurable, covers brokerage + taxes).
-- **Data**: 5-minute and 15-minute OHLCV.
-- **Session**: 09:15 to 15:30 IST.
-- **Forced Exit**: All positions closed by 15:25 IST.
+- **Costs**: 3.5 bps per side (configurable, covers brokerage + taxes).
+- **Data**: Daily OHLCV (NIFTY/SENSEX).
+- **Session**: Standard Market Days.
 
 ## Walk-Forward Evaluation
 To prevent overfitting, we use Walk-Forward Evaluation (WFE) or Cross-Validation:
@@ -22,8 +22,7 @@ To prevent overfitting, we use Walk-Forward Evaluation (WFE) or Cross-Validation
 
 ## Rejection Criteria
 Strategies are rejected if:
-- **Trades**: < 80 (5m) or < 40 (15m).
-- **Drawdown**: > 30%.
-- **Profit Factor**: < 1.1 (OOS).
-- **Sanity Check**: > 50% of PnL comes from the last 30 minutes of the day ("Late Day Dependence").
-- **Overtrading**: > 10 trades per day on average.
+- **Trades**: < 30 (Default).
+- **Drawdown**: > 35%.
+- **Profit Factor**: < 1.0 (OOS).
+- **Sanity Check**: Basic data integrity and trade validation.
