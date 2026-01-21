@@ -7,19 +7,22 @@ from typing import Any, Dict, Optional
 class ChampionStore:
     def __init__(self, base_dir="packages/strategy_foundry/results/champions"):
         self.base_dir = base_dir
-        self.current_file = os.path.join(base_dir, "current.json")
         os.makedirs(base_dir, exist_ok=True)
 
-    def load_current_champion(self) -> Optional[Dict[str, Any]]:
-        if os.path.exists(self.current_file):
+    def _get_current_file(self, instrument: str) -> str:
+        return os.path.join(self.base_dir, f"champion_{instrument}.json")
+
+    def load_current_champion(self, instrument: str = "NIFTY") -> Optional[Dict[str, Any]]:
+        filepath = self._get_current_file(instrument)
+        if os.path.exists(filepath):
             try:
-                with open(self.current_file, "r") as f:
+                with open(filepath, "r") as f:
                     return json.load(f)
             except Exception:
                 return None
         return None
 
-    def save_new_champion(self, candidate_spec: Dict, metrics: Dict, score: float, run_ts: str):
+    def save_new_champion(self, candidate_spec: Dict, metrics: Dict, score: float, run_ts: str, instrument: str = "NIFTY"):
         """
         Promotes a new champion.
         """
@@ -28,28 +31,31 @@ class ChampionStore:
             "metrics": metrics,
             "score": score,
             "promoted_at": datetime.now().isoformat(),
-            "run_ts": run_ts
+            "run_ts": run_ts,
+            "instrument": instrument
         }
 
+        filepath = self._get_current_file(instrument)
+
         # 1. Archive old if exists
-        if os.path.exists(self.current_file):
-            old = self.load_current_champion()
+        if os.path.exists(filepath):
+            old = self.load_current_champion(instrument)
             if old:
                 ts = datetime.now().strftime("%Y%m%d%H%M%S")
                 old_id = old.get("spec", {}).get("id", "unknown")
-                archive_path = os.path.join(self.base_dir, f"{ts}_{old_id}.json")
+                archive_path = os.path.join(self.base_dir, f"{instrument}_{ts}_{old_id}.json")
                 with open(archive_path, "w") as f:
                     json.dump(old, f, indent=2)
 
         # 2. Save new
-        with open(self.current_file, "w") as f:
+        with open(filepath, "w") as f:
             json.dump(champion_data, f, indent=2)
 
-    def should_promote(self, new_score: float, new_metrics: Dict) -> bool:
+    def should_promote(self, new_score: float, new_metrics: Dict, instrument: str = "NIFTY") -> bool:
         """
         Decides if new candidate should replace current champion.
         """
-        current = self.load_current_champion()
+        current = self.load_current_champion(instrument)
         if not current:
             return True
 

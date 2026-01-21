@@ -40,149 +40,163 @@ def main():
     results_dir = f"packages/strategy_foundry/results/runs/{run_ts}"
     os.makedirs(results_dir, exist_ok=True)
 
-    # 2. Data
+    # 2. Setup Components
     loader = DataLoader()
-    # Fetch NIFTY 15m and 5m
-    logger.info("Fetching data...")
-    df_15m = loader.fetch_data("NIFTY", "15m", force_refresh=True)
-    df_5m = loader.fetch_data("NIFTY", "5m", force_refresh=True)
-    df_1d = loader.fetch_data("NIFTY", "1d", force_refresh=True) # For sanity check
-
-    # 3. Generate
-    generator = StrategyGenerator()
-    candidates = generator.generate_candidates(n_candidates)
-    logger.info(f"Generated {len(candidates)} candidates.")
-
-    # 4. Evaluate
     engine = BacktestEngine()
     evaluator = WalkForwardEvaluator(engine)
     ranker = Ranker()
+    store = ChampionStore()
 
-    results = []
+    # 3. Iterate Instruments
+    instruments = ["NIFTY", "SENSEX"]
 
-    # Rejection Thresholds
-    min_trades_15m = selection_cfg.get("min_trades_15m", 30)
-    min_trades_5m = selection_cfg.get("min_trades_5m", 60)
+    for instrument in instruments:
+        logger.info(f"Processing Instrument: {instrument}")
 
-    # In Fast Mode, we relax rejection criteria significantly to allow end-to-end flow verification
-    target_trades_15m = min_trades_15m // 2 if fast_mode else min_trades_15m
-    target_trades_5m = min_trades_5m // 2 if fast_mode else min_trades_5m
+        # Data
+        logger.info(f"Fetching data for {instrument}...")
+        df_15m = loader.fetch_data(instrument, "15m", force_refresh=True)
+        df_5m = loader.fetch_data(instrument, "5m", force_refresh=True)
+        df_1d = loader.fetch_data(instrument, "1d", force_refresh=True) # For sanity check
 
-    for i, spec in enumerate(candidates):
-        if i % 10 == 0: logger.info(f"Processing {i}/{len(candidates)}")
+        if df_15m.empty and df_5m.empty:
+            logger.warning(f"No data for {instrument}. Skipping.")
+            continue
 
-        # 15m Run
-        metrics_15m = evaluator.evaluate(df_15m, spec, folds=n_folds) if not df_15m.empty else {}
-        # Use returned sanity or default
-        sanity_15m = metrics_15m.get("sanity", {"late_day_dependence": True, "min_trades": False, "overtrade": True})
+        # Generate (Fresh candidates per instrument or reuse? Fresh is more diverse)
+        generator = StrategyGenerator()
+        candidates = generator.generate_candidates(n_candidates)
+        logger.info(f"Generated {len(candidates)} candidates for {instrument}.")
 
-        # Ensure min trades check uses updated metrics
-        sanity_15m["min_trades"] = metrics_15m.get("total_trades", 0) >= target_trades_15m
+        results = []
 
-        score_15m = ranker.score_candidate(metrics_15m, sanity_15m) if metrics_15m else 0
+        # Rejection Thresholds
+        min_trades_15m = selection_cfg.get("min_trades_15m", 30)
+        min_trades_5m = selection_cfg.get("min_trades_5m", 60)
 
-        # 5m Run
-        metrics_5m = evaluator.evaluate(df_5m, spec, folds=n_folds) if not df_5m.empty else {}
-        sanity_5m = metrics_5m.get("sanity", {"late_day_dependence": True, "min_trades": False, "overtrade": True})
+        # In Fast Mode, we relax rejection criteria significantly to allow end-to-end flow verification
+        target_trades_15m = min_trades_15m // 2 if fast_mode else min_trades_15m
+        target_trades_5m = min_trades_5m // 2 if fast_mode else min_trades_5m
 
-        sanity_5m["min_trades"] = metrics_5m.get("total_trades", 0) >= target_trades_5m
+        for i, spec in enumerate(candidates):
+            if i % 10 == 0: logger.info(f"Processing {i}/{len(candidates)}")
 
-        score_5m = ranker.score_candidate(metrics_5m, sanity_5m) if metrics_5m else 0
+            # 15m Run
+            metrics_15m = evaluator.evaluate(df_15m, spec, folds=n_folds) if not df_15m.empty else {}
+            # Use returned sanity or default
+            sanity_15m = metrics_15m.get("sanity", {"late_day_dependence": True, "min_trades": False, "overtrade": True})
 
-        # Blend
-        final_score = ranker.blend_scores(score_15m, score_5m)
+            # Ensure min trades check uses updated metrics
+            sanity_15m["min_trades"] = metrics_15m.get("total_trades", 0) >= target_trades_15m
 
-        is_eligible = ranker.is_eligible(metrics_15m, metrics_5m, sanity_15m, sanity_5m)
+            score_15m = ranker.score_candidate(metrics_15m, sanity_15m) if metrics_15m else 0
 
-        # Additional gate: Don't promote champions in FAST_MODE
-        if fast_mode:
-            is_eligible = False
+            # 5m Run
+            metrics_5m = evaluator.evaluate(df_5m, spec, folds=n_folds) if not df_5m.empty else {}
+            sanity_5m = metrics_5m.get("sanity", {"late_day_dependence": True, "min_trades": False, "overtrade": True})
 
-        results.append({
-            "spec": spec,
-            "metrics_15m": metrics_15m,
-            "score_15m": score_15m,
-            "metrics_5m": metrics_5m,
-            "score_5m": score_5m,
-            "final_score": final_score,
-            "eligible": is_eligible
-        })
+            sanity_5m["min_trades"] = metrics_5m.get("total_trades", 0) >= target_trades_5m
 
-    # 5. Rank
-    results.sort(key=lambda x: x["final_score"], reverse=True)
+            score_5m = ranker.score_candidate(metrics_5m, sanity_5m) if metrics_5m else 0
 
-    # 6. Daily Sanity Overlay (Top 10)
-    if not df_1d.empty:
-        logger.info("Running 1D Sanity Check on Top 10...")
-        top_n = min(len(results), 10)
-        for i in range(top_n):
-            res = results[i]
-            if not res["eligible"]: continue
+            # Blend
+            final_score = ranker.blend_scores(score_15m, score_5m)
 
-            # Run 1D Backtest (Full, no WFE needed as it's sanity)
-            run_res_1d = engine.run(df_1d, res["spec"])
-            m_1d = run_res_1d["metrics"]
+            is_eligible = ranker.is_eligible(metrics_15m, metrics_5m, sanity_15m, sanity_5m)
 
-            # Penalize if catastrophically negative
-            # Sharpe < -0.2 or MaxDD > 45%
-            sanity_min_sharpe = selection_cfg.get("sanity_daily_min_sharpe", -0.5)
-            sanity_max_dd = selection_cfg.get("sanity_daily_max_dd", 0.45)
+            # Additional gate: Don't promote champions in FAST_MODE
+            if fast_mode:
+                is_eligible = False
 
-            if m_1d["sharpe"] < sanity_min_sharpe or m_1d["max_dd"] > sanity_max_dd:
-                logger.warning(f"Candidate {res['spec']['id']} failed 1D sanity. Sharpe={m_1d['sharpe']:.2f}, MaxDD={m_1d['max_dd']:.2f}")
-                res["final_score"] -= 50 # Penalty
-                res["eligible"] = False # Disqualify
-                res["failed_1d"] = True
-            else:
-                res["failed_1d"] = False
+            results.append({
+                "spec": spec,
+                "metrics_15m": metrics_15m,
+                "score_15m": score_15m,
+                "metrics_5m": metrics_5m,
+                "score_5m": score_5m,
+                "final_score": final_score,
+                "eligible": is_eligible
+            })
 
-        # Re-sort after penalties
+        # Rank
         results.sort(key=lambda x: x["final_score"], reverse=True)
 
-    # Save Metrics CSV
-    csv_data = []
-    for r in results:
-        row = {
-            "id": r["spec"]["id"],
-            "score": r["final_score"],
-            "eligible": r["eligible"],
-            "sharpe_15m": r["metrics_15m"].get("sharpe", 0),
-            "trades_15m": r["metrics_15m"].get("total_trades", 0),
-            "sharpe_5m": r["metrics_5m"].get("sharpe", 0),
-            "trades_5m": r["metrics_5m"].get("total_trades", 0),
-            "strategy_type": r["spec"]["strategy_type"],
-            "failed_1d": r.get("failed_1d", False)
-        }
-        csv_data.append(row)
+        # Daily Sanity Overlay (Top 10)
+        if not df_1d.empty:
+            logger.info("Running 1D Sanity Check on Top 10...")
+            top_n = min(len(results), 10)
+            for i in range(top_n):
+                res = results[i]
+                if not res["eligible"]: continue
 
-    pd.DataFrame(csv_data).to_csv(f"{results_dir}/metrics.csv", index=False)
+                # Run 1D Backtest (Full, no WFE needed as it's sanity)
+                run_res_1d = engine.run(df_1d, res["spec"])
+                m_1d = run_res_1d["metrics"]
 
-    # 7. Champion Selection
-    store = ChampionStore()
-    if results:
-        top_candidate = results[0]
-        logger.info(f"Top Candidate: {top_candidate['spec']['id']} Score: {top_candidate['final_score']}")
+                # Penalize if catastrophically negative
+                # Sharpe < -0.2 or MaxDD > 45%
+                sanity_min_sharpe = selection_cfg.get("sanity_daily_min_sharpe", -0.5)
+                sanity_max_dd = selection_cfg.get("sanity_daily_max_dd", 0.45)
 
-        if top_candidate["eligible"]:
-            # Check Promotion
-            combined_metrics = {
-                "15m": top_candidate["metrics_15m"],
-                "5m": top_candidate["metrics_5m"]
+                if m_1d["sharpe"] < sanity_min_sharpe or m_1d["max_dd"] > sanity_max_dd:
+                    logger.warning(f"Candidate {res['spec']['id']} failed 1D sanity. Sharpe={m_1d['sharpe']:.2f}, MaxDD={m_1d['max_dd']:.2f}")
+                    res["final_score"] -= 50 # Penalty
+                    res["eligible"] = False # Disqualify
+                    res["failed_1d"] = True
+                else:
+                    res["failed_1d"] = False
+
+            # Re-sort after penalties
+            results.sort(key=lambda x: x["final_score"], reverse=True)
+
+        # Save Metrics CSV
+        csv_data = []
+        for r in results:
+            row = {
+                "id": r["spec"]["id"],
+                "score": r["final_score"],
+                "eligible": r["eligible"],
+                "sharpe_15m": r["metrics_15m"].get("sharpe", 0),
+                "trades_15m": r["metrics_15m"].get("total_trades", 0),
+                "sharpe_5m": r["metrics_5m"].get("sharpe", 0),
+                "trades_5m": r["metrics_5m"].get("total_trades", 0),
+                "strategy_type": r["spec"]["strategy_type"],
+                "failed_1d": r.get("failed_1d", False)
             }
-            if store.should_promote(top_candidate["final_score"], combined_metrics):
-                logger.info("Promoting new Champion!")
-                store.save_new_champion(
-                    top_candidate["spec"],
-                    combined_metrics,
-                    top_candidate["final_score"],
-                    run_ts
-                )
-            else:
-                logger.info("Top candidate did not beat current champion.")
-        else:
-            logger.info("Top candidate not eligible for champion status.")
+            csv_data.append(row)
 
-    # 8. Publish Signal
+        pd.DataFrame(csv_data).to_csv(f"{results_dir}/metrics_{instrument}.csv", index=False)
+
+        # Save Candidates JSON (optional for debugging)
+        with open(f"{results_dir}/candidates_{instrument}.json", "w") as f:
+            json.dump([r["spec"] for r in results[:10]], f, indent=2)
+
+        # Champion Selection
+        if results:
+            top_candidate = results[0]
+            logger.info(f"Top Candidate for {instrument}: {top_candidate['spec']['id']} Score: {top_candidate['final_score']}")
+
+            if top_candidate["eligible"]:
+                # Check Promotion
+                combined_metrics = {
+                    "15m": top_candidate["metrics_15m"],
+                    "5m": top_candidate["metrics_5m"]
+                }
+                if store.should_promote(top_candidate["final_score"], combined_metrics, instrument=instrument):
+                    logger.info(f"Promoting new Champion for {instrument}!")
+                    store.save_new_champion(
+                        top_candidate["spec"],
+                        combined_metrics,
+                        top_candidate["final_score"],
+                        run_ts,
+                        instrument=instrument
+                    )
+                else:
+                    logger.info(f"Top candidate did not beat current champion for {instrument}.")
+            else:
+                logger.info(f"Top candidate not eligible for champion status for {instrument}.")
+
+    # 4. Publish Signal
     if not fast_mode:
         publisher = SignalPublisher()
         publisher.publish()

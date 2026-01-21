@@ -3,8 +3,8 @@
 ## Assumptions
 - **Execution**: Signal on Close -> Execute on Next Open.
 - **Slippage**: 5 bps per side (configurable).
-- **Costs**: 5 bps per side (configurable, covers brokerage + taxes).
-- **Data**: 5-minute and 15-minute OHLCV.
+- **Costs**: Configurable via `foundry.yaml` or `CostAdapter` (covers brokerage + taxes + slippage).
+- **Data**: 5-minute and 15-minute OHLCV (Primary), 1D (Sanity).
 - **Session**: 09:15 to 15:30 IST.
 - **Forced Exit**: All positions closed by 15:25 IST.
 
@@ -27,3 +27,4 @@ Strategies are rejected if:
 - **Profit Factor**: < 1.1 (OOS).
 - **Sanity Check**: > 50% of PnL comes from the last 30 minutes of the day ("Late Day Dependence").
 - **Overtrading**: > 10 trades per day on average.
+- **1D Sanity**: Daily Sharpe < -0.5 or MaxDD > 45% leads to penalty/rejection.
