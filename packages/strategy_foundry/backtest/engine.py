@@ -185,7 +185,6 @@ class BacktestEngine:
         times_minutes = times.minute
 
         for i in range(n - 1): # Stop at n-1 to execute next open
-            current_time = times[i]
             equity_values[i] = equity # Mark to market roughly
 
             # 1. Manage Existing Position
@@ -225,6 +224,12 @@ class BacktestEngine:
 
                 # Execute Exit
                 if exit_price is not None:
+                    # Determine exit time
+                    if exit_reason == "TIME_STOP":
+                        exit_time_val = times[i+1]
+                    else:
+                        exit_time_val = times[i]
+
                     # Apply costs
                     # Exit Price adjustment for slippage
                     eff_exit_price = exit_price * (1 - self.slippage_pct)
@@ -238,7 +243,7 @@ class BacktestEngine:
 
                     trades.append({
                         "entry_time": entry_time,
-                        "exit_time": current_time,
+                        "exit_time": exit_time_val,
                         "entry_price": entry_price,
                         "exit_price": eff_exit_price,
                         "pnl": pnl,
