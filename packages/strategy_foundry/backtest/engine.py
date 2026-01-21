@@ -151,9 +151,8 @@ class BacktestEngine:
         trades = []
         equity = 100000.0
 
-        # Performance Optimization: Use numpy array for equity tracking instead of Series
         n = len(df)
-        equity_values = np.full(n, np.nan, dtype=np.float64)
+        # equity_values removed from loop for optimization
 
         position = 0 # 0 or 1
         entry_price = 0.0
@@ -184,9 +183,17 @@ class BacktestEngine:
         times_hours = times.hour
         times_minutes = times.minute
 
+        # Pre-compute boolean masks for time checks (Vectorization)
+        # Session Close: >= close_time
+        is_session_close = (times_hours > close_hour) | ((times_hours == close_hour) & (times_minutes >= close_minute))
+
+        # Entry Time OK: < close_time - 15m
+        # Logic: (h < close_hour) or (h == close_hour and m < close_minute - 15)
+        entry_time_ok = (times_hours < close_hour) | ((times_hours == close_hour) & (times_minutes < close_minute - 15))
+
         for i in range(n - 1): # Stop at n-1 to execute next open
             current_time = times[i]
-            equity_values[i] = equity # Mark to market roughly
+            # equity_values update removed - reconstructed later
 
             # 1. Manage Existing Position
             if position > 0:
@@ -195,11 +202,7 @@ class BacktestEngine:
                 exit_reason = ""
 
                 # Check Intraday Force Close
-                # Use pre-computed hour/minute arrays for speed
-                curr_h = times_hours[i]
-                curr_m = times_minutes[i]
-
-                if curr_h > close_hour or (curr_h == close_hour and curr_m >= close_minute):
+                if is_session_close[i]:
                     exit_price = opens[i] # Exit at Open of this bar if we passed time (or close of prev, simplified to open of current)
                     exit_reason = "SESSION_CLOSE"
 
@@ -243,7 +246,8 @@ class BacktestEngine:
                         "exit_price": eff_exit_price,
                         "pnl": pnl,
                         "return_pct": pnl_pct,
-                        "reason": exit_reason
+                        "reason": exit_reason,
+                        "exit_index": i  # For vector reconstruction
                     })
 
                     equity += pnl
@@ -253,12 +257,7 @@ class BacktestEngine:
 
             # 2. Check Entry
             # Only enter if flat and market is not about to close
-            # Use pre-computed time arrays
-            curr_h = times_hours[i]
-            curr_m = times_minutes[i]
-            time_ok = (curr_h < close_hour) or (curr_h == close_hour and curr_m < close_minute - 15)
-
-            if position == 0 and entries[i] and time_ok:
+            if position == 0 and entries[i] and entry_time_ok[i]:
                 # Enter next Open
                 entry_price_raw = opens[i+1]
                 entry_price = entry_price_raw * (1 + self.slippage_pct)
@@ -271,8 +270,23 @@ class BacktestEngine:
                 sl_price = entry_price_raw - (atr_val * sl_mult)
                 tp_price = entry_price_raw + (atr_val * tp_mult)
 
-        # Fill last equity
-        equity_values[-1] = equity
+        # Reconstruct Equity Curve Vectorially
+        # pnl_per_bar[i] represents PnL realized at step i
+        pnl_per_bar = np.zeros(n, dtype=np.float64)
+        if trades:
+            # Vectorized assignment of PnL
+            trade_indices = [t["exit_index"] for t in trades]
+            trade_pnls = [t["pnl"] for t in trades]
+            np.add.at(pnl_per_bar, trade_indices, trade_pnls)
+
+        # equity_values[i] should be equity BEFORE trade at i (start of bar)
+        # So it is Initial + Cumulative PnL up to i-1
+        cum_pnl = np.cumsum(pnl_per_bar)
+
+        # Shift: Equity at i = Initial + CumPnL up to i-1
+        equity_values = np.empty(n, dtype=np.float64)
+        equity_values[0] = 100000.0
+        equity_values[1:] = 100000.0 + cum_pnl[:-1]
 
         # Convert back to Series
         equity_series = pd.Series(equity_values, index=df.index)
