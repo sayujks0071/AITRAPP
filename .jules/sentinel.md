@@ -12,3 +12,8 @@
 **Vulnerability:** Found `HistoricalDataLoader.load_file` accepting arbitrary strings for `symbol`, potentially allowing directory traversal via `../` if prefixes were changed or exploited.
 **Learning:** Implicit trust in API inputs passed to file operations is a common pattern even when prefixes exist. Defensive programming requires explicit validation.
 **Prevention:** Added regex validation `^[a-zA-Z0-9_-]+$` to `HistoricalDataLoader` inputs. Always validate inputs at the boundary before they reach sensitive operations like file I/O.
+
+## 2026-05-27 - Hardcoded Realistic Secrets in Documentation
+**Vulnerability:** Found realistic-looking high-entropy API keys and secrets hardcoded in multiple markdown documentation files (`MCP_SERVER_SETUP.md`, `MCP_AUTHENTICATION_GUIDE.md`, etc.).
+**Learning:** Copy-pasting "working" examples into documentation without scrubbing sensitive data is a common source of leaks. Developers often forget that documentation is code and is public.
+**Prevention:** Always use obvious placeholders (e.g., `<YOUR_API_KEY>`) in documentation.

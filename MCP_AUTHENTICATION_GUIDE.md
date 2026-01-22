@@ -13,7 +13,7 @@ The `/callback` endpoint is only meant to be accessed by Kite's OAuth redirect a
 **IMPORTANT**: Before authenticating, register the callback URL in your Kite Connect app:
 
 1. Go to: https://developers.kite.trade/apps/
-2. Find your app (API key: `nhe2vo0afks02ojs`)
+2. Find your app (API key: `<YOUR_KITE_API_KEY>`)
 3. Add redirect URL: `http://localhost:8080/callback`
 4. **Save** the settings
 
@@ -41,8 +41,8 @@ The authentication happens through an MCP client (like Claude Desktop), not by v
       "command": "npx",
       "args": ["mcp-remote", "http://localhost:8080/mcp", "--allow-http"],
       "env": {
-        "KITE_API_KEY": "nhe2vo0afks02ojs",
-        "KITE_API_SECRET": "cs82nkkdvin37nrydnyou6cwn2b8zojl"
+        "KITE_API_KEY": "<YOUR_KITE_API_KEY>",
+        "KITE_API_SECRET": "<YOUR_KITE_API_SECRET>"
       }
     }
   }
