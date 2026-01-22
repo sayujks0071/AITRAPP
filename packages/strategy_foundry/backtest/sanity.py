@@ -1,20 +1,44 @@
-"""Sanity Checks"""
-from typing import Dict, Any
+# Strategy Foundry
+from typing import Dict
 
-def check_sanity(metrics: Dict[str, Any], fast_mode: bool = False) -> tuple[bool, str]:
+import pandas as pd
+
+
+def check_sanity(trades_df: pd.DataFrame, timeframe_str: str) -> Dict[str, bool]:
     """
-    Returns (Pass/Fail, Reason)
+    Returns a dict of sanity checks. True means PASS, False means FAIL/WARNING.
     """
-    min_trades = 10 if fast_mode else 30
-    max_dd = 0.35 # 35%
+    if trades_df.empty:
+        return {"min_trades": False, "late_day_dependence": True, "overtrade": True}
 
-    if not metrics:
-        return False, "No metrics"
+    # 1. Min Trades
+    min_trades = 80 if "5m" in timeframe_str else 40
+    has_min_trades = len(trades_df) >= min_trades
 
-    if metrics.get('trades', 0) < min_trades:
-        return False, f"Too few trades ({metrics.get('trades', 0)} < {min_trades})"
+    # 2. Late Day Dependence
+    # Check exits in last 30 mins
+    # Assuming 'exit_time' is in trades_df
+    trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"])
 
-    if abs(metrics.get('max_drawdown', 0)) > max_dd:
-         return False, f"Max DD too high ({metrics.get('max_drawdown', 0):.2%} > {max_dd:.0%})"
+    # 15:00 onwards
+    late_trades = trades_df[trades_df["exit_time"].dt.time >= pd.to_datetime("15:00").time()]
+    late_pnl = late_trades["pnl"].sum()
+    total_pnl = trades_df["pnl"].sum()
 
-    return True, "OK"
+    if total_pnl > 0 and late_pnl > 0:
+        ratio = late_pnl / total_pnl
+        not_late_dependent = ratio < 0.5
+    else:
+        not_late_dependent = True
+
+    # 3. Overtrade
+    # Group by date
+    trades_per_day = trades_df.groupby(trades_df["exit_time"].dt.date).size()
+    avg_trades = trades_per_day.mean()
+    not_overtrading = avg_trades < 10 # 10 trades per day is a lot for directional
+
+    return {
+        "min_trades": has_min_trades,
+        "late_day_dependence": not_late_dependent,
+        "overtrade": not_overtrading
+    }

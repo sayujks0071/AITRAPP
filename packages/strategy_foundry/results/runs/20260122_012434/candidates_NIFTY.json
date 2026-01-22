@@ -1,0 +1,313 @@
+[
+  {
+    "id": "b4bb49342e87",
+    "entry_blocks": [
+      {
+        "type": "bollinger_reversion",
+        "params": {
+          "period": 20,
+          "std": 2.5
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 24
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "5a0105c6355d",
+    "entry_blocks": [
+      {
+        "type": "rsi_reversion",
+        "params": {
+          "period": 21,
+          "lower": 25,
+          "upper": 70
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": []
+  },
+  {
+    "id": "241f934f4c25",
+    "entry_blocks": [
+      {
+        "type": "rsi_reversion",
+        "params": {
+          "period": 7,
+          "lower": 25,
+          "upper": 80
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": [
+      {
+        "type": "volatility_filter_atr",
+        "params": {
+          "period": 14,
+          "min_val": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "id": "2c699ed37d07",
+    "entry_blocks": [
+      {
+        "type": "orb_breakout",
+        "params": {
+          "time_window_mins": 30
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": [
+      {
+        "type": "trend_filter_ema",
+        "params": {
+          "period": 200
+        }
+      }
+    ]
+  },
+  {
+    "id": "1b5b4411ed9a",
+    "entry_blocks": [
+      {
+        "type": "rsi_reversion",
+        "params": {
+          "period": 7,
+          "lower": 15,
+          "upper": 80
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": []
+  },
+  {
+    "id": "703c217804a2",
+    "entry_blocks": [
+      {
+        "type": "orb_breakout",
+        "params": {
+          "time_window_mins": 30
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": []
+  },
+  {
+    "id": "ce44db7b4123",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 12,
+          "slow": 27
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": []
+  },
+  {
+    "id": "248a48a1ff55",
+    "entry_blocks": [
+      {
+        "type": "bollinger_reversion",
+        "params": {
+          "period": 20,
+          "std": 2.5
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 48
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "trend_filter_ema",
+        "params": {
+          "period": 200
+        }
+      }
+    ]
+  },
+  {
+    "id": "3557b0573ee1",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 14,
+          "slow": 40
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 6
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "trend_filter_ema",
+        "params": {
+          "period": 200
+        }
+      }
+    ]
+  },
+  {
+    "id": "f1ed509b88da",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 6,
+          "slow": 36
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 6
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "volatility_filter_atr",
+        "params": {
+          "period": 14,
+          "min_val": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "id": "366c14566d33",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 14,
+          "slow": 62
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": []
+  },
+  {
+    "id": "05273d1b95e1",
+    "entry_blocks": [
+      {
+        "type": "orb_breakout",
+        "params": {
+          "time_window_mins": 30
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": [
+      {
+        "type": "volatility_filter_atr",
+        "params": {
+          "period": 14,
+          "min_val": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "id": "a87130dc6dcc",
+    "entry_blocks": [
+      {
+        "type": "bollinger_reversion",
+        "params": {
+          "period": 20,
+          "std": 2.5
+        }
+      }
+    ],
+    "exit_blocks": [],
+    "filters": [
+      {
+        "type": "volatility_filter_atr",
+        "params": {
+          "period": 14,
+          "min_val": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "id": "efaafa756226",
+    "entry_blocks": [
+      {
+        "type": "donchian_breakout",
+        "params": {
+          "period": 60
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 48
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "000eeff2e524",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 5,
+          "slow": 42
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 6
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "trend_filter_ema",
+        "params": {
+          "period": 200
+        }
+      }
+    ]
+  }
+]

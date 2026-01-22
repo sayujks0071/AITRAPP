@@ -1,75 +1,73 @@
-import numpy as np
 import pandas as pd
+import numpy as np
+from typing import Dict
 
-def calculate_metrics(equity_curve: pd.Series, trades: pd.DataFrame) -> dict:
+def calculate_metrics(equity_curve: pd.Series, trades: list) -> Dict[str, float]:
     """
-    Calculate performance metrics from equity curve and trades.
-    equity_curve: Series of account equity (daily)
-    trades: DataFrame of closed trades
+    Calculate performance metrics.
     """
-    if equity_curve.empty:
-        return {}
-
-    initial_capital = equity_curve.iloc[0]
-    final_capital = equity_curve.iloc[-1]
+    if equity_curve.empty or len(trades) == 0:
+        return {
+            "sharpe": -99.0,
+            "calmar": -99.0,
+            "cagr": 0.0,
+            "max_dd": 100.0,
+            "trades": 0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0
+        }
 
     # Returns
     returns = equity_curve.pct_change().dropna()
-    total_return = (final_capital - initial_capital) / initial_capital
 
+    # CAGR
     days = (equity_curve.index[-1] - equity_curve.index[0]).days
-    years = days / 365.25
-    if years > 0:
-        cagr = (final_capital / initial_capital) ** (1 / years) - 1
+    if days < 1:
+        days = 1
+    total_ret = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
+    cagr = ((1 + total_ret) ** (365 / days)) - 1
+
+    # Volatility (Annualized)
+    # Assuming intraday 5m bars? No, equity curve might be sparsely sampled if we only mark on close?
+    # Better to resample equity curve to daily for Sharpe/CAGR standard comparisons
+    # or keep high freq.
+    # Let's use high freq annualized.
+    # 5m bars: ~75 per day. 252 days.
+    # But equity curve index is timestamps.
+    # Let's resample to Daily for robust Sharpe.
+    daily_equity = equity_curve.resample("D").last().dropna()
+    daily_returns = daily_equity.pct_change().dropna()
+
+    if len(daily_returns) < 2:
+        sharpe = 0.0
     else:
-        cagr = 0.0
+        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
 
-    # Risk
-    volatility = returns.std() * np.sqrt(252)
+    # Max Drawdown
+    rolling_max = equity_curve.cummax()
+    drawdown = (equity_curve - rolling_max) / rolling_max
+    max_dd = abs(drawdown.min())
 
-    sharpe = 0.0
-    if volatility > 0:
-        sharpe = (returns.mean() * 252) / (returns.std() * np.sqrt(252))
-
-    # Drawdown
-    running_max = equity_curve.cummax()
-    drawdown = (equity_curve - running_max) / running_max
-    max_drawdown = drawdown.min()
-
-    calmar = 0.0
-    if max_drawdown < 0:
-        calmar = cagr / abs(max_drawdown)
+    # Calmar
+    calmar = cagr / max_dd if max_dd > 0 else 0.0
 
     # Trade Stats
-    num_trades = len(trades)
-    win_rate = 0.0
-    profit_factor = 0.0
-    avg_trade = 0.0
+    wins = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] <= 0]
 
-    if num_trades > 0:
-        wins = trades[trades['pnl'] > 0]
-        losses = trades[trades['pnl'] <= 0]
-        win_rate = len(wins) / num_trades
+    win_rate = len(wins) / len(trades) if len(trades) > 0 else 0.0
 
-        gross_profit = wins['pnl'].sum()
-        gross_loss = abs(losses['pnl'].sum())
+    gross_win = sum(t["pnl"] for t in wins)
+    gross_loss = abs(sum(t["pnl"] for t in losses))
 
-        if gross_loss > 0:
-            profit_factor = gross_profit / gross_loss
-        else:
-            profit_factor = float('inf') if gross_profit > 0 else 0.0
-
-        avg_trade = trades['pnl_pct'].mean()
+    profit_factor = gross_win / gross_loss if gross_loss > 0 else 99.0
 
     return {
-        "cagr": cagr,
-        "total_return": total_return,
-        "volatility": volatility,
         "sharpe": sharpe,
-        "max_drawdown": max_drawdown, # Negative number
         "calmar": calmar,
-        "trades": num_trades,
+        "cagr": cagr,
+        "max_dd": max_dd * 100, # percent
+        "trades": len(trades),
         "win_rate": win_rate,
-        "profit_factor": profit_factor,
-        "avg_trade": avg_trade
+        "profit_factor": profit_factor
     }

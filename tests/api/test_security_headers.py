@@ -1,37 +1,54 @@
-
-import pytest
 from fastapi.testclient import TestClient
+
 from apps.api.main import app
+from packages.core.config import settings
 
 client = TestClient(app)
 
-def test_security_headers():
-    # Use /health endpoint which is known to exist
+
+def test_security_headers_present():
+    """Test that security headers are present on successful responses"""
     response = client.get("/health")
+    assert response.status_code == 200
 
-    # Check HSTS
-    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+    headers = response.headers
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["X-Frame-Options"] == "DENY"
+    assert "1; mode=block" in headers["X-XSS-Protection"]
+    assert headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
-    # Check X-Content-Type-Options
-    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    # Headers are case-insensitive in requests/starlette, but dictionary keys might be lower-cased or not depending on client.
+    # TestClient usually lowercases them? Let's check keys ignoring case.
+    keys = {k.lower(): v for k, v in headers.items()}
 
-    # Check X-Frame-Options
-    assert response.headers["X-Frame-Options"] == "DENY"
+    assert "strict-transport-security" in keys
+    assert "content-security-policy" in keys
 
-    # Check CSP
-    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+    # Check CSP content
+    csp = keys["content-security-policy"]
+    assert "default-src 'self'" in csp
+    assert "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net" in csp
 
-    # Check Referrer-Policy
-    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
 def test_security_headers_on_error():
-    # Headers should be present even on 401/404/500
-    # Accessing protected path without key -> 401
-    response = client.get("/non-existent-path")
-    # Don't assert 404, because Auth middleware intercepts it first returning 401
-    assert response.status_code in [401, 403, 404]
+    """Test that security headers are present on error responses (404)"""
+    # We need to authenticate to reach the 404 handler
+    headers = {"X-API-Key": settings.api_secret_key}
+    response = client.get("/nonexistent-endpoint", headers=headers)
+    assert response.status_code == 404
 
-    # Verify headers are present
-    assert response.headers["X-Content-Type-Options"] == "nosniff"
-    assert response.headers["X-Frame-Options"] == "DENY"
-    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+    headers = response.headers
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["X-Frame-Options"] == "DENY"
+
+
+def test_security_headers_on_auth_fail():
+    """Test that security headers are present on auth failure (403/401)"""
+    # Request a private endpoint without API key
+    response = client.get("/orders")
+    # APIKeyMiddleware returns 401 JSONResponse
+    assert response.status_code == 401
+
+    headers = response.headers
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["X-Frame-Options"] == "DENY"

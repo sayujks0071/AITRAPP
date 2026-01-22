@@ -1,6 +1,5 @@
+# Strategy Foundry
 """Simple Cost Model"""
-import pandas as pd
-import numpy as np
 
 class CostModel:
     def __init__(self, slippage_bps: float = 5.0, brokerage: float = 20.0, tax_bps: float = 3.0):
@@ -13,8 +12,6 @@ class CostModel:
         Returns net price after costs.
         Side: 1 for Buy, -1 for Sell
         """
-        val = price * quantity
-
         # Slippage: Buy higher, Sell lower
         exec_price = price * (1 + (side * self.slippage_pct))
         exec_val = exec_price * quantity

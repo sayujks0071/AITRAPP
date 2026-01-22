@@ -26,8 +26,6 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.getcwd())
 
 from src.auth.kite_auth import KiteAuth
-# Import AppMode for type checking or future use
-from packages.core.config import AppMode
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -122,6 +120,7 @@ def main():
     load_dotenv(override=True)
 
     parser = argparse.ArgumentParser(description="Kite Auth Bootstrap")
+    parser.add_argument("request_token", nargs="?", help="Optional request_token from callback URL")
     parser.add_argument("--check-only", action="store_true", help="Only check session validity, do not prompt login")
     parser.add_argument("--port", type=int, default=8000, help="Port for local callback server")
     args = parser.parse_args()
@@ -162,6 +161,18 @@ def main():
     if args.check_only:
         logger.error("Session invalid and --check-only specified. Exiting.")
         sys.exit(1)
+
+    # Check if request token was provided as argument
+    if args.request_token:
+        logger.info("Using request_token provided in argument.")
+        try:
+            access_token = auth.exchange_request_token(args.request_token)
+            auth.persist_access_token(access_token)
+            logger.info("✅ Token exchanged and persisted successfully.")
+            sys.exit(0)
+        except Exception as e:
+            logger.error(f"Failed to exchange token: {e}")
+            sys.exit(1)
 
     # Manual Login Flow
     try:

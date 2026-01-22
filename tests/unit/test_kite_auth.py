@@ -1,68 +1,89 @@
-import os
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+import os
+import sys
+
+# Ensure src is in python path
+sys.path.insert(0, os.getcwd())
+
 from src.auth.kite_auth import KiteAuth
-from kiteconnect import KiteConnect, exceptions
+from kiteconnect import exceptions
 
-class TestKiteAuthUnit(unittest.TestCase):
+class TestKiteAuth(unittest.TestCase):
 
-    @patch.dict(os.environ, {"KITE_API_KEY": "test_key", "KITE_API_SECRET": "test_secret"})
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {
+            "KITE_API_KEY": "test_api_key",
+            "KITE_API_SECRET": "test_api_secret",
+            "KITE_ACCESS_TOKEN": "test_access_token"
+        })
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
     @patch("src.auth.kite_auth.KiteConnect")
-    def test_exchange_request_token(self, MockKiteConnect):
-        # Setup mock
-        mock_kite = MockKiteConnect.return_value
-        mock_kite.generate_session.return_value = {
-            "access_token": "new_access_token",
-            "user_id": "user123"
-        }
-
-        # Init auth
-        auth = KiteAuth()
-
-        # Call method
-        with patch("src.auth.kite_auth.dotenv.set_key") as mock_set_key:
-             token = auth.exchange_request_token("test_req_token")
-
-             # Verify
-             assert token == "new_access_token"
-             assert auth.access_token == "new_access_token"
-
-             # Verify KiteConnect called correctly
-             mock_kite.generate_session.assert_called_with("test_req_token", api_secret="test_secret")
-             mock_kite.set_access_token.assert_called_with("new_access_token")
-
-    @patch.dict(os.environ, {"KITE_API_KEY": "test_key", "KITE_API_SECRET": "test_secret"})
-    @patch("src.auth.kite_auth.KiteConnect")
-    def test_is_session_valid_true(self, MockKiteConnect):
-        mock_kite = MockKiteConnect.return_value
-        # profile returns normally
-        mock_kite.profile.return_value = {}
+    def test_is_session_valid_success(self, mock_kite_cls):
+        mock_kite = mock_kite_cls.return_value
+        mock_kite.profile.return_value = {"status": "success"}
 
         auth = KiteAuth()
-        auth.access_token = "valid_token"
+        self.assertTrue(auth.is_session_valid())
+        mock_kite.profile.assert_called_once()
 
-        assert auth.is_session_valid() is True
-
-    @patch.dict(os.environ, {"KITE_API_KEY": "test_key", "KITE_API_SECRET": "test_secret"})
     @patch("src.auth.kite_auth.KiteConnect")
-    def test_is_session_valid_false(self, MockKiteConnect):
-        mock_kite = MockKiteConnect.return_value
-        # profile raises TokenException
-        mock_kite.profile.side_effect = exceptions.TokenException("Token expired")
+    def test_is_session_valid_failure_token_exception(self, mock_kite_cls):
+        mock_kite = mock_kite_cls.return_value
+        mock_kite.profile.side_effect = exceptions.TokenException("Invalid token")
 
         auth = KiteAuth()
-        auth.access_token = "invalid_token"
+        self.assertFalse(auth.is_session_valid())
 
-        assert auth.is_session_valid() is False
-
-    @patch.dict(os.environ, {"KITE_API_KEY": "test_key", "KITE_API_SECRET": "test_secret"})
     @patch("src.auth.kite_auth.KiteConnect")
-    def test_get_login_url(self, MockKiteConnect):
-        mock_kite = MockKiteConnect.return_value
-        mock_kite.login_url.return_value = "http://login-url"
+    def test_is_session_valid_no_token(self, mock_kite_cls):
+        with patch.dict(os.environ, {}, clear=True):
+            # If env is empty, init might warn but continue.
+            # We explicitly set access_token to None for this test case if needed,
+            # but KiteAuth loads from env in __init__.
+
+            # Let's override the loaded token
+            auth = KiteAuth()
+            auth.access_token = None
+
+            self.assertFalse(auth.is_session_valid())
+
+    @patch("src.auth.kite_auth.KiteConnect")
+    def test_get_login_url(self, mock_kite_cls):
+        mock_kite = mock_kite_cls.return_value
+        mock_kite.login_url.return_value = "https://kite.trade/connect/login?api_key=test_api_key"
 
         auth = KiteAuth()
-        assert auth.get_login_url() == "http://login-url"
+        url = auth.get_login_url()
+        self.assertEqual(url, "https://kite.trade/connect/login?api_key=test_api_key")
+
+    @patch("src.auth.kite_auth.KiteConnect")
+    @patch("src.auth.kite_auth.dotenv")
+    def test_exchange_request_token_success(self, mock_dotenv, mock_kite_cls):
+        mock_kite = mock_kite_cls.return_value
+        mock_kite.generate_session.return_value = {"access_token": "new_access_token"}
+
+        auth = KiteAuth()
+        token = auth.exchange_request_token("request_token_123")
+
+        self.assertEqual(token, "new_access_token")
+        self.assertEqual(auth.access_token, "new_access_token")
+        mock_kite.set_access_token.assert_called_with("new_access_token")
+
+    @patch("src.auth.kite_auth.KiteConnect")
+    @patch("src.auth.kite_auth.dotenv")
+    def test_persist_access_token(self, mock_dotenv, mock_kite_cls):
+        mock_dotenv.find_dotenv.return_value = ".env.test"
+
+        auth = KiteAuth()
+        auth.persist_access_token("persisted_token")
+
+        mock_dotenv.set_key.assert_called_with(".env.test", "KITE_ACCESS_TOKEN", "persisted_token")
+        self.assertEqual(os.environ["KITE_ACCESS_TOKEN"], "persisted_token")
 
 if __name__ == '__main__':
     unittest.main()

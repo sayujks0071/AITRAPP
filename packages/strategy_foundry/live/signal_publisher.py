@@ -1,116 +1,150 @@
+# Strategy Foundry
 import json
-import os
+import yaml
 import pandas as pd
 from datetime import datetime
-import pytz
-from packages.strategy_foundry.adapters.core_market_hours import MarketAdapter
-from packages.strategy_foundry.data.loader import get_data
-from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.selection.champion_store import ChampionStore
+from pathlib import Path
 import structlog
+from typing import Dict, Any
+
+from packages.strategy_foundry.data.loader import DataLoader
+from packages.strategy_foundry.selection.champion_store import ChampionStore
+from packages.strategy_foundry.selection.promote import Promoter
+from packages.strategy_foundry.factory.grammar import Strategy
+from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
 
 logger = structlog.get_logger(__name__)
 
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), "../results")
-os.makedirs(RESULTS_DIR, exist_ok=True)
-LIVE_SIGNAL_FILE = os.path.join(RESULTS_DIR, "live_signal.json")
-
-def publish_signal():
+class SignalPublisher:
     """
-    Generate and publish live signal JSON.
+    Publishes live signals based on champions.
     """
-    market = MarketAdapter()
-    now = datetime.now(pytz.timezone("Asia/Kolkata"))
 
-    # 1. Check Market Hours
-    if not market.is_market_open(now):
-        _write_skipped("Market Closed")
-        return
+    def __init__(self):
+        self.data_loader = DataLoader()
+        self.champion_store = ChampionStore()
+        self.market_guard = MarketHoursAdapter()
+        self.output_path = Path("packages/strategy_foundry/results/live_signal.json")
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 2. Load Champion
-    store = ChampionStore(os.path.join(RESULTS_DIR, "champions"))
-    champion = store.load_current()
-    if not champion:
-        _write_skipped("No Champion")
-        return
+        # Load instrument map
+        with open("packages/strategy_foundry/configs/instrument_map.yaml", "r") as f:
+            self.instrument_map = yaml.safe_load(f)
 
-    # 3. Check Eligibility (Sanity)
-    meta = store.load_current_metadata()
-    metrics = meta.get('metrics', {})
-    if metrics.get('sharpe', 0) < 1.0 or abs(metrics.get('max_drawdown', 1)) > 0.25:
-        _write_skipped("Champion not eligible for live")
-        return
+    def run(self):
+        """
+        Main execution method.
+        """
+        # 1. Check Market Hours
+        # We publish skipped status if closed, but we might want to publish "Flat" signal if closing?
+        # Requirement: "If market open AND champion live-eligible: write JSON"
+        # "Else write SKIPPED JSON"
 
-    # 4. Get Data
-    # For live signal, we usually focus on NIFTY
-    symbol = "NIFTY"
-    df = get_data(symbol, lookback_days=300, force_refresh=True)
+        if not self.market_guard.is_market_open():
+             self._write_skipped("Market Closed")
+             return
 
-    if df.empty:
-        _write_skipped("No Data")
-        return
+        # 2. Iterate Instruments
+        # We need to pick the best champion across instruments or publish per instrument?
+        # "Signal JSON schema" implies a SINGLE signal or maybe one file with one signal.
+        # "champion_id": "..." suggests one active strategy.
+        # Let's assume we pick the highest scoring eligible champion across NIFTY/SENSEX.
 
-    # 5. Run Logic
-    engine = BacktestEngine()
-    # We only need signals
-    _, _, signal_df = engine.run(df, champion)
+        best_signal = None
+        best_score = -999.0
 
-    # 6. Determine Signal for TODAY
-    # logic: signal at T determines position at T+1 Open.
-    # We want position for NOW (Today).
-    # So we need signal from Yesterday.
+        for name, research_symbol in self.instrument_map.get("research", {}).items():
+            champ_data = self.champion_store.load_champion(name)
+            if not champ_data:
+                continue
 
-    last_dt = df.index[-1]
-    last_is_today = last_dt.date() == now.date()
+            metrics = champ_data.get("metrics", {})
+            eligible, reason = Promoter.is_live_eligible(metrics)
 
-    if last_is_today:
-        # df has today's partial bar.
-        # Signal for Today's Open came from Yesterday's Close.
-        # Yesterday is index -2.
-        if len(signal_df) < 2:
-            _write_skipped("Not enough data")
-            return
-        sig_val = signal_df.iloc[-2]
-    else:
-        # df ends yesterday.
-        # Signal for Today's Open came from Yesterday's Close.
-        # Yesterday is index -1.
-        sig_val = signal_df.iloc[-1]
+            if not eligible:
+                logger.info(f"Champion for {name} not eligible: {reason}")
+                continue
 
-    # sig_val is the generated signal (-1, 0, 1)
-    # But wait, BacktestEngine returns a Series, but `run` returns `trades, equity, raw_signal`.
-    # `raw_signal` is a Series.
+            # Get latest data
+            # Use 5m or 15m depending on what the champion uses?
+            # Champion metrics usually have "metrics_15m" and "metrics_5m".
+            # But the strategy itself is timeframe agnostic in grammar, but trained on both.
+            # We should probably use the blended score to decide, but execution needs a specific timeframe.
+            # Let's default to 15m for robustness unless 5m score is significantly better?
+            # Or just use 15m.
+            timeframe = "15m"
 
-    # NOTE: BacktestEngine logic returns -1, 0, 1.
-    # But for "Live", we might be holding a position.
-    # The simple "Signal" artifact requested is just direction.
+            df = self.data_loader.get_data(research_symbol, timeframe, force_refresh=True)
+            if df is None or df.empty:
+                continue
 
-    signal_value = int(sig_val) if not pd.isna(sig_val) else 0
+            # Check data freshness
+            last_ts = df.index[-1]
+            now = pd.Timestamp.now(tz="Asia/Kolkata")
+            if (now - last_ts).total_seconds() > 30 * 60: # 30 mins stale
+                logger.warning(f"Data for {name} is stale. Last: {last_ts}")
+                continue
 
-    output = {
-        "timestamp_ist": now.isoformat(),
-        "champion_id": champion.id,
-        "instrument": symbol,
-        "signal": signal_value,
-        "rule_summary": champion.summary,
-        "risk": champion.source_code.get("risk", {}),
-        "status": "OK",
-        "reason": "Market Open, Champion Active"
-    }
+            # Generate Signal
+            strategy = Strategy.from_dict(champ_data["strategy"])
+            entries, exits = strategy.calculate_signals(df)
 
-    with open(LIVE_SIGNAL_FILE, "w") as f:
-        json.dump(output, f, indent=2)
-    logger.info("Published live signal", signal=signal_value)
+            # Look at LAST CLOSED bar signal
+            # i.e. entries.iloc[-1]
+            last_entry = entries.iloc[-1]
+            last_exit = exits.iloc[-1]
 
-def _write_skipped(reason):
-    output = {
-        "timestamp_ist": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
-        "status": "SKIPPED",
-        "reason": reason
-    }
-    with open(LIVE_SIGNAL_FILE, "w") as f:
-        json.dump(output, f, indent=2)
-    logger.info("Skipped live signal", reason=reason)
+            # Determine signal
+            # If entry != 0 -> Signal
+            # If exit == True -> Signal 0 (Flat)
+            # This is simplistic. Real state requires knowing current position.
+            # But "Signal First": we publish what the strategy says for *this bar*.
 
-if __name__ == "__main__":
-    publish_signal()
+            signal_val = 0
+            if last_exit:
+                signal_val = 0
+            elif last_entry != 0:
+                signal_val = int(last_entry)
+            else:
+                # Hold / No Change
+                # We should probably indicate "No Action" or maintain previous?
+                # For this artifact, let's output the Direction (1, -1, 0).
+                # If 0, it means "Don't Enter".
+                signal_val = 0
+
+            # Use blended score for selection
+            score = metrics.get("score", 0)
+
+            if score > best_score:
+                best_score = score
+                best_signal = {
+                    "timestamp_ist": now.isoformat(),
+                    "champion_id": champ_data["strategy"]["id"],
+                    "timeframe": timeframe,
+                    "instrument": name,
+                    "proxy_symbol_paper": self.instrument_map["paper_proxy"].get(name),
+                    "proxy_symbol_live": self.instrument_map["live_proxy"].get(name),
+                    "signal": signal_val,
+                    "rule_summary": json.dumps(champ_data["strategy"]["entry_blocks"]), # Simplified summary
+                    "risk": strategy.get_risk_params(),
+                    "status": "OK",
+                    "reason": "Live Eligible"
+                }
+
+        if best_signal:
+            self._write_json(best_signal)
+        else:
+            self._write_skipped("No eligible champion or data issues")
+
+    def _write_skipped(self, reason: str):
+        data = {
+            "timestamp_ist": datetime.now().isoformat(),
+            "status": "SKIPPED",
+            "reason": reason
+        }
+        self._write_json(data)
+
+    def _write_json(self, data: Dict):
+        with open(self.output_path, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"Published signal: {data['status']}")

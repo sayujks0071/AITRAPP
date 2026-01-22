@@ -1,64 +1,52 @@
-from packages.core.indicators import IndicatorCalculator
-import numpy as np
+from typing import Dict, Any
 import pandas as pd
+import numpy as np
+from packages.core.indicators import IndicatorCalculator
 
-class VectorIndicatorCalculator(IndicatorCalculator):
+class IndicatorsAdapter:
     """
-    Adapter for IndicatorCalculator to expose vector/series calculations clearly
-    for the Strategy Foundry.
+    Adapter to reuse packages.core.indicators logic with dynamic parameters.
     """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
 
-    def compute_all_vectors(self, df: pd.DataFrame) -> pd.DataFrame:
+    @staticmethod
+    def get_calculator(params: Dict[str, Any]) -> IndicatorCalculator:
         """
-        Compute all indicators and return as a DataFrame aligned with input df.
+        Factory to get a calculator instance with specific parameters.
         """
-        if df.empty:
-            return pd.DataFrame(index=df.index)
+        return IndicatorCalculator(
+            atr_period=params.get("atr_period", 14),
+            rsi_period=params.get("rsi_period", 14),
+            adx_period=params.get("adx_period", 14),
+            ema_fast=params.get("ema_fast", 34),
+            ema_slow=params.get("ema_slow", 89),
+            supertrend_period=params.get("supertrend_period", 10),
+            supertrend_multiplier=params.get("supertrend_multiplier", 3.0),
+            bb_period=params.get("bb_period", 20),
+            bb_std=params.get("bb_std", 2.0)
+        )
 
-        # Pre-calculate TR
-        tr = self.calculate_tr(df)
-
-        # Calculate indicators
-        indicators = pd.DataFrame(index=df.index)
-
-        indicators['atr'] = self.atr_series(df, tr=tr)
-        indicators['rsi'] = self.rsi_series(df)
-        indicators['adx'] = self.adx_series(df, tr=tr)
-        indicators['ema_fast'] = self.ema_series(df['close'], self.ema_fast)
-        indicators['ema_slow'] = self.ema_series(df['close'], self.ema_slow)
-
-        st_val, st_dir = self.supertrend_series(df, tr=tr)
-        indicators['supertrend'] = st_val
-        indicators['supertrend_direction'] = st_dir
-
-        bb_upper, bb_middle, bb_lower = self.bollinger_bands_series(df['close'])
-        indicators['bb_upper'] = bb_upper
-        indicators['bb_lower'] = bb_lower
-
-        dc_upper, dc_lower = self.donchian_series(df)
-        indicators['dc_upper'] = dc_upper
-        indicators['dc_lower'] = dc_lower
-
-        return indicators
-
-    def supertrend(self, df: pd.DataFrame, period=None, multiplier=None) -> tuple[np.ndarray, np.ndarray]:
+    @staticmethod
+    def calculate_indicator(df: pd.DataFrame, indicator_name: str, params: Dict[str, Any]) -> Any:
         """
-        Override/expose supertrend with optional custom params.
+        Calculate a specific indicator series.
         """
-        # Save original params
-        orig_period = self.supertrend_period
-        orig_mult = self.supertrend_multiplier
+        calc = IndicatorsAdapter.get_calculator(params)
 
-        if period is not None:
-            self.supertrend_period = period
-        if multiplier is not None:
-            self.supertrend_multiplier = multiplier
-
-        try:
-            return self.supertrend_series(df)
-        finally:
-            # Restore
-            self.supertrend_period = orig_period
-            self.supertrend_multiplier = orig_mult
+        if indicator_name == "rsi":
+            return calc.rsi_series(df)
+        elif indicator_name == "atr":
+            return calc.atr_series(df)
+        elif indicator_name == "adx":
+            return calc.adx_series(df)
+        elif indicator_name == "ema_fast":
+            return calc.ema_series(df["close"], calc.ema_fast)
+        elif indicator_name == "ema_slow":
+            return calc.ema_series(df["close"], calc.ema_slow)
+        elif indicator_name == "supertrend":
+            return calc.supertrend_series(df)
+        elif indicator_name == "bollinger":
+            return calc.bollinger_bands_series(df["close"])
+        elif indicator_name == "donchian":
+            return calc.donchian_series(df, period=params.get("donchian_period", 20))
+        else:
+            raise ValueError(f"Unknown indicator: {indicator_name}")

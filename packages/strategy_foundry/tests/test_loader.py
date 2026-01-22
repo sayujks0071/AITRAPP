@@ -1,23 +1,40 @@
-import pytest
-from unittest.mock import patch, MagicMock
-from packages.strategy_foundry.data.loader import get_data
+import os
+import unittest
+from unittest.mock import patch
+
 import pandas as pd
 
-def test_loader_cache_logic():
-    with patch("packages.strategy_foundry.data.loader.os.path.exists") as mock_exists, \
-         patch("packages.strategy_foundry.data.loader.os.path.getmtime") as mock_mtime, \
-         patch("packages.strategy_foundry.data.loader.pd.read_csv") as mock_read:
+from packages.strategy_foundry.data.loader import DataLoader
 
-        mock_exists.return_value = True
-        # Mock mtime to be recent
-        import time
-        mock_mtime.return_value = time.time()
 
-        mock_read.return_value = pd.DataFrame({
-            "open": [100], "high": [110], "low": [90], "close": [105], "volume": [1000]
-        }, index=pd.to_datetime(["2023-01-01"]))
+class TestDataLoader(unittest.TestCase):
+    def setUp(self):
+        self.loader = DataLoader(cache_dir="/tmp/test_foundry_cache")
 
-        # Should return cached data
-        df = get_data("NIFTY")
-        assert not df.empty
-        assert "close" in df.columns
+    def tearDown(self):
+        import shutil
+        if os.path.exists("/tmp/test_foundry_cache"):
+            shutil.rmtree("/tmp/test_foundry_cache")
+
+    @patch("packages.strategy_foundry.data.sources.YahooSource.fetch")
+    def test_get_data_mock(self, mock_fetch):
+        # Mock successful download
+        df_mock = pd.DataFrame({
+            "open": [100, 101],
+            "high": [102, 103],
+            "low": [99, 100],
+            "close": [101, 102],
+            "volume": [1000, 2000]
+        }, index=pd.to_datetime(["2023-01-01 10:00", "2023-01-01 10:05"]))
+        # Add timezone to match loader expectation
+        df_mock.index = df_mock.index.tz_localize("Asia/Kolkata")
+
+        mock_fetch.return_value = df_mock
+
+        # DataLoader.get_data takes symbol, not instrument name
+        df = self.loader.get_data("^NSEI", "5m", force_refresh=True)
+        self.assertFalse(df.empty, "DataFrame should not be empty")
+        self.assertEqual(len(df), 2)
+        # Verify call args (symbol, tf, range)
+        # range_map for 5m is '60d'
+        mock_fetch.assert_called_with("^NSEI", "5m", "60d")

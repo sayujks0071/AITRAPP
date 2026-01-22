@@ -1,31 +1,25 @@
 # Backtesting Methodology
 
-## Assumptions
+## Data Strategy
+- **Primary**: 5m and 15m Intraday bars.
+- **Sanity**: 1D bars.
+- **Source**: Yahoo Finance (unofficial) via `requests`.
+- **Cache**: CSV files in `data/cache/`.
 
-- **Timeframe**: Daily (1D).
-- **Execution**: Signals generated at Close of Day T are executed at Open of Day T+1.
-- **Price**: Yahoo Finance adjusted data (conceptually, though we use raw Close for signals usually).
+## Execution Model
+- **Signal**: Calculated on Bar Close (i).
+- **Execution**: Assumed at Open of next Bar (i+1).
+- **Session**: Entries allowed 09:15-15:20 IST. Forced exit at 15:25 IST.
 - **Costs**:
-  - Slippage: 2 bps per side.
-  - Commission/Tax: 3.5 bps per side (Proxy for Futures/Options cost on Index).
-  - Total round-trip drag: ~11 bps.
+  - Brokerage + Tax: ~3 bps/side.
+  - Slippage: 2 bps/side.
+  - Spread Guard: 1 bps/side.
 
-## Walk-Forward Evaluation
+## Validation (Walk-Forward)
+- **Folds**: 4 folds for robustness.
+- **OOS**: Only Out-of-Sample performance is used for ranking.
+- **Rejection**: Strategies with < 3/4 positive folds or high drawdown (>30%) are rejected.
 
-To avoid overfitting, we use Out-Of-Sample (OOS) testing.
-- The dataset is split (e.g., last 30% is OOS).
-- Candidates are ranked solely on their OOS performance.
-- We assume that random generation provides enough "In-Sample" variation that checking OOS performance is sufficient validation.
-
-## Metrics
-
-- **Sharpe Ratio**: Annualized (Risk-free rate = 0).
-- **Calmar Ratio**: CAGR / MaxDrawdown.
-- **CAGR**: Compound Annual Growth Rate.
-- **Stability**: Win Rate / Profit Factor proxy.
-
-## Caveats
-
-- **Look-ahead Bias**: We use `shift(1)` for signals to ensure no look-ahead. Execution at Next Open ensures realism.
-- **Survivorship Bias**: Yahoo Finance data for indices is generally stable, but constituent changes are not modeled (we trade the Index proxy).
-- **Data Quality**: Yahoo Finance data may have gaps or errors. We filter NaNs but do not perform deep cleaning.
+## Sanity Checks
+- **1D Sanity**: Top candidates are checked on Daily timeframe. If performance is catastrophically bad (Sharpe < -0.2), they are penalized/rejected.
+- **Overfit Checks**: Penalties for "end-of-day" lucky profits or excessive turnover.

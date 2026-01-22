@@ -1,89 +1,100 @@
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
-from io import StringIO
-import logging
+import numpy as np
 import time
+from datetime import datetime
+import structlog
+from typing import Optional
 
-logger = logging.getLogger(__name__)
-
-YAHOO_URL = "https://query1.finance.yahoo.com/v7/finance/download/{symbol}?period1={start}&period2={end}&interval={interval}&events=history&includeAdjustedClose=true"
+logger = structlog.get_logger(__name__)
 
 class YahooSource:
-    def __init__(self):
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-        }
+    """
+    Fetches OHLCV data from Yahoo Finance (unofficial API).
+    """
 
-    def download(self, symbol: str, interval: str = "1d", days: int = 365) -> pd.DataFrame:
+    BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+
+    USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+
+    @staticmethod
+    def fetch(symbol: str, interval: str, range_str: str = "max") -> Optional[pd.DataFrame]:
         """
-        Download OHLCV data from Yahoo Finance.
+        Fetch data from Yahoo Finance.
 
         Args:
             symbol: Ticker symbol (e.g. ^NSEI)
-            interval: 1d, 5m, 15m
-            days: Number of days of history to fetch
+            interval: 5m, 15m, 1d
+            range_str: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, max
+
+        Returns:
+            DataFrame with datetime index (Asia/Kolkata) and columns: open, high, low, close, volume.
         """
-        end_dt = datetime.now()
-        start_dt = end_dt - timedelta(days=days)
+        url = YahooSource.BASE_URL.format(symbol=symbol)
+        params = {
+            "interval": interval,
+            "range": range_str,
+            "includePrePost": "false"
+        }
+        headers = {
+            "User-Agent": YahooSource.USER_AGENT
+        }
 
-        # Yahoo expects unix timestamp
-        period1 = int(start_dt.timestamp())
-        period2 = int(end_dt.timestamp())
+        max_retries = 3
+        backoff = 2
 
-        url = YAHOO_URL.format(symbol=symbol, start=period1, end=period2, interval=interval)
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Fetching {symbol} {interval} from Yahoo (attempt {attempt+1})...")
+                response = requests.get(url, params=params, headers=headers, timeout=10)
 
-        logger.info(f"Downloading {symbol} ({interval}) from Yahoo...")
+                if response.status_code == 429:
+                    logger.warning(f"Rate limited (429). Sleeping {backoff}s...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
 
-        try:
-            response = requests.get(url, headers=self.headers, timeout=10.0)
+                response.raise_for_status()
+                data = response.json()
 
-            if response.status_code == 404:
-                logger.warning(f"Symbol {symbol} not found on Yahoo.")
-                return None
+                chart = data.get("chart", {}).get("result", [None])[0]
+                if not chart:
+                    logger.error(f"No data found for {symbol}")
+                    return None
 
-            if response.status_code == 429:
-                logger.warning(f"Rate limited by Yahoo.")
-                return None
+                timestamp = chart.get("timestamp", [])
+                indicators = chart.get("indicators", {}).get("quote", [None])[0]
 
-            response.raise_for_status()
+                if not timestamp or not indicators:
+                    logger.error(f"Empty payload for {symbol}")
+                    return None
 
-            if not response.text:
-                logger.warning(f"Empty response for {symbol}")
-                return None
+                df = pd.DataFrame({
+                    "timestamp": pd.to_datetime(timestamp, unit="s", utc=True),
+                    "open": indicators.get("open", []),
+                    "high": indicators.get("high", []),
+                    "low": indicators.get("low", []),
+                    "close": indicators.get("close", []),
+                    "volume": indicators.get("volume", [])
+                })
 
-            df = pd.read_csv(StringIO(response.text))
+                # Convert timezone
+                df["timestamp"] = df["timestamp"].dt.tz_convert("Asia/Kolkata")
+                df.set_index("timestamp", inplace=True)
 
-            # Standardize columns
-            df.columns = [c.lower() for c in df.columns]
-            if 'date' in df.columns:
-                df.rename(columns={'date': 'datetime'}, inplace=True)
+                # Drop NaNs
+                df.dropna(inplace=True)
 
-            # Parse datetime
-            # Yahoo daily is YYYY-MM-DD, intraday is YYYY-MM-DD HH:MM:SS-Offset
-            # We want tz-aware (UTC) then convert to IST?
-            # Actually Yahoo usually returns UTC for intraday.
+                # Sort
+                df.sort_index(inplace=True)
 
-            df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
+                logger.info(f"Fetched {len(df)} rows for {symbol}")
+                return df
 
-            # Convert to IST
-            # We will handle timezone conversion in Loader to be consistent
+            except Exception as e:
+                logger.error(f"Failed to fetch {symbol}: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(backoff)
+                    backoff *= 2
 
-            df.dropna(inplace=True)
-
-            # Ensure float columns
-            cols = ['open', 'high', 'low', 'close', 'adj close', 'volume']
-            for c in cols:
-                if c in df.columns:
-                    df[c] = pd.to_numeric(df[c], errors='coerce')
-
-            df.dropna(inplace=True)
-
-            if df.empty:
-                return None
-
-            return df
-
-        except Exception as e:
-            logger.error(f"Failed to download {symbol}: {e}")
-            return None
+        return None

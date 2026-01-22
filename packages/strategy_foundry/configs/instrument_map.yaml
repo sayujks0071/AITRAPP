@@ -1,6 +1,14 @@
-NIFTY:
-  research: ^NSEI
-  proxy: NIFTYBEES.NS
-SENSEX:
-  research: ^BSESN
-  proxy: SENSEXBEES.NS
+# Instrument Mapping for StrategyFoundry
+
+research:
+  NIFTY: "^NSEI"
+  SENSEX: "^BSESN"
+
+paper_proxy:
+  NIFTY: "NIFTYBEES"
+  SENSEX: "SENSEXBEES"
+
+live_proxy:
+  # Examples, to be replaced with actual broker symbols if needed
+  NIFTY: "NIFTY24FEBFUT"
+  SENSEX: "SENSEX24FEBFUT"

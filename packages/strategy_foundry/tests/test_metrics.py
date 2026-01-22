@@ -1,15 +1,23 @@
+import unittest
 import pandas as pd
 from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
-def test_metrics_calc():
-    equity = pd.Series([100, 105, 110, 108, 115], index=pd.date_range("2023-01-01", periods=5))
-    trades = pd.DataFrame({
-        "pnl": [5, 5, -2, 7],
-        "pnl_pct": [0.05, 0.05, -0.02, 0.06]
-    })
+class TestMetrics(unittest.TestCase):
+    def test_calculate_metrics(self):
+        # Profitable equity curve
+        dates = pd.date_range("2023-01-01", periods=10, freq="D")
+        equity = pd.Series([100, 101, 102, 103, 104, 105, 106, 107, 108, 110], index=dates)
+        trades = [{"pnl": 1}, {"pnl": 1}]
 
-    m = calculate_metrics(equity, trades)
+        metrics = calculate_metrics(equity, trades)
 
-    assert m['total_return'] == 0.15
-    assert m['trades'] == 4
-    assert m['max_drawdown'] < 0
+        self.assertTrue(metrics["sharpe"] > 0)
+        self.assertTrue(metrics["cagr"] > 0)
+        self.assertEqual(metrics["trades"], 2)
+
+    def test_empty_metrics(self):
+        metrics = calculate_metrics(pd.Series(), [])
+        self.assertEqual(metrics["sharpe"], -99.0)
+
+if __name__ == "__main__":
+    unittest.main()

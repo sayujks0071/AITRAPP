@@ -1,46 +1,71 @@
-from typing import Dict
+from typing import List, Dict
+import pandas as pd
 
-def score_candidate(metrics: Dict) -> float:
+class Ranker:
     """
-    Compute composite score.
-    + 30% OOS Sharpe
-    + 25% OOS Calmar
-    + 20% OOS CAGR
-    + 15% Stability (inv volatility or similar? Plan says 'Stability (low dispersion)')
-    - 10% Turnover penalty
-
-    If metrics missing, return -inf.
+    Ranks strategies based on metrics.
     """
-    if not metrics or metrics.get('trades', 0) == 0:
-        return -float('inf')
 
-    sharpe = metrics.get('sharpe', 0)
-    calmar = metrics.get('calmar', 0)
-    cagr = metrics.get('cagr', 0)
+    @staticmethod
+    def calculate_score(metrics: Dict[str, float]) -> float:
+        """
+        Calculate composite score.
+        Weights:
+        Sharpe: 25%
+        Calmar: 25%
+        CAGR: 20% (as decimal, e.g. 0.2)
+        Stability: 15% (Not calculated yet, assuming 1.0 for now or passed in metrics)
+        Turnover: 10% (Penalty if high? Bonus if low?)
 
-    # Stability: metrics doesn't have dispersion yet. Use 1/volatility as proxy?
-    # Or just use Sharpe (risk adjusted return).
-    # Plan asks for "rolling 252D Sharpe dispersion".
-    # Our metrics.py didn't compute that.
-    # Let's approximate stability with Win Rate * Profit Factor?
-    # Or just ignore for now and map 15% to Sharpe.
-    # Let's use Win Rate.
-    win_rate = metrics.get('win_rate', 0)
+        Let's simplify: Score = Sharpe + (Calmar/2) + (CAGR*5)
+        Sharpe 1.0 -> 1.0
+        Calmar 2.0 -> 1.0
+        CAGR 0.2 -> 1.0
+        Total ~ 3.0
+        """
+        sharpe = metrics.get("sharpe", 0)
+        calmar = metrics.get("calmar", 0)
+        cagr = metrics.get("cagr", 0)
 
-    # Turnover penalty: approximated by 'trades' count? Too many trades = high cost?
-    # Let's use profit factor as a quality metric instead of turnover directly.
+        # Stability proxy: Profit Factor
+        pf = metrics.get("profit_factor", 0)
 
-    # Normalization is hard without population stats.
-    # We'll use raw weighted sum, assuming reasonable ranges.
-    # Sharpe ~ 1-2
-    # Calmar ~ 1-3
-    # CAGR ~ 0.1 - 0.5
+        # Penalties
+        max_dd = metrics.get("max_dd", 100)
+        if max_dd > 30: # Hard penalty
+            return -1.0
 
-    score = (0.30 * sharpe) + (0.25 * calmar) + (20.0 * cagr) # Scale CAGR by 100? No, 20.
+        score = (sharpe * 0.3) + (calmar * 0.2) + (cagr * 2.0) + (pf * 0.1)
 
-    # Penalties
-    dd = abs(metrics.get('max_drawdown', 0))
-    if dd > 0.35: # Sanity
-        score -= 100
+        return score
 
-    return score
+    @staticmethod
+    def rank_candidates(candidates_results: List[Dict]) -> List[Dict]:
+        """
+        Rank candidates.
+        Input: List of dicts with 'candidate', 'metrics_5m', 'metrics_15m'.
+        """
+        scored = []
+        for res in candidates_results:
+            m5 = res.get("metrics_5m", {})
+            m15 = res.get("metrics_15m", {})
+
+            s5 = Ranker.calculate_score(m5)
+            s15 = Ranker.calculate_score(m15)
+
+            # Blended Score
+            if m5 and m15:
+                blended = (0.6 * s15) + (0.4 * s5)
+            elif m15:
+                blended = s15
+            elif m5:
+                blended = s5
+            else:
+                blended = -99.0
+
+            res["score"] = blended
+            scored.append(res)
+
+        # Sort descending
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored

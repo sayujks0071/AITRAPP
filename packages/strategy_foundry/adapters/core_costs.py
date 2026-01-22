@@ -1,22 +1,43 @@
+from typing import Optional
+from packages.core.risk import RiskManager
+from packages.core.config import RiskConfig
+from packages.core.models import Instrument, InstrumentType
+
 class CostAdapter:
     """
-    Provides cost assumptions for backtesting.
-    Defaults if core config is missing or too complex.
+    Adapter for cost estimation reusing RiskManager logic.
     """
-    # Default assumptions for NIFTY/SENSEX
-    SLIPPAGE_BPS = 2.0  # 0.02% per side
-    COMMISSION_BPS = 1.0  # ~0.01% per side (STT is higher on delivery, but this is index/derivatives proxy)
+    def __init__(self):
+        # Initialize with dummy config as we only use static fee calculation logic mostly
+        self.risk_manager = RiskManager(RiskConfig({}))
 
-    # STT on Sell for Futures: 0.0125%
-    # STT on Sell for Options: 0.0625% (on premium)
-    # Since we are simulating "Strategy" on Index, we'll model it as Futures-like exposure.
-    # Total round trip cost ~ 3-4 bps.
+    def estimate_round_trip_cost(self,
+                                 price: float,
+                                 quantity: int,
+                                 instrument_type: str = "EQUITY") -> float:
+        """
+        Estimate costs for entry and exit at same price (approx).
+        """
+        # Create a dummy instrument
+        inst_type = InstrumentType.EQUITY
+        if instrument_type == "FUTURES":
+            inst_type = InstrumentType.FUTURES
 
-    ALL_IN_COST_BPS = 3.5
+        dummy_inst = Instrument(
+            token=0,
+            exchange="NSE",
+            tradingsymbol="DUMMY",
+            lot_size=1,
+            instrument_type=inst_type,
+            tick_size=0.05
+        )
 
-    @staticmethod
-    def get_costs():
-        return {
-            "slippage_bps": CostAdapter.SLIPPAGE_BPS,
-            "all_in_cost_bps": CostAdapter.ALL_IN_COST_BPS
-        }
+        # Estimate fees
+        fees = self.risk_manager.estimate_fees(
+            instrument=dummy_inst,
+            quantity=quantity,
+            entry_price=price,
+            exit_price=price
+        )
+
+        return fees
