@@ -344,7 +344,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS
+# Add CORS (Inner)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -368,6 +368,10 @@ app.add_middleware(
 )
 
 # Add Security Headers
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Add Security Headers Middleware (Outer most - handles response last before wire, request first)
+# Must be added LAST (which means it's the first middleware the request hits)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount Prometheus metrics
