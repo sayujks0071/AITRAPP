@@ -51,6 +51,7 @@ class BacktestEngine:
 
         # Tracking High/Low for Trailing Stop
         highest_since_entry = 0.0
+        lowest_since_entry = 0.0
 
         for i in range(n - 1): # Stop at n-1 because we execute on i+1
             timestamp = times[i]
@@ -102,6 +103,26 @@ class BacktestEngine:
                 # For now assume fixed % trail or simplifed.
                 # If Strategy returned a stop level, we could use it.
                 # Let's skip complex trailing stop inside this loop for MVP unless precomputed.
+
+                # Update High/Low since entry
+                if position == 1:
+                    if highs[i] > highest_since_entry:
+                        highest_since_entry = highs[i]
+                elif position == -1:
+                    if lows[i] < lowest_since_entry or lowest_since_entry == 0.0:
+                        lowest_since_entry = lows[i]
+
+                # Percentage Trailing Stop
+                if not exit_reason and "trailing_stop_pct" in risk_params:
+                    pct = risk_params["trailing_stop_pct"]
+                    if position == 1:
+                        stop_price = highest_since_entry * (1.0 - pct)
+                        if lows[i] < stop_price:
+                            exit_reason = "trailing_stop"
+                    elif position == -1:
+                        stop_price = lowest_since_entry * (1.0 + pct)
+                        if highs[i] > stop_price:
+                            exit_reason = "trailing_stop"
 
                 if exit_reason:
                     # Execute Exit at Open of i+1
@@ -166,6 +187,7 @@ class BacktestEngine:
                         entry_time = times[i+1]
                         entry_bar_idx = i+1
                         highest_since_entry = entry_price
+                        lowest_since_entry = entry_price
 
             # Record Equity Curve (at Close of i)
             # Use 'capital' (cash) + unrealized PnL
