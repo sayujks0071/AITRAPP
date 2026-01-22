@@ -1,77 +1,52 @@
-import numpy as np
+from typing import Dict, Any
 import pandas as pd
-
+import numpy as np
 from packages.core.indicators import IndicatorCalculator
 
-
-class VectorIndicatorCalculator(IndicatorCalculator):
+class IndicatorsAdapter:
     """
-    Adapter for core IndicatorCalculator to support vectorized backtesting
-    with dynamic parameters per call.
+    Adapter to reuse packages.core.indicators logic with dynamic parameters.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    @staticmethod
+    def get_calculator(params: Dict[str, Any]) -> IndicatorCalculator:
+        """
+        Factory to get a calculator instance with specific parameters.
+        """
+        return IndicatorCalculator(
+            atr_period=params.get("atr_period", 14),
+            rsi_period=params.get("rsi_period", 14),
+            adx_period=params.get("adx_period", 14),
+            ema_fast=params.get("ema_fast", 34),
+            ema_slow=params.get("ema_slow", 89),
+            supertrend_period=params.get("supertrend_period", 10),
+            supertrend_multiplier=params.get("supertrend_multiplier", 3.0),
+            bb_period=params.get("bb_period", 20),
+            bb_std=params.get("bb_std", 2.0)
+        )
 
-    def rsi(self, df: pd.DataFrame, period: int) -> np.ndarray:
-        # Save state
-        old_period = self.rsi_period
-        # Set new state
-        self.rsi_period = period
-        try:
-            return self.rsi_series(df)
-        finally:
-            # Restore state
-            self.rsi_period = old_period
+    @staticmethod
+    def calculate_indicator(df: pd.DataFrame, indicator_name: str, params: Dict[str, Any]) -> Any:
+        """
+        Calculate a specific indicator series.
+        """
+        calc = IndicatorsAdapter.get_calculator(params)
 
-    def atr(self, df: pd.DataFrame, period: int) -> np.ndarray:
-        old_period = self.atr_period
-        self.atr_period = period
-        try:
-            return self.atr_series(df)
-        finally:
-            self.atr_period = old_period
-
-    def adx(self, df: pd.DataFrame, period: int) -> np.ndarray:
-        old_period = self.adx_period
-        self.adx_period = period
-        try:
-            return self.adx_series(df)
-        finally:
-            self.adx_period = old_period
-
-    def ema(self, series: pd.Series, period: int) -> pd.Series:
-        # Base class _ema uses self.ema_fast/slow but ema_series takes period arg?
-        # Let's check base class.
-        # def ema_series(self, series: pd.Series, period: int) -> pd.Series:
-        # It takes period! So we can just call it.
-        return self.ema_series(series, period)
-
-    def sma(self, series: pd.Series, period: int) -> pd.Series:
-        return series.rolling(window=period).mean()
-
-    def bollinger_bands(self, series: pd.Series, period: int, std: float) -> tuple[pd.Series, pd.Series, pd.Series]:
-        old_period = self.bb_period
-        old_std = self.bb_std
-        self.bb_period = period
-        self.bb_std = std
-        try:
-            return self.bollinger_bands_series(series)
-        finally:
-            self.bb_period = old_period
-            self.bb_std = old_std
-
-    def donchian(self, df: pd.DataFrame, period: int) -> tuple[pd.Series, pd.Series]:
-        # donchian_series takes period arg
-        return self.donchian_series(df, period)
-
-    def supertrend(self, df: pd.DataFrame, period: int, multiplier: float) -> tuple[np.ndarray, np.ndarray]:
-        old_period = self.supertrend_period
-        old_mult = self.supertrend_multiplier
-        self.supertrend_period = period
-        self.supertrend_multiplier = multiplier
-        try:
-            return self.supertrend_series(df)
-        finally:
-            self.supertrend_period = old_period
-            self.supertrend_multiplier = old_mult
+        if indicator_name == "rsi":
+            return calc.rsi_series(df)
+        elif indicator_name == "atr":
+            return calc.atr_series(df)
+        elif indicator_name == "adx":
+            return calc.adx_series(df)
+        elif indicator_name == "ema_fast":
+            return calc.ema_series(df["close"], calc.ema_fast)
+        elif indicator_name == "ema_slow":
+            return calc.ema_series(df["close"], calc.ema_slow)
+        elif indicator_name == "supertrend":
+            return calc.supertrend_series(df)
+        elif indicator_name == "bollinger":
+            return calc.bollinger_bands_series(df["close"])
+        elif indicator_name == "donchian":
+            return calc.donchian_series(df, period=params.get("donchian_period", 20))
+        else:
+            raise ValueError(f"Unknown indicator: {indicator_name}")

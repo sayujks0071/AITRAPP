@@ -1,78 +1,73 @@
-import numpy as np
 import pandas as pd
+import numpy as np
+from typing import Dict
 
-
-def calculate_metrics(trades_df: pd.DataFrame, daily_returns: pd.Series, initial_capital: float = 100000.0):
+def calculate_metrics(equity_curve: pd.Series, trades: list) -> Dict[str, float]:
     """
-    Calculates performance metrics from trades and daily returns.
+    Calculate performance metrics.
     """
-    if trades_df.empty:
+    if equity_curve.empty or len(trades) == 0:
         return {
+            "sharpe": -99.0,
+            "calmar": -99.0,
             "cagr": 0.0,
-            "sharpe": -99.9,
-            "sortino": -99.9,
-            "calmar": -99.9,
-            "max_dd": 0.0,
-            "win_rate": 0.0,
-            "profit_factor": 0.0,
+            "max_dd": 100.0,
             "trades": 0,
-            "avg_trade_pct": 0.0
+            "win_rate": 0.0,
+            "profit_factor": 0.0
         }
 
-    # Trade-based metrics
-    wins = trades_df[trades_df["pnl"] > 0]
-    losses = trades_df[trades_df["pnl"] <= 0]
-
-    win_rate = len(wins) / len(trades_df) if len(trades_df) > 0 else 0
-    gross_profit = wins["pnl"].sum()
-    gross_loss = abs(losses["pnl"].sum())
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-
-    avg_trade_pct = trades_df["return_pct"].mean()
-
-    # Time-series metrics
-    # Resample to daily if intraday
-    # daily_returns should be % returns series
+    # Returns
+    returns = equity_curve.pct_change().dropna()
 
     # CAGR
-    # Assuming daily_returns index is datetime
-    if len(daily_returns) > 1:
-        total_ret = (1 + daily_returns).prod() - 1
-        days = (daily_returns.index[-1] - daily_returns.index[0]).days
-        if days > 0:
-            cagr = (1 + total_ret) ** (365 / days) - 1
-        else:
-            cagr = 0.0
+    days = (equity_curve.index[-1] - equity_curve.index[0]).days
+    if days < 1:
+        days = 1
+    total_ret = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
+    cagr = ((1 + total_ret) ** (365 / days)) - 1
+
+    # Volatility (Annualized)
+    # Assuming intraday 5m bars? No, equity curve might be sparsely sampled if we only mark on close?
+    # Better to resample equity curve to daily for Sharpe/CAGR standard comparisons
+    # or keep high freq.
+    # Let's use high freq annualized.
+    # 5m bars: ~75 per day. 252 days.
+    # But equity curve index is timestamps.
+    # Let's resample to Daily for robust Sharpe.
+    daily_equity = equity_curve.resample("D").last().dropna()
+    daily_returns = daily_equity.pct_change().dropna()
+
+    if len(daily_returns) < 2:
+        sharpe = 0.0
     else:
-        cagr = 0.0
-
-    # Sharpe
-    mean_ret = daily_returns.mean()
-    std_ret = daily_returns.std()
-    sharpe = (mean_ret / std_ret * np.sqrt(252)) if std_ret > 0 else 0.0
-
-    # Sortino
-    downside_ret = daily_returns[daily_returns < 0]
-    std_down = downside_ret.std()
-    sortino = (mean_ret / std_down * np.sqrt(252)) if std_down > 0 else 0.0
+        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
 
     # Max Drawdown
-    cum_ret = (1 + daily_returns).cumprod()
-    peak = cum_ret.cummax()
-    drawdown = (cum_ret - peak) / peak
+    rolling_max = equity_curve.cummax()
+    drawdown = (equity_curve - rolling_max) / rolling_max
     max_dd = abs(drawdown.min())
 
     # Calmar
     calmar = cagr / max_dd if max_dd > 0 else 0.0
 
+    # Trade Stats
+    wins = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] <= 0]
+
+    win_rate = len(wins) / len(trades) if len(trades) > 0 else 0.0
+
+    gross_win = sum(t["pnl"] for t in wins)
+    gross_loss = abs(sum(t["pnl"] for t in losses))
+
+    profit_factor = gross_win / gross_loss if gross_loss > 0 else 99.0
+
     return {
-        "cagr": cagr,
         "sharpe": sharpe,
-        "sortino": sortino,
         "calmar": calmar,
-        "max_dd": max_dd,
+        "cagr": cagr,
+        "max_dd": max_dd * 100, # percent
+        "trades": len(trades),
         "win_rate": win_rate,
-        "profit_factor": profit_factor,
-        "trades": len(trades_df),
-        "avg_trade_pct": avg_trade_pct
+        "profit_factor": profit_factor
     }
