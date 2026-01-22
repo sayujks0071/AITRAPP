@@ -105,8 +105,8 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
       "command": "npx",
       "args": ["mcp-remote", "http://localhost:8080/mcp", "--allow-http"],
       "env": {
-        "KITE_API_KEY": "nhe2vo0afks02ojs",
-        "KITE_API_SECRET": "cs82nkkdvin37nrydnyou6cwn2b8zojl"
+        "KITE_API_KEY": "<YOUR_KITE_API_KEY>",
+        "KITE_API_SECRET": "<YOUR_KITE_API_SECRET>"
       }
     }
   }
