@@ -26,3 +26,5 @@ Strategies are rejected if:
 - **Drawdown**: > 35%.
 - **Profit Factor**: < 1.0 (OOS).
 - **Sanity Check**: Basic data integrity and trade validation.
+
+<!-- Verified -->

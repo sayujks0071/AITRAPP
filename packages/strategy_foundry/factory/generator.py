@@ -1,3 +1,4 @@
+# Strategy Foundry
 import hashlib
 import json
 import random

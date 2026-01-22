@@ -74,5 +74,6 @@ def calculate_metrics(trades_df: pd.DataFrame, daily_returns: pd.Series, initial
         "win_rate": win_rate,
         "profit_factor": profit_factor,
         "trades": len(trades_df),
-        "avg_trade_pct": avg_trade_pct
+        "avg_trade_pct": avg_trade_pct,
+        "pnl_net": trades_df["pnl"].sum()
     }

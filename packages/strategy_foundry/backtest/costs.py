@@ -1,3 +1,4 @@
+# Strategy Foundry
 """Simple Cost Model"""
 
 class CostModel:

@@ -1,3 +1,4 @@
+# Strategy Foundry
 from datetime import datetime
 
 from packages.core.market_hours import HARD_CLOSE, IST, MARKET_CLOSE, MARKET_OPEN, MarketHoursGuard

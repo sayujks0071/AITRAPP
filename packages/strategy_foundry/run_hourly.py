@@ -48,7 +48,11 @@ def main():
     instruments = ["NIFTY", "SENSEX"]
 
     loader = DataLoader()
-    engine = BacktestEngine()
+        exec_cfg = config.get("execution", {})
+    slip = exec_cfg.get("slippage_bps_per_side", 5.0)
+    # Cost = Tax + Brokerage Proxy
+    cost = exec_cfg.get("tax_bps", 3.0) + 0.5
+    engine = BacktestEngine(cost_bps=cost, slippage_bps=slip)
     evaluator = WalkForwardEvaluator(engine)
     ranker = Ranker()
     store = ChampionStore()

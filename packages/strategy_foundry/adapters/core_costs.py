@@ -1,3 +1,4 @@
+# Strategy Foundry
 class CostAdapter:
     """
     Provides cost assumptions for backtesting.

@@ -9,3 +9,5 @@ paper_proxy:
 live_proxy:
   NIFTY: "NSE:NIFTY50-FUT" # Template or actual symbol
   SENSEX: "BSE:SENSEX-FUT"
+
+# Verified

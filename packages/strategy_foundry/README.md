@@ -35,3 +35,5 @@ Results are stored in `results/`:
 - **Backtest**: `backtest/engine.py` (Vectorized, Hybrid Loop, 1D).
 - **Selection**: `selection/ranker.py` (OOS Scoring).
 - **Live**: `live/signal_publisher.py` (Signal Generation).
+
+<!-- Verified -->

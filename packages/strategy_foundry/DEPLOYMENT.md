@@ -29,3 +29,5 @@ Core execution systems should:
 - **Approval File**: Must exist at `approvals/ALLOW_LIVE.txt`.
 - **Market Hours**: Foundry only publishes during market hours.
 - **Performance Gates**: Signals are only generated if the Champion strategy meets strict OOS performance criteria (Sharpe > 1.0, Low Drawdown).
+
+<!-- Verified -->
