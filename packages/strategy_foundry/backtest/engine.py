@@ -49,12 +49,16 @@ class BacktestEngine:
 
         n = len(data)
 
+        # Precompute market hours masks
+        # buffer_minutes=5 matches default behavior
+        is_market_open_mask, is_session_closing_mask = self.market_guard.get_masks(times, buffer_minutes=5)
+
         # Tracking High/Low for Trailing Stop
         highest_since_entry = 0.0
         lowest_since_entry = 0.0
 
         for i in range(n - 1): # Stop at n-1 because we execute on i+1
-            timestamp = times[i]
+            # timestamp = times[i] - Removed loop-level index access for performance
 
             # Record Equity (Mark to Market)
             current_val = capital
@@ -86,7 +90,7 @@ class BacktestEngine:
                 # We use i+1 time for execution, so if i+1 is next day, we MUST have exited at i close?
                 # Actually, "All positions flat by 15:25".
                 # If timestamp is >= 15:25, we should have exited.
-                if self.market_guard.is_session_closing(timestamp):
+                if is_session_closing_mask[i]:
                     exit_reason = "session_close"
 
                 # Signal Exit
@@ -170,7 +174,8 @@ class BacktestEngine:
             # 2. Check Entries (if flat)
             if position == 0:
                 # Check Market Hours for Entry
-                if self.market_guard.is_market_open(timestamp) and not self.market_guard.is_session_closing(timestamp):
+                # Use strict logic: open AND not closing
+                if is_market_open_mask[i] and not is_session_closing_mask[i]:
                     if entry_sigs[i] != 0:
                         direction = entry_sigs[i] # 1 or -1
                         # Execute Entry at Open i+1
