@@ -1,23 +1,38 @@
-foundry:
-  max_candidates: 80
-  fast_mode_candidates: 15
-  timeframes: ["5m", "15m", "1d"]
-  data_days_intraday: 59
-  data_days_daily: 3650
-  folds: 4
-  fast_mode_folds: 2
+# Aggressive Intraday StrategyFoundry Configuration
 
-execution:
-  slippage_bps_per_side: 5.0
-  brokerage_per_order: 20.0
-  spread_guard_bps: 2.0
-  tax_bps: 3.0 # Approx STT + GST etc.
+generation:
+  candidates_per_run: 80
+  candidates_per_run_fast: 15
+  timeframes: ["5m", "15m"]
+  sanity_timeframe: "1d"
 
-selection:
-  min_trades_5m: 80 # Updated to match requirement
-  min_trades_15m: 40 # Updated to match requirement
-  max_drawdown: 0.30
-  min_profit_factor: 1.1
-  min_win_rate: 0.35
-  sanity_daily_min_sharpe: -0.5
-  sanity_daily_max_dd: 0.45
+backtest:
+  costs:
+    all_in_cost_bps_per_side: 3.0  # Brokerage + Taxes approx
+    slippage_bps_per_side: 2.0     # Execution slip
+    spread_guard_bps: 1.0          # Extra guard for liquidity
+
+  risk:
+    default_sizing_type: "fixed_fraction"
+    default_sizing_fraction: 1.0   # 100% of capital
+
+  validation:
+    min_trades_5m: 80
+    min_trades_15m: 40
+    max_drawdown_pct: 30.0
+    min_profit_factor: 1.1
+    min_positive_folds_ratio: 0.75 # 3 out of 4
+
+ranking:
+  weights:
+    sharpe: 0.25
+    calmar: 0.25
+    cagr: 0.20
+    stability: 0.15
+    turnover: 0.10
+    sanity: 0.05
+
+promotion:
+  min_sharpe_to_live: 1.2
+  max_dd_to_live: 20.0
+  challenger_improvement_pct: 10.0 # Must be 10% better than champion

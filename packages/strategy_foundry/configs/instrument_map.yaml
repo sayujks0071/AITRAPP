@@ -1,3 +1,5 @@
+# Instrument Mapping for StrategyFoundry
+
 research:
   NIFTY: "^NSEI"
   SENSEX: "^BSESN"
@@ -7,5 +9,6 @@ paper_proxy:
   SENSEX: "SENSEXBEES"
 
 live_proxy:
-  NIFTY: "NSE:NIFTY50-FUT" # Template or actual symbol
-  SENSEX: "BSE:SENSEX-FUT"
+  # Examples, to be replaced with actual broker symbols if needed
+  NIFTY: "NIFTY24FEBFUT"
+  SENSEX: "SENSEX24FEBFUT"

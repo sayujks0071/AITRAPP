@@ -1,81 +1,48 @@
+# Strategy Foundry
 import json
-import os
+import structlog
+from pathlib import Path
+from typing import Dict, Optional
 from datetime import datetime
-from typing import Any, Dict, Optional
 
+logger = structlog.get_logger(__name__)
 
 class ChampionStore:
-    def __init__(self, base_dir="packages/strategy_foundry/results/champions"):
-        self.base_dir = base_dir
-        os.makedirs(base_dir, exist_ok=True)
+    """
+    Manages persistence of champion strategies.
+    """
 
-    def _get_current_file(self, instrument: str) -> str:
-        return os.path.join(self.base_dir, f"current_{instrument}.json")
+    def __init__(self, base_dir: str = "packages/strategy_foundry/results/champions"):
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def load_current_champion(self, instrument: str) -> Optional[Dict[str, Any]]:
-        path = self._get_current_file(instrument)
-        if os.path.exists(path):
+    def load_champion(self, instrument: str) -> Optional[Dict]:
+        filepath = self.base_dir / f"champion_{instrument}.json"
+        if filepath.exists():
             try:
-                with open(path, "r") as f:
+                with open(filepath, "r") as f:
                     return json.load(f)
-            except Exception:
-                return None
+            except Exception as e:
+                logger.error(f"Failed to load champion for {instrument}: {e}")
         return None
 
-    def save_new_champion(self, candidate_spec: Dict, metrics: Dict, score: float, run_ts: str, instrument: str):
-        """
-        Promotes a new champion.
-        """
-        champion_data = {
-            "spec": candidate_spec,
+    def save_champion(self, instrument: str, candidate: Dict, metrics: Dict, run_id: str):
+        data = {
+            "instrument": instrument,
+            "strategy": candidate, # Spec
             "metrics": metrics,
-            "score": score,
             "promoted_at": datetime.now().isoformat(),
-            "run_ts": run_ts,
-            "instrument": instrument
+            "run_id": run_id
         }
 
-        current_file = self._get_current_file(instrument)
+        # Save current
+        filepath = self.base_dir / f"champion_{instrument}.json"
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
 
-        # 1. Archive old if exists
-        if os.path.exists(current_file):
-            old = self.load_current_champion(instrument)
-            if old:
-                ts = datetime.now().strftime("%Y%m%d%H%M%S")
-                old_id = old.get("spec", {}).get("id", "unknown")
-                archive_path = os.path.join(self.base_dir, f"{ts}_{instrument}_{old_id}.json")
-                with open(archive_path, "w") as f:
-                    json.dump(old, f, indent=2)
+        # Save history
+        history_path = self.base_dir / f"{run_id}_{instrument}.json"
+        with open(history_path, "w") as f:
+            json.dump(data, f, indent=2)
 
-        # 2. Save new
-        with open(current_file, "w") as f:
-            json.dump(champion_data, f, indent=2)
-
-    def should_promote(self, new_score: float, new_metrics: Dict, instrument: str) -> bool:
-        """
-        Decides if new candidate should replace current champion.
-        """
-        current = self.load_current_champion(instrument)
-        if not current:
-            return True
-
-        current_score = current.get("score", 0)
-        current_metrics = current.get("metrics", {})
-
-        # Rule 1: New score >= Current + 10%
-        if new_score >= current_score * 1.10:
-            return True
-
-        # Rule 2: Reduce MaxDD by >= 5% absolute, Sharpe within 10%
-        new_dd = new_metrics.get("max_dd", 1.0)
-        curr_dd = current_metrics.get("max_dd", 1.0)
-        new_sharpe = new_metrics.get("sharpe", 0.0)
-        curr_sharpe = current_metrics.get("sharpe", 0.0)
-
-        # Reduce MaxDD by >= 5% absolute (e.g. 0.25 -> 0.20)
-        if (curr_dd - new_dd) >= 0.05:
-            # Sharpe not degrading meaningfully (>= 90% of current)
-            if new_sharpe >= curr_sharpe * 0.90:
-                 return True
-
-        return False
+        logger.info(f"Promoted new champion for {instrument}")

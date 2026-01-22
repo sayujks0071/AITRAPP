@@ -1,28 +1,25 @@
 # Backtesting Methodology
 
-## Assumptions
-- **Timeframe**: Daily (1D).
-- **Execution**: Signal on Close -> Execute on Next Open.
-- **Slippage**: 5 bps per side (configurable).
-- **Costs**: 3.5 bps per side (configurable, covers brokerage + taxes).
-- **Data**: Daily OHLCV (NIFTY/SENSEX).
-- **Session**: Standard Market Days.
+## Data Strategy
+- **Primary**: 5m and 15m Intraday bars.
+- **Sanity**: 1D bars.
+- **Source**: Yahoo Finance (unofficial) via `requests`.
+- **Cache**: CSV files in `data/cache/`.
 
-## Walk-Forward Evaluation
-To prevent overfitting, we use Walk-Forward Evaluation (WFE) or Cross-Validation:
-- Data is split into multiple folds (default 4).
-- Strategy is evaluated on each fold as an "Out-of-Sample" (OOS) period.
-- Ranking is based on the average OOS performance.
+## Execution Model
+- **Signal**: Calculated on Bar Close (i).
+- **Execution**: Assumed at Open of next Bar (i+1).
+- **Session**: Entries allowed 09:15-15:20 IST. Forced exit at 15:25 IST.
+- **Costs**:
+  - Brokerage + Tax: ~3 bps/side.
+  - Slippage: 2 bps/side.
+  - Spread Guard: 1 bps/side.
 
-## Metrics
-- **Sharpe Ratio**: Annualized (Risk-Free Rate = 0).
-- **Calmar Ratio**: Annualized CAGR / Max Drawdown.
-- **Stability**: Standard deviation of Sharpe across folds.
-- **Turnover**: Average return per trade (Proxy for trade quality).
+## Validation (Walk-Forward)
+- **Folds**: 4 folds for robustness.
+- **OOS**: Only Out-of-Sample performance is used for ranking.
+- **Rejection**: Strategies with < 3/4 positive folds or high drawdown (>30%) are rejected.
 
-## Rejection Criteria
-Strategies are rejected if:
-- **Trades**: < 30 (Default).
-- **Drawdown**: > 35%.
-- **Profit Factor**: < 1.0 (OOS).
-- **Sanity Check**: Basic data integrity and trade validation.
+## Sanity Checks
+- **1D Sanity**: Top candidates are checked on Daily timeframe. If performance is catastrophically bad (Sharpe < -0.2), they are penalized/rejected.
+- **Overfit Checks**: Penalties for "end-of-day" lucky profits or excessive turnover.

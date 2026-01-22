@@ -41,11 +41,20 @@ async def kite_callback(request: Request):
 
         return HTMLResponse(content="""
         <html>
-            <head><title>Auth Success</title></head>
-            <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-                <h1 style="color: green;">Authentication Successful (Daily)</h1>
-                <p>The access token has been securely stored.</p>
-                <p>You may close this window and restart your application/services if necessary.</p>
+            <head>
+                <title>Auth Success</title>
+                <style>
+                    body { font-family: sans-serif; text-align: center; padding-top: 50px; background-color: #f0f8ff; }
+                    .container { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; }
+                    h1 { color: #2e7d32; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>Authentication Successful</h1>
+                    <p>The access token has been securely stored.</p>
+                    <p>You may now close this window and restart your application services if needed.</p>
+                </div>
             </body>
         </html>
         """)
