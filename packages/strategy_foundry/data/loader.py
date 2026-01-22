@@ -1,144 +1,75 @@
-import logging
-import os
-
 import pandas as pd
-import requests
-import yaml
+import structlog
+from pathlib import Path
+from typing import Optional
+from packages.strategy_foundry.data.sources import YahooSource
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 class DataLoader:
-    def __init__(self, cache_dir="packages/strategy_foundry/data/cache"):
-        self.cache_dir = cache_dir
-        self.config_path = "packages/strategy_foundry/configs/instrument_map.yaml"
-        self._load_config()
-        os.makedirs(self.cache_dir, exist_ok=True)
+    """
+    Loads and caches OHLCV data.
+    """
 
-    def _load_config(self):
-        with open(self.config_path, "r") as f:
-            self.config = yaml.safe_load(f)
-        self.research_map = self.config.get("research", {})
+    def __init__(self, cache_dir: str = "packages/strategy_foundry/data/cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.source = YahooSource()
 
-    def get_symbol_for_instrument(self, instrument):
-        return self.research_map.get(instrument, instrument)
-
-    def fetch_data(self, instrument, timeframe, force_refresh=False):
+    def get_data(self, symbol: str, timeframe: str, force_refresh: bool = False) -> Optional[pd.DataFrame]:
         """
-        Fetches OHLCV data for an instrument and timeframe.
-        Prioritizes cache unless force_refresh is True.
+        Get data for symbol and timeframe.
+        Tries cache first, unless force_refresh is True.
         """
-        symbol = self.get_symbol_for_instrument(instrument)
-        cache_file = os.path.join(self.cache_dir, f"{instrument}_{timeframe}.csv")
-
-        if not force_refresh and os.path.exists(cache_file):
-            logger.info(f"Loading {instrument} {timeframe} from cache")
-            df = pd.read_csv(cache_file, parse_dates=["datetime"], index_col="datetime")
-            return df
-
-        logger.info(f"Downloading {instrument} ({symbol}) {timeframe} from source")
-        df = self._download_yahoo(symbol, timeframe)
-
-        if df is None or df.empty:
-            # Fallback to ETF Proxy
-            etf_proxy = self.config.get("paper_proxy", {}).get(instrument)
-            if etf_proxy and etf_proxy != symbol:
-                 logger.info(f"Primary symbol failed. Falling back to ETF proxy: {etf_proxy}")
-                 # Append .NS if missing and looks like a symbol (simple heuristic)
-                 # Research symbols start with ^. ETF proxies usually don't.
-                 if not etf_proxy.endswith(".NS") and not etf_proxy.startswith("^"):
-                      etf_proxy_yahoo = etf_proxy + ".NS"
-                 else:
-                      etf_proxy_yahoo = etf_proxy
-
-                 df = self._download_yahoo(etf_proxy_yahoo, timeframe)
-
-        if df is not None and not df.empty:
-            df.to_csv(cache_file)
-            return df
-        else:
-            logger.warning(f"Failed to download data for {instrument}")
-            if os.path.exists(cache_file):
-                logger.info("Falling back to stale cache")
-                return pd.read_csv(cache_file, parse_dates=["datetime"], index_col="datetime")
-            return pd.DataFrame()
-
-    def _download_yahoo(self, symbol, timeframe):
-        # Map timeframe to Yahoo API format
-        interval_map = {
+        # Normalize timeframe for filename
+        tf_map = {
             "5m": "5m",
             "15m": "15m",
-            "1d": "1d"
+            "1d": "1d",
+            "1D": "1d"
         }
+        tf_norm = tf_map.get(timeframe, timeframe)
 
+        cache_file = self.cache_dir / f"{symbol.replace('^', '')}_{tf_norm}.csv"
+
+        # Try loading from cache
+        if not force_refresh and cache_file.exists():
+            try:
+                df = pd.read_csv(cache_file, index_col="timestamp", parse_dates=True)
+                # Ensure timezone awareness if lost (CSV doesn't store TZ perfectly usually)
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize("Asia/Kolkata")
+                else:
+                    df.index = df.index.tz_convert("Asia/Kolkata")
+
+                logger.info(f"Loaded {symbol} {timeframe} from cache")
+                return df
+            except Exception as e:
+                logger.warning(f"Failed to load cache for {symbol}: {e}")
+
+        # Fetch from source
+        # Determine range based on timeframe
         range_map = {
             "5m": "60d",
             "15m": "60d",
-            "1d": "10y"
+            "1d": "5y" # 5 years for daily sanity
         }
+        range_str = range_map.get(tf_norm, "1mo")
 
-        interval = interval_map.get(timeframe)
-        if not interval:
-            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        df = self.source.fetch(symbol, tf_norm, range_str)
 
-        range_val = range_map.get(timeframe)
+        if df is not None and not df.empty:
+            # Save to cache
+            df.to_csv(cache_file)
+            logger.info(f"Cached {symbol} {timeframe}")
 
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        params = {
-            "interval": interval,
-            "range": range_val
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-        }
+        return df
 
-        try:
-            response = requests.get(url, params=params, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            result = data["chart"]["result"][0]
-            timestamps = result["timestamp"]
-            indicators = result["indicators"]["quote"][0]
-
-            df = pd.DataFrame({
-                "datetime": pd.to_datetime(timestamps, unit="s", utc=True).tz_convert("Asia/Kolkata"),
-                "open": indicators["open"],
-                "high": indicators["high"],
-                "low": indicators["low"],
-                "close": indicators["close"],
-                "volume": indicators["volume"]
-            })
-
-            # Remove Timezone info to avoid future warnings with some libs, but keep it local time
-            df["datetime"] = df["datetime"].dt.tz_localize(None)
-            df.set_index("datetime", inplace=True)
-
-            # Drop NaN rows
-            df.dropna(inplace=True)
-
-            # Sanity Checks
-            # 1. High >= Low
-            df = df[df["high"] >= df["low"]]
-            # 2. High >= Open and High >= Close
-            df = df[(df["high"] >= df["open"]) & (df["high"] >= df["close"])]
-            # 3. Low <= Open and Low <= Close
-            df = df[(df["low"] <= df["open"]) & (df["low"] <= df["close"])]
-            # 4. Volume >= 0
-            df = df[df["volume"] >= 0]
-
-            # Basic Market Hours Filter (09:15 - 15:30) for intraday
-            if timeframe in ["5m", "15m"]:
-                df = df.between_time("09:15", "15:29") # Inclusive start, inclusive end
-
-            return df
-
-        except Exception as e:
-            logger.error(f"Error downloading {symbol}: {e}")
-            return None
-
-if __name__ == "__main__":
-    # Test
-    logging.basicConfig(level=logging.INFO)
-    loader = DataLoader()
-    df = loader.fetch_data("NIFTY", "15m")
-    print(df.tail())
+    def update_all(self, instruments: dict, timeframes: list):
+        """
+        Update cache for all instruments and timeframes.
+        instruments: dict of name -> symbol (e.g. {'NIFTY': '^NSEI'})
+        """
+        for name, symbol in instruments.items():
+            for tf in timeframes:
+                self.get_data(symbol, tf, force_refresh=True)
