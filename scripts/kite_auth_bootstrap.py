@@ -26,8 +26,6 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.getcwd())
 
 from src.auth.kite_auth import KiteAuth
-# Import AppMode for type checking or future use
-from packages.core.config import AppMode
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

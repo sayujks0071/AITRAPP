@@ -1,39 +1,36 @@
-# Strategy Foundry
+# Aggressive Intraday StrategyFoundry
 
-Automated research lab for generating, backtesting, and ranking trading strategies for NIFTY/SENSEX.
+This package implements an automated strategy research lab ("Foundry") that:
+1.  Generates intraday trading strategies (grammar-based).
+2.  Backtests them on 5m and 15m data with strict OOS (Out-of-Sample) validation.
+3.  Ranks them to find robust "Champions".
+4.  Publishes a `live_signal.json` artifact for potential execution.
 
-## Overview
-This module runs hourly to:
-1. Fetch latest Daily (1D) data (falling back to Yahoo Finance).
-2. Generate random strategy candidates based on a defined grammar.
-3. Backtest candidates using a vectorized engine with Walk-Forward Evaluation.
-4. Rank candidates based on OOS Sharpe, Calmar, Stability, and Turnover.
-5. Promote a "Champion" strategy if it beats the incumbent.
-6. Publish a `live_signal.json` artifact for potential execution.
+## Directory Structure
+
+- `configs/`: Configuration files.
+- `data/`: Data loading and caching (Yahoo-style fetcher).
+- `adapters/`: Interfaces to `packages.core`.
+- `factory/`: Strategy generation grammar and logic.
+- `backtest/`: Engine, metrics, walk-forward validation.
+- `selection/`: Ranking and champion management.
+- `live/`: Signal publishing.
+- `results/`: Run artifacts and champion stores.
 
 ## Usage
 
-### Run Manually
+**Run Hourly (via Cron/CI):**
 ```bash
-# Full Mode
-python -m packages.strategy_foundry.run_hourly
-
-# Fast Mode (fewer candidates, fewer folds)
-FAST_MODE=1 python -m packages.strategy_foundry.run_hourly
+python3 -m packages.strategy_foundry.run_hourly
 ```
 
-### Outputs
-Results are stored in `results/`:
-- `runs/<timestamp>/`: Contains `metrics.csv`, candidates, and run logs.
-- `champions/current.json`: The current reigning champion strategy.
-- `live_signal.json`: The latest trading signal (only generated during market hours if eligible).
-- `leaderboard.md`: Current top strategies.
+**Fast Mode (for CI testing):**
+```bash
+FAST_MODE=1 python3 -m packages.strategy_foundry.run_hourly
+```
 
-## Architecture
-- **Data**: `data/loader.py` (Yahoo Finance + Cache).
-- **Factory**: `factory/generator.py` (Strategy Grammar).
-- **Backtest**: `backtest/engine.py` (Vectorized, Hybrid Loop, 1D).
-- **Selection**: `selection/ranker.py` (OOS Scoring).
-- **Live**: `live/signal_publisher.py` (Signal Generation).
+## Outputs
 
-<!-- Verified -->
+- `results/runs/<timestamp>/`: Contains candidates, metrics, and logs for a run.
+- `results/champions/`: Contains the current best strategies per instrument.
+- `results/live_signal.json`: The latest actionable signal (if eligible).
