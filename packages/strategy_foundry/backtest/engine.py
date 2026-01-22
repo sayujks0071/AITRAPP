@@ -56,20 +56,6 @@ class BacktestEngine:
         for i in range(n - 1): # Stop at n-1 because we execute on i+1
             timestamp = times[i]
 
-            # Record Equity (Mark to Market)
-            current_val = capital
-            if position != 0:
-                # Unrealized PnL based on Close
-                # Simplified: assumes we hold 'capital' worth of stock?
-                # Or fixed quantity?
-                # "Position Sizing: Default 1x notional"
-                # Means if capital is 100k, we buy 100k worth.
-                # So quantity = capital / entry_price (at entry).
-                # But capital changes. Let's use Fixed Fraction of Current Equity.
-
-                # Wait, we need to track Quantity.
-                pass
-
             # Since we only update capital on close, let's just track trade PnL for simplicity in this loop
             # and reconstruct equity curve later or update daily.
             # But for trailing stop we need intra-bar logic? No, we use bar OHLC.
@@ -165,7 +151,7 @@ class BacktestEngine:
                     })
 
                     position = 0
-                    continue # Position closed, can we enter same bar? Usually no.
+                    # Removed continue to allow recording of equity curve and potential re-entry
 
             # 2. Check Entries (if flat)
             if position == 0:
