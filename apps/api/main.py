@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from kiteconnect import KiteConnect
 from prometheus_client import make_asgi_app
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from apps.api.auth import APIKeyMiddleware
 from apps.api.middleware import SecurityHeadersMiddleware
@@ -1074,6 +1075,23 @@ class BacktestRequest(BaseModel):
             raise ValueError("Symbol must be alphanumeric")
         return v
 
+    @model_validator(mode="after")
+    def validate_dates(self):
+        try:
+            start = datetime.strptime(self.start_date, "%Y-%m-%d")
+            end = datetime.strptime(self.end_date, "%Y-%m-%d")
+        except ValueError as e:
+            raise ValueError(f"Invalid date format: {e}") from e
+
+        if start > end:
+            raise ValueError("start_date must be before end_date")
+
+        duration = (end - start).days
+        if duration > 365:
+            raise ValueError("Backtest duration cannot exceed 365 days")
+
+        return self
+
 
 @app.post("/backtest")
 async def run_backtest(request: BacktestRequest):
@@ -1118,8 +1136,13 @@ async def run_backtest(request: BacktestRequest):
             initial_capital=request.initial_capital, data_dir="docs/NSE OPINONS DATA"
         )
 
-        results = engine.run_backtest(
-            strategies=strategies, symbol=request.symbol, start_date=start_date, end_date=end_date
+        # SECURITY: Run backtest in threadpool to prevent blocking the event loop (DoS protection)
+        results = await run_in_threadpool(
+            engine.run_backtest,
+            strategies=strategies,
+            symbol=request.symbol,
+            start_date=start_date,
+            end_date=end_date,
         )
 
         return {
