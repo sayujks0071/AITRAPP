@@ -1,220 +1,310 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+from typing import List, Dict, Tuple, Optional
 import structlog
-from typing import List, Dict, Tuple
-from packages.strategy_foundry.factory.grammar import Strategy
+from packages.strategy_foundry.factory.grammar import StrategyCandidate, EntryType, RiskType, FilterType
+from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
 from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
-from packages.strategy_foundry.adapters.core_costs import CostAdapter
+from packages.strategy_foundry.backtest.metrics import calculate_metrics
 
 logger = structlog.get_logger(__name__)
 
 class BacktestEngine:
-    def __init__(self, initial_capital: float = 100000.0, costs: Dict = None):
+    def __init__(self, initial_capital: float = 100000.0, cost_bps: float = 2.0, slippage_bps: float = 3.0):
         self.initial_capital = initial_capital
-        self.costs = costs or {"all_in_cost_bps_per_side": 3.0, "slippage_bps_per_side": 2.0, "spread_guard_bps": 1.0}
-        self.market_guard = MarketHoursAdapter()
-        self.cost_adapter = CostAdapter()
+        self.cost_bps = cost_bps
+        self.slippage_bps = slippage_bps
+        self.total_cost_bps = cost_bps + slippage_bps
+        self.market_hours = MarketHoursAdapter()
+        self.indicator_calc = IndicatorsAdapter()
 
-    def run(self, strategy: Strategy, data: pd.DataFrame) -> Tuple[pd.Series, List[Dict]]:
+    def run(self, candidate: StrategyCandidate, data: pd.DataFrame, timeframe: str = "5m") -> Dict:
         """
-        Run backtest.
-        Returns: (Equity Curve, Trades List)
+        Run backtest for a single candidate on data.
+
+        Args:
+            candidate: StrategyCandidate object
+            data: DataFrame with open, high, low, close, volume (datetime index)
+            timeframe: "5m", "15m", "1D"
+
+        Returns:
+            Dict with equity curve, trades, metrics
         """
         if data.empty:
-            return pd.Series(), []
+            return {}
 
-        # 1. Calculate Signals (Vectorized)
-        entries, exits = strategy.calculate_signals(data)
-        risk_params = strategy.get_risk_params()
+        # 1. Pre-calculate Indicators & Signals
+        # -------------------------------------
+        df = data.copy()
+        indicators = self._calculate_indicators(df, candidate)
 
-        # 2. Loop
-        capital = self.initial_capital
-        equity_curve = []
-        trades = []
+        # Calculate Signals (Vectorized)
+        # 1 = Long Entry, 0 = No Signal
+        # (Shorts not supported in default grammar yet, but flexible)
+        entry_signals = self._generate_entry_signals(df, indicators, candidate)
 
+        # 2. Prepare Loop Variables
+        # -------------------------
+        opens = df["open"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        closes = df["close"].values
+        times = df.index
+
+        # Market Hours Masks
+        is_open, is_session_start, is_session_end = self.market_hours.get_masks(df.index)
+
+        # State
         position = 0 # 0, 1 (Long), -1 (Short)
         entry_price = 0.0
-        entry_time = None
-        entry_bar_idx = 0
+        entry_idx = 0
+        stop_loss = 0.0
+        take_profit = 0.0
+        highest_high = 0.0 # For trailing stop
 
-        # Precompute arrays for speed
-        opens = data["open"].values
-        highs = data["high"].values
-        lows = data["low"].values
-        closes = data["close"].values
-        times = data.index
+        equity = [self.initial_capital] * len(df)
+        cash = self.initial_capital
+        trades = []
 
-        entry_sigs = entries.values
-        exit_sigs = exits.values
+        # Exit Params
+        risk_params = candidate.exit.params
+        atr_period = risk_params.get("atr_period", 14)
+        atr_values = indicators.get(f"atr_{atr_period}")
+        stop_mult = risk_params.get("stop_mult", 2.0)
+        tp_mult = risk_params.get("tp_mult", 0.0)
+        trail = risk_params.get("trail", False)
 
-        n = len(data)
+        # 3. Execution Loop
+        # -----------------
+        # Tracking Variables
+        current_equity = self.initial_capital
+        qty = 0.0
 
-        # Tracking High/Low for Trailing Stop
-        highest_since_entry = 0.0
-        lowest_since_entry = 0.0
+        # Iterate from 1 to N-1
+        for i in range(1, len(df)):
+            current_time = times[i]
+            prev_equity = equity[i-1]
 
-        for i in range(n - 1): # Stop at n-1 because we execute on i+1
-            timestamp = times[i]
-
-            # Record Equity (Mark to Market)
-            current_val = capital
+            # --- A. Check Exits (if Position exists) ---
             if position != 0:
-                # Unrealized PnL based on Close
-                # Simplified: assumes we hold 'capital' worth of stock?
-                # Or fixed quantity?
-                # "Position Sizing: Default 1x notional"
-                # Means if capital is 100k, we buy 100k worth.
-                # So quantity = capital / entry_price (at entry).
-                # But capital changes. Let's use Fixed Fraction of Current Equity.
+                exit_price = 0.0
+                exit_reason = ""
 
-                # Wait, we need to track Quantity.
-                pass
+                # 1. EOD Exit / Session End
+                if is_session_end[i]:
+                    exit_price = opens[i]
+                    exit_reason = "EOD"
 
-            # Since we only update capital on close, let's just track trade PnL for simplicity in this loop
-            # and reconstruct equity curve later or update daily.
-            # But for trailing stop we need intra-bar logic? No, we use bar OHLC.
+                # 2. Stop Loss / Take Profit / Trailing
+                else:
+                    # Update Trailing Stop (Chandelier-like)
+                    if trail and position > 0:
+                        if highs[i] > highest_high:
+                            highest_high = highs[i]
+                            if atr_values is not None:
+                                current_atr = atr_values[i-1]
+                                new_sl = highest_high - (current_atr * stop_mult)
+                                stop_loss = max(stop_loss, new_sl)
 
-            # Execution Logic:
-            # Decisions made at Close of bar i, executed at Open of bar i+1.
+                    # Check SL/TP
+                    if position > 0:
+                        if opens[i] <= stop_loss:
+                            exit_price = opens[i]
+                            exit_reason = "SL_GAP"
+                        elif lows[i] <= stop_loss:
+                            exit_price = stop_loss
+                            exit_reason = "SL"
+                        elif tp_mult > 0 and take_profit > 0:
+                            if opens[i] >= take_profit:
+                                exit_price = opens[i]
+                                exit_reason = "TP_GAP"
+                            elif highs[i] >= take_profit:
+                                exit_price = take_profit
+                                exit_reason = "TP"
 
-            # 1. Check Exits for EXISTING position
-            if position != 0:
-                exit_reason = None
+                # Execute Exit
+                if exit_price > 0:
+                    # Calculate PnL
+                    # Cost: entry_price * bps + exit_price * bps
+                    entry_cost = entry_price * (self.total_cost_bps / 10000.0)
+                    exit_cost = exit_price * (self.total_cost_bps / 10000.0)
 
-                # Market Close Exit (Hard)
-                # Check if bar i is the last bar of session or close to it
-                # We use i+1 time for execution, so if i+1 is next day, we MUST have exited at i close?
-                # Actually, "All positions flat by 15:25".
-                # If timestamp is >= 15:25, we should have exited.
-                if self.market_guard.is_session_closing(timestamp):
-                    exit_reason = "session_close"
+                    gross_pnl_per_share = (exit_price - entry_price)
+                    net_pnl_per_share = gross_pnl_per_share - entry_cost - exit_cost
 
-                # Signal Exit
-                elif exit_sigs[i]:
-                    exit_reason = "signal_exit"
+                    trade_pnl = qty * net_pnl_per_share
 
-                # Time Stop
-                elif "time_stop_bars" in risk_params:
-                    bars_held = i - entry_bar_idx
-                    if bars_held >= risk_params["time_stop_bars"]:
-                        exit_reason = "time_stop"
-
-                # Trailing Stop (ATR) - Requires ATR calculation which might be complex inside loop
-                # For now assume fixed % trail or simplifed.
-                # If Strategy returned a stop level, we could use it.
-                # Let's skip complex trailing stop inside this loop for MVP unless precomputed.
-
-                # Update High/Low since entry
-                if position == 1:
-                    if highs[i] > highest_since_entry:
-                        highest_since_entry = highs[i]
-                elif position == -1:
-                    if lows[i] < lowest_since_entry or lowest_since_entry == 0.0:
-                        lowest_since_entry = lows[i]
-
-                # Percentage Trailing Stop
-                if not exit_reason and "trailing_stop_pct" in risk_params:
-                    pct = risk_params["trailing_stop_pct"]
-                    if position == 1:
-                        stop_price = highest_since_entry * (1.0 - pct)
-                        if lows[i] < stop_price:
-                            exit_reason = "trailing_stop"
-                    elif position == -1:
-                        stop_price = lowest_since_entry * (1.0 + pct)
-                        if highs[i] > stop_price:
-                            exit_reason = "trailing_stop"
-
-                if exit_reason:
-                    # Execute Exit at Open of i+1
-                    exit_price = opens[i+1]
-                    # Apply slippage
-                    slip = exit_price * (self.costs["slippage_bps_per_side"] / 10000.0)
-                    if position == 1:
-                        exec_price = exit_price - slip
-                    else:
-                        exec_price = exit_price + slip
-
-                    # PnL
-                    # Qty determined at entry
-                    qty = (self.initial_capital) / entry_price # Fixed size based on initial for simplicity or compounding?
-                    # Let's use Compounding: qty = capital / entry_price
-                    # But we need to track capital properly.
-
-                    # Correction: Loop variable `capital` tracks current equity.
-                    qty = capital / entry_price
-
-                    gross_pnl = (exec_price - entry_price) * qty * position
-
-                    # Costs
-                    bps_cost = self.costs["all_in_cost_bps_per_side"] / 10000.0
-                    cost = (entry_price * qty * bps_cost) + (exec_price * qty * bps_cost)
-                    # Spread guard
-                    cost += (entry_price * qty * (self.costs["spread_guard_bps"] / 10000.0))
-
-                    net_pnl = gross_pnl - cost
-                    capital += net_pnl
+                    current_equity = current_equity + trade_pnl
 
                     trades.append({
-                        "entry_time": entry_time,
-                        "exit_time": times[i+1],
+                        "entry_time": times[entry_idx],
+                        "exit_time": current_time,
                         "entry_price": entry_price,
-                        "exit_price": exec_price,
-                        "pnl": net_pnl,
-                        "return_pct": (net_pnl / (entry_price * qty)) * 100,
+                        "exit_price": exit_price,
+                        "qty": qty,
+                        "pnl": trade_pnl,
+                        "pnl_net": trade_pnl, # Same as pnl here
                         "reason": exit_reason
                     })
 
                     position = 0
-                    continue # Position closed, can we enter same bar? Usually no.
+                    qty = 0.0
+                    entry_price = 0.0
+                    highest_high = 0.0
 
-            # 2. Check Entries (if flat)
+            # --- B. Check Entries (if Flat) ---
             if position == 0:
-                # Check Market Hours for Entry
-                if self.market_guard.is_market_open(timestamp) and not self.market_guard.is_session_closing(timestamp):
-                    if entry_sigs[i] != 0:
-                        direction = entry_sigs[i] # 1 or -1
-                        # Execute Entry at Open i+1
-                        entry_price_raw = opens[i+1]
+                # Signal from PREVIOUS close (i-1) executed at Open[i]
+                if is_open[i] and entry_signals[i-1]:
+                    entry_price = opens[i]
+                    position = 1
+                    entry_idx = i
+                    highest_high = highs[i]
 
-                        # Slip
-                        slip = entry_price_raw * (self.costs["slippage_bps_per_side"] / 10000.0)
-                        if direction == 1:
-                            entry_price = entry_price_raw + slip
-                        else:
-                            entry_price = entry_price_raw - slip
+                    # Sizing: Use 100% equity (1x leverage)
+                    qty = current_equity / entry_price
 
-                        position = direction
-                        entry_time = times[i+1]
-                        entry_bar_idx = i+1
-                        highest_since_entry = entry_price
-                        lowest_since_entry = entry_price
+                    # Setup Risk
+                    atr = atr_values[i-1] if atr_values is not None else entry_price * 0.01
+                    stop_loss = entry_price - (atr * stop_mult)
+                    if tp_mult > 0:
+                        take_profit = entry_price + (atr * tp_mult)
+                    else:
+                        take_profit = 0.0
 
-            # Record Equity Curve (at Close of i)
-            # Use 'capital' (cash) + unrealized PnL
+            # --- C. Update Equity Curve ---
             if position != 0:
-                # Mark to Close[i]
-                curr_price = closes[i]
-                qty = capital / entry_price # This is approximation, technically capital was cash before entry
-                # Let's be more precise:
-                # Cash = 0 (fully invested). Asset Value = qty * curr_price.
-                # Initial Cost = qty * entry_price.
-                # Unrealized = (curr_price - entry_price) * qty * position
-                # Equity = Capital (at entry) + Unrealized
-                # But we need to deduct entry costs?
-                # Let's keep `capital` as "Account Value".
+                # Mark to Market
+                # Equity = Cash + Position Value
+                # But we tracked current_equity as realized.
+                # MTM Equity = Realized Equity at entry - Entry Cost + Unrealized PnL
 
-                unrealized = (curr_price - entry_price) * (capital / entry_price) * position
-                equity_curve.append(capital + unrealized)
+                # Let's simplify: Equity = Qty * CurrentPrice + (Cash Reserve)
+                # At Entry: Cash Reserve = Equity - (Qty * EntryPrice) - EntryCost
+                # This is tricky with loop var `current_equity`.
+
+                # Let's use:
+                # Equity[i] = StartEquity + Sum(Realized PnL) + Unrealized PnL
+
+                # Unrealized PnL = Qty * (Close[i] - EntryPrice) - ExitCost(Approx)
+                # We won't deduct exit cost in MTM usually, or we can.
+
+                unrealized_gross = qty * (closes[i] - entry_price)
+                # Entry cost was already "paid" implicitly in our tracking?
+                # No, in logic above `current_equity` is only updated on Exit.
+                # So `current_equity` holds the equity *before* the current open trade (minus previous losses/gains).
+
+                # So MTM = current_equity + unrealized_gross - entry_cost
+                entry_cost = qty * entry_price * (self.total_cost_bps / 10000.0)
+                equity[i] = current_equity + unrealized_gross - entry_cost
+
             else:
-                equity_curve.append(capital)
+                equity[i] = current_equity
 
-        # Append last
-        equity_curve.append(capital)
+        open_position = None
+        if position != 0:
+            open_position = {
+                "entry_time": times[entry_idx],
+                "entry_price": entry_price,
+                "qty": qty,
+                "current_price": closes[-1],
+                "pnl_unrealized": (closes[-1] - entry_price) * qty, # Approx
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "side": "LONG" if position > 0 else "SHORT"
+            }
 
-        # Convert to Series
-        # equity_curve length is n (or n-1?), loop went n-1.
-        # We appended n times.
-        # Ensure index match.
-        eq_series = pd.Series(equity_curve, index=times[:len(equity_curve)])
+        return self._finalize_results(equity, trades, df.index, open_position)
 
-        return eq_series, trades
+    def _calculate_indicators(self, df: pd.DataFrame, candidate: StrategyCandidate) -> Dict[str, np.ndarray]:
+        indicators = {}
+
+        # Entry Params
+        ep = candidate.entry.params
+        et = candidate.entry.type
+
+        if et == EntryType.BREAKOUT:
+            period = ep.get("period", 20)
+            up, low = self.indicator_calc.donchian_series(df, period)
+            indicators[f"donchian_high_{period}"] = up
+            indicators[f"donchian_low_{period}"] = low
+
+        elif et == EntryType.TREND:
+            fast = ep.get("fast_period", 9)
+            slow = ep.get("slow_period", 20)
+            indicators[f"ema_{fast}"] = self.indicator_calc.ema_series(df["close"], fast)
+            indicators[f"ema_{slow}"] = self.indicator_calc.ema_series(df["close"], slow)
+
+        elif et == EntryType.MEAN_REVERSION:
+            rsi_p = ep.get("rsi_period", 14)
+            indicators[f"rsi_{rsi_p}"] = self.indicator_calc.rsi_series(df) # returns numpy array
+
+        # Exit Params
+        rp = candidate.exit.params
+        atr_p = rp.get("atr_period", 14)
+        indicators[f"atr_{atr_p}"] = self.indicator_calc.atr_series(df) # returns numpy array
+
+        # Filters
+        for f in candidate.filters:
+            if f.type == FilterType.REGIME_MA:
+                p = f.params.get("period", 200)
+                indicators[f"ma_{p}"] = self.indicator_calc.ema_series(df["close"], p) # returns series
+
+        return indicators
+
+    def _generate_entry_signals(self, df: pd.DataFrame, indicators: Dict, candidate: StrategyCandidate) -> np.ndarray:
+        signals = np.zeros(len(df), dtype=bool)
+        close = df["close"].values
+
+        # 1. Base Signal
+        et = candidate.entry.type
+        ep = candidate.entry.params
+
+        if et == EntryType.BREAKOUT:
+            p = ep.get("period", 20)
+            # Breakout: Close > Donchian High of prev bar?
+            # Usually Donchian High includes current bar if calculated on High.
+            # So if Close > DonchianHigh[i-1].
+            # IndicatorCalculator.donchian_series uses rolling max of High.
+            # So donchian_high[i] = max(High[i-p+1]...High[i]).
+            # We want to check if Close[i] > Max(High[i-p]...High[i-1]).
+            # So shift by 1.
+            donchian = indicators[f"donchian_high_{p}"].shift(1).fillna(np.inf) # Pandas Series
+            # Ensure numpy
+            base_signal = close > donchian.values
+
+        elif et == EntryType.TREND:
+            fast = indicators[f"ema_{ep.get('fast_period', 9)}"]
+            slow = indicators[f"ema_{ep.get('slow_period', 20)}"]
+            # Cross: Fast > Slow
+            base_signal = (fast > slow).values & (fast.shift(1) <= slow.shift(1)).values
+
+        elif et == EntryType.MEAN_REVERSION:
+            rsi = indicators[f"rsi_{ep.get('rsi_period', 14)}"]
+            thresh = ep.get("rsi_threshold", 30)
+            # Reversion: RSI < Threshold
+            base_signal = rsi < thresh
+
+        else:
+            base_signal = np.zeros(len(df), dtype=bool)
+
+        # 2. Apply Filters
+        for f in candidate.filters:
+            if f.type == FilterType.REGIME_MA:
+                p = f.params.get("period", 200)
+                ma = indicators[f"ma_{p}"]
+                # Regime: Close > MA
+                mask = (close > ma.values)
+                base_signal = base_signal & mask
+
+        return base_signal
+
+    def _finalize_results(self, equity_curve, trades, index, open_position=None):
+        equity_series = pd.Series(equity_curve, index=index)
+        metrics = calculate_metrics(equity_series, trades, self.initial_capital)
+        return {
+            "equity": equity_series,
+            "trades": trades,
+            "metrics": metrics,
+            "open_position": open_position
+        }

@@ -1,275 +1,204 @@
 import os
-import sys
-import json
-import yaml
+import time
 import structlog
+import yaml
 import pandas as pd
-from datetime import datetime
+from typing import List, Dict
 from pathlib import Path
-from typing import Dict, List
+from datetime import datetime
 
-from packages.strategy_foundry.data.loader import DataLoader
-from packages.strategy_foundry.factory.grammar import Strategy
-from packages.strategy_foundry.factory.generator import StrategyGenerator
+from packages.strategy_foundry.factory.generator import StrategyGenerator, StrategyCandidate
 from packages.strategy_foundry.backtest.engine import BacktestEngine
-from packages.strategy_foundry.backtest.metrics import calculate_metrics
-from packages.strategy_foundry.backtest.walkforward import WalkForward
+from packages.strategy_foundry.data.loader import DataLoader
 from packages.strategy_foundry.selection.ranker import Ranker
 from packages.strategy_foundry.selection.champion_store import ChampionStore
-from packages.strategy_foundry.selection.promote import Promoter
 from packages.strategy_foundry.live.signal_publisher import SignalPublisher
 
-# Configure logging
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
-    ],
-    logger_factory=structlog.stdlib.LoggerFactory(),
-)
-logger = structlog.get_logger()
+logger = structlog.get_logger(__name__)
 
-class FoundryRunner:
+class HourlyRunner:
     def __init__(self):
-        self.fast_mode = os.environ.get("FAST_MODE", "0") == "1"
-        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_dir = Path(f"packages/strategy_foundry/results/runs/{self.timestamp}")
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.fast_mode = os.getenv("FAST_MODE", "0") == "1"
+        self.loader = DataLoader()
+        self.generator = StrategyGenerator()
 
-        # Load Configs
-        with open("packages/strategy_foundry/configs/foundry.yaml") as f:
+        # Configs
+        with open("packages/strategy_foundry/configs/foundry.yaml", "r") as f:
             self.config = yaml.safe_load(f)
-        with open("packages/strategy_foundry/configs/instrument_map.yaml") as f:
-            self.instrument_map = yaml.safe_load(f)
 
-        self.data_loader = DataLoader()
-        self.champion_store = ChampionStore()
+        self.engine = BacktestEngine(
+            initial_capital=self.config["backtest"]["initial_capital"],
+            cost_bps=self.config["backtest"]["cost_bps"],
+            slippage_bps=self.config["backtest"]["slippage_bps"]
+        )
+        self.ranker = Ranker(config=self.config.get("evaluation"))
+        self.store = ChampionStore()
+        self.publisher = SignalPublisher()
+
+        self.run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.results_dir = Path(f"packages/strategy_foundry/results/runs/{self.run_ts}")
+        self.results_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self):
-        logger.info("Starting Foundry Run", fast_mode=self.fast_mode, timestamp=self.timestamp)
+        logger.info("Starting Hourly Run", fast_mode=self.fast_mode, ts=self.run_ts)
 
-        # 1. Update Data
-        instruments = self.instrument_map.get("research", {})
-        timeframes = self.config["generation"]["timeframes"] + [self.config["generation"]["sanity_timeframe"]]
-        self.data_loader.update_all(instruments, timeframes)
+        # 1. Setup Parameters
+        candidates_count = self.config["generation"]["fast_mode_candidates"] if self.fast_mode else self.config["generation"]["candidates_per_run"]
+        folds = self.config["evaluation"]["fast_mode_folds"] if self.fast_mode else self.config["evaluation"]["folds"]
 
-        # 2. Generation & Backtest per Instrument
-        for inst_name, symbol in instruments.items():
-            logger.info(f"Processing {inst_name} ({symbol})")
-            self._process_instrument(inst_name, symbol)
+        # 2. Generate Candidates
+        candidates = self.generator.generate_candidates(candidates_count)
+        self._save_candidates(candidates)
 
-        # 3. Publish Signal
-        publisher = SignalPublisher()
-        publisher.run()
+        instruments = ["NIFTY", "SENSEX"]
+        timeframes = ["5m", "15m"]
 
-        logger.info("Foundry Run Completed")
+        leaderboards = {}
 
-    def _process_instrument(self, name: str, symbol: str):
-        # Generate Candidates
-        count = self.config["generation"]["candidates_per_run_fast"] if self.fast_mode else self.config["generation"]["candidates_per_run"]
-        candidates = StrategyGenerator.generate_population(count)
+        # 3. Process Instruments
+        for instrument in instruments:
+            logger.info("Processing Instrument", instrument=instrument)
+            symbol = self.get_symbol(instrument)
 
-        # Save Candidates
-        with open(self.run_dir / f"candidates_{name}.json", "w") as f:
-            json.dump([c.to_dict() for c in candidates], f, indent=2)
+            instrument_candidates_scores = []
 
-        # Backtest
-        results = []
+            # Load Data for all timeframes
+            data_map = {}
+            for tf in timeframes:
+                 # Fetch enough data for folds
+                 days = 120 # Approx 6 months
+                 data_map[tf] = self.loader.get_data(symbol, tf, days=days)
 
-        # Load Data
-        data_5m = self.data_loader.get_data(symbol, "5m")
-        data_15m = self.data_loader.get_data(symbol, "15m")
-        data_1d = self.data_loader.get_data(symbol, "1d")
+            # 1D Sanity Data
+            data_1d = self.loader.get_data(symbol, "1D", days=365)
 
-        engine = BacktestEngine(costs=self.config["backtest"]["costs"])
+            # Evaluate Candidates
+            for cand in candidates:
+                cand_scores = {}
+                cand_metrics = {}
 
-        folds = 2 if self.fast_mode else 4
+                # Backtest on timeframes
+                for tf in timeframes:
+                    data = data_map[tf]
+                    if data.empty:
+                        continue
 
-        for cand in candidates:
-            res = {
-                "candidate": cand.to_dict(),
-                "metrics_5m": {},
-                "metrics_15m": {},
-                "metrics_1d": {}
-            }
+                    # Split into Folds
+                    fold_metrics_list = self._run_folds(cand, data, folds)
 
-            # 5m
-            if data_5m is not None and not data_5m.empty:
-                res["metrics_5m"] = self._evaluate_timeframe(engine, cand, data_5m, folds)
+                    # Aggregate Metrics (Simple Average of folds + Full Run?)
+                    # Let's run full backtest for aggregate stats
+                    full_res = self.engine.run(cand, data)
+                    metrics = full_res.get("metrics", {})
 
-            # 15m
-            if data_15m is not None and not data_15m.empty:
-                res["metrics_15m"] = self._evaluate_timeframe(engine, cand, data_15m, folds)
+                    if not metrics:
+                        continue
 
-            results.append(res)
+                    score = self.ranker.score(metrics, fold_metrics_list)
+                    cand_scores[tf] = score
+                    cand_metrics[tf] = metrics
 
-        # Rank Intraday
-        ranked = Ranker.rank_candidates(results)
+                # Blended Score
+                s5 = cand_scores.get("5m", -1.0)
+                s15 = cand_scores.get("15m", -1.0)
+                blended = self.ranker.blend_scores(s15, s5)
 
-        # Sanity Check (Top 10)
-        top_n = min(len(ranked), 10)
-        final_ranked = []
+                if blended > 0:
+                    # Sanity Check 1D
+                    sanity_res = self.engine.run(cand, data_1d)
+                    sanity_metrics = sanity_res.get("metrics", {})
 
-        for i, res in enumerate(ranked):
-            if i < top_n and data_1d is not None and not data_1d.empty:
-                 # Run 1D Sanity (No folds, just full history or recent?)
-                 # Use 4 folds or just simple backtest?
-                 # Prompt: "If daily performance is catastrophically negative... apply penalty"
-                 # Let's run full backtest
-                 eq, trades = engine.run(Strategy.from_dict(res["candidate"]), data_1d)
-                 m1d = calculate_metrics(eq, trades)
-                 res["metrics_1d"] = m1d
+                    # Simple Sanity Gate
+                    if sanity_metrics and (sanity_metrics.get("max_dd", 0) < -0.45 or sanity_metrics.get("sharpe", 0) < -0.2):
+                         logger.info("Sanity check failed", id=cand.id)
+                         blended = -1.0
 
-                 # Apply Penalty
-                 if m1d["sharpe"] < -0.2 or m1d["max_dd"] > 45:
-                     logger.info(f"Sanity Check Failed for {res['candidate']['id']}", metrics=m1d)
-                     res["score"] -= 10.0 # Heavy penalty
+                    if blended > 0:
+                        instrument_candidates_scores.append({
+                            "candidate": cand,
+                            "score": blended,
+                            "metrics_5m": cand_metrics.get("5m"),
+                            "metrics_15m": cand_metrics.get("15m"),
+                            "sanity_metrics": sanity_metrics
+                        })
 
-            final_ranked.append(res)
+            # Rank
+            instrument_candidates_scores.sort(key=lambda x: x["score"], reverse=True)
+            leaderboards[instrument] = instrument_candidates_scores
 
-        # Re-sort
-        final_ranked.sort(key=lambda x: x["score"], reverse=True)
+            # Promotion
+            if instrument_candidates_scores and not self.fast_mode:
+                top_challenger = instrument_candidates_scores[0]
+                current_champ = self.store.load_champion(instrument)
 
-        # Save Results
-        with open(self.run_dir / f"results_{name}.json", "w") as f:
-            json.dump(final_ranked, f, indent=2)
+                metrics_to_check = top_challenger.get("metrics_15m") or top_challenger.get("metrics_5m")
 
-        # Generate Markdown Leaderboard
-        self._write_leaderboard(name, final_ranked)
+                if self.store.check_promotion(current_champ, metrics_to_check, top_challenger["score"]):
+                    self.store.save_champion(
+                        instrument,
+                        top_challenger["candidate"],
+                        metrics_to_check,
+                        top_challenger["score"]
+                    )
 
-        # Promotion (Only in Full Mode)
-        if not self.fast_mode and final_ranked:
-            best = final_ranked[0]
-            current_champ = self.champion_store.load_champion(name)
+        # 4. Generate Reports
+        self._generate_report(leaderboards)
 
-            should_promote = False
-            if current_champ:
-                should_promote = Promoter.should_promote(best["metrics_15m"], current_champ.get("metrics", {})) # Compare 15m as primary? Or blended score?
-                # Using Blended Score comparison implemented in Promoter
-                # But Promoter expects metrics dict to calculate score.
-                # Here `best` has computed score.
-                # Let's use score directly.
+        # 5. Live Signal
+        # Only if FULL mode and proper time?
+        # Actually SignalPublisher checks market hours.
+        if not self.fast_mode:
+            self.publisher.run()
 
-                # Wait, Promoter calculates score internally from metrics.
-                # So I should pass the metrics dict that resulted in the high score.
-                # Since score is blended, which metrics do I pass?
-                # Passing merged metrics is hard.
-                # Let's pass the one that matches the `timeframe` we prefer, or just modify Promoter to take score.
-                # Actually, `Promoter.should_promote` takes `metrics` and calls `Ranker`.
-                # If I want to use the blended score, I should probably implement that logic here or pass a dummy metrics dict with precomputed score?
-                # No, I should rely on the metrics.
+        logger.info("Hourly Run Completed")
 
-                # Let's use 15m metrics for promotion comparison if available, else 5m.
-                # Or better: `best` has "metrics_15m" and "metrics_5m".
-                pass
-            else:
-                should_promote = True
+    def _run_folds(self, candidate, data, k):
+        """Run k-fold backtest (sequential chunks)"""
+        n = len(data)
+        if n < k * 100: # Min bars check
+            return []
 
-            if should_promote:
-                # One last check: Live Eligibility
-                # Check blended score eligibility?
-                # "Live-eligible gate: blended OOS Sharpe >= 1.2"
-                # Ranker calculated `score` (which is composite), not Sharpe.
-                # We need to check Sharpe explicitly.
-                m15 = best.get("metrics_15m", {})
-                m5 = best.get("metrics_5m", {})
+        chunk_size = n // k
+        metrics_list = []
 
-                sharpe15 = m15.get("sharpe", -99)
-                sharpe5 = m5.get("sharpe", -99)
+        for i in range(k):
+            start = i * chunk_size
+            end = start + chunk_size
+            # Overlap slightly? No, sequential is fine for stability check.
+            chunk = data.iloc[start:end]
 
-                # Blended Sharpe
-                b_sharpe = -99
-                if sharpe15 > -90 and sharpe5 > -90:
-                    b_sharpe = 0.6 * sharpe15 + 0.4 * sharpe5
-                elif sharpe15 > -90:
-                    b_sharpe = sharpe15
-                elif sharpe5 > -90:
-                    b_sharpe = sharpe5
+            res = self.engine.run(candidate, chunk)
+            if res.get("metrics"):
+                metrics_list.append(res["metrics"])
 
-                if b_sharpe >= 1.2:
-                    # Also check DD
-                    # And trades
-                    # Simply use Promoter.is_live_eligible with a constructed "blended metrics" dict
-                    blended_metrics = {
-                        "sharpe": b_sharpe,
-                        "max_dd": max(m15.get("max_dd", 100), m5.get("max_dd", 100)),
-                        "trades": max(m15.get("trades", 0), m5.get("trades", 0))
-                    }
+        return metrics_list
 
-                    eligible, reason = Promoter.is_live_eligible(blended_metrics)
-                    if eligible:
-                        self.champion_store.save_champion(name, best["candidate"], blended_metrics, self.timestamp)
-                    else:
-                        logger.info(f"Candidate {best['candidate']['id']} good but not live eligible: {reason}")
-                else:
-                     logger.info(f"Candidate {best['candidate']['id']} good score but Sharpe {b_sharpe:.2f} < 1.2")
+    def get_symbol(self, instrument):
+        with open("packages/strategy_foundry/configs/instrument_map.yaml", "r") as f:
+            imap = yaml.safe_load(f)
+        return imap["research"][instrument]
 
+    def _save_candidates(self, candidates):
+        # Save generated candidates
+        pass # Optional, maybe just log
 
-    def _evaluate_timeframe(self, engine: BacktestEngine, candidate: Strategy, data: pd.DataFrame, folds: int) -> Dict:
-        cand_obj = Strategy.from_dict(candidate.to_dict())
+    def _generate_report(self, leaderboards):
+        report_path = self.results_dir / "leaderboard.md"
+        with open(report_path, "w") as f:
+            f.write(f"# Strategy Foundry Run {self.run_ts}\n\n")
 
-        # Walk Forward
-        splits = WalkForward.split(data, folds=folds)
-
-        oos_equity = []
-        all_trades = []
-
-        positive_folds = 0
-
-        for train, test in splits:
-             # We only care about OOS performance for ranking
-             eq, trades = engine.run(cand_obj, test)
-             if not eq.empty:
-                 oos_equity.append(eq)
-                 all_trades.extend(trades)
-
-                 # Check if positive
-                 if eq.iloc[-1] > eq.iloc[0]:
-                     positive_folds += 1
-
-        if not oos_equity:
-            return {}
-
-        # Stitch OOS equity? Or just average metrics?
-        # Usually Stitching OOS curves gives the "Walk Forward Equity".
-        # But gaps between folds need handling (capital reset).
-        # Metrics on aggregated trades list + concatenated equity curve (normalized).
-
-        # Simple approach: Metrics on aggregated trades.
-        # But Sharpe needs daily returns.
-        # Concatenate equity curves? Timestamps might overlap if rolling?
-        # Rolling window: Train [0-20], Test [20-30]. Train [10-30], Test [30-40].
-        # Test sets [20-30] and [30-40] are contiguous.
-        # So we can concat.
-
-        full_eq = pd.concat(oos_equity)
-        full_eq = full_eq[~full_eq.index.duplicated(keep='first')] # Handle overlaps if any
-
-        metrics = calculate_metrics(full_eq, all_trades)
-        metrics["positive_folds"] = positive_folds
-        return metrics
-
-    def _write_leaderboard(self, name: str, ranked: List[Dict]):
-        path = self.run_dir / f"leaderboard_{name}.md"
-        with open(path, "w") as f:
-            f.write(f"# Leaderboard: {name}\n")
-            f.write(f"Run: {self.timestamp}\n\n")
-            f.write("| Rank | ID | Score | Sharpe (15m) | Sharpe (5m) | MaxDD | Trades |\n")
-            f.write("|---|---|---|---|---|---|---|\n")
-
-            for i, r in enumerate(ranked[:20]):
-                mid = r["candidate"]["id"]
-                score = r.get("score", -99)
-                m15 = r.get("metrics_15m", {})
-                m5 = r.get("metrics_5m", {})
-
-                s15 = m15.get("sharpe", -99)
-                s5 = m5.get("sharpe", -99)
-                dd = max(m15.get("max_dd", 0), m5.get("max_dd", 0))
-                trades = m15.get("trades", 0) + m5.get("trades", 0)
-
-                f.write(f"| {i+1} | {mid} | {score:.2f} | {s15:.2f} | {s5:.2f} | {dd:.1f}% | {trades} |\n")
+            for inst, items in leaderboards.items():
+                f.write(f"## {inst}\n")
+                f.write("| Rank | ID | Score | Sharpe (5m/15m) | MaxDD (5m/15m) | Trades |\n")
+                f.write("|---|---|---|---|---|---|\n")
+                for i, item in enumerate(items[:10]):
+                    m5 = item.get("metrics_5m", {}) or {}
+                    m15 = item.get("metrics_15m", {}) or {}
+                    f.write(f"| {i+1} | {item['candidate'].id} | {item['score']:.2f} | "
+                            f"{m5.get('sharpe',0):.2f}/{m15.get('sharpe',0):.2f} | "
+                            f"{m5.get('max_dd',0):.2f}/{m15.get('max_dd',0):.2f} | "
+                            f"{m5.get('total_trades',0)}/{m15.get('total_trades',0)} |\n")
+                f.write("\n")
 
 if __name__ == "__main__":
-    runner = FoundryRunner()
-    runner.run()
+    HourlyRunner().run()

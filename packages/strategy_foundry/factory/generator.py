@@ -1,60 +1,78 @@
+import hashlib
+import json
+import random
+import time
 from typing import List
-from packages.strategy_foundry.factory.grammar import Strategy
-from packages.strategy_foundry.factory.parameter_space import ParameterSpace
+from packages.strategy_foundry.factory.grammar import (
+    StrategyCandidate, StrategyComponent, EntryType, RiskType, FilterType
+)
 
 class StrategyGenerator:
-    """
-    Generates random strategies.
-    """
+    def __init__(self, seed: int = None):
+        self.rng = random.Random(seed) if seed is not None else random.Random()
 
-    @staticmethod
-    def generate_random() -> Strategy:
-        # 1 Entry Block
-        entry_type = ParameterSpace.sample_entry_type()
-        entry_block = {
-            "type": entry_type,
-            "params": ParameterSpace.get_params(entry_type)
+    def generate_candidates(self, n: int = 10) -> List[StrategyCandidate]:
+        candidates = []
+        for _ in range(n):
+            candidates.append(self._generate_single())
+        return candidates
+
+    def _generate_single(self) -> StrategyCandidate:
+        # 1. Entry
+        entry_type = self.rng.choice(list(EntryType))
+        entry_params = {}
+
+        if entry_type == EntryType.BREAKOUT:
+            entry_params = {
+                "period": self.rng.choice([10, 20, 50]),
+                "mult": self.rng.choice([1.0, 1.5, 2.0])
+            }
+        elif entry_type == EntryType.TREND:
+            entry_params = {
+                "fast_period": self.rng.choice([9, 20]),
+                "slow_period": self.rng.choice([20, 50]),
+                "signal_type": self.rng.choice(["CROSS", "SLOPE"])
+            }
+        elif entry_type == EntryType.MEAN_REVERSION:
+            entry_params = {
+                "rsi_period": self.rng.choice([7, 14]),
+                "rsi_threshold": self.rng.choice([20, 30])
+            }
+
+        entry = StrategyComponent(type=entry_type.value, params=entry_params)
+
+        # 2. Exit (Risk)
+        exit_type = RiskType.ATR_STOP # Default to ATR Stop for now as primary
+        exit_params = {
+            "atr_period": 14,
+            "stop_mult": self.rng.choice([1.5, 2.0, 3.0]),
+            "tp_mult": self.rng.choice([0.0, 2.0, 3.0, 5.0]), # 0 means no TP (let it run)
+            "trail": self.rng.choice([True, False])
         }
+        exit_comp = StrategyComponent(type=exit_type.value, params=exit_params)
 
-        # 1-2 Exit Blocks
-        exit_blocks = []
-        # Always add time stop? Or maybe it's random.
-        if ParameterSpace.sample_exit_type() == "time_stop": # explicit sample
-             exit_blocks.append({
-                 "type": "time_stop",
-                 "params": ParameterSpace.get_params("time_stop")
-             })
-
-        # Optional Logical Exit
-        # exit_type = ParameterSpace.sample_exit_type()
-        # ...
-
-        # Filters
+        # 3. Filters
         filters = []
-        filter_type = ParameterSpace.sample_filter_type()
-        if filter_type != "no_filter":
-            filters.append({
-                "type": filter_type,
-                "params": ParameterSpace.get_params(filter_type)
-            })
+        if self.rng.random() < 0.5:
+            filters.append(StrategyComponent(
+                type=FilterType.REGIME_MA.value,
+                params={"period": 200, "timeframe": "1D"}
+            ))
 
-        return Strategy(
-            entry_blocks=[entry_block],
-            exit_blocks=exit_blocks,
-            filters=filters
+        # 4. ID Generation (Stable hash)
+        # We hash the string representation of components to ensure same config = same ID
+        struct = {
+            "entry": entry.model_dump(),
+            "exit": exit_comp.model_dump(),
+            "filters": [f.model_dump() for f in filters]
+        }
+        struct_str = json.dumps(struct, sort_keys=True)
+        strat_id = hashlib.sha1(struct_str.encode()).hexdigest()[:12]
+
+        return StrategyCandidate(
+            id=strat_id,
+            entry=entry,
+            exit=exit_comp,
+            filters=filters,
+            generation_ts=time.time()
         )
-
-    @staticmethod
-    def generate_population(n: int) -> List[Strategy]:
-        strategies = []
-        seen_ids = set()
-
-        attempts = 0
-        while len(strategies) < n and attempts < n * 10:
-            s = StrategyGenerator.generate_random()
-            if s.id not in seen_ids:
-                strategies.append(s)
-                seen_ids.add(s.id)
-            attempts += 1
-
-        return strategies

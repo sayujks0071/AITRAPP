@@ -1,36 +1,33 @@
-# Aggressive Intraday StrategyFoundry
+# Strategy Foundry
 
-This package implements an automated strategy research lab ("Foundry") that:
-1.  Generates intraday trading strategies (grammar-based).
-2.  Backtests them on 5m and 15m data with strict OOS (Out-of-Sample) validation.
-3.  Ranks them to find robust "Champions".
-4.  Publishes a `live_signal.json` artifact for potential execution.
+Autonomous Intraday Strategy Research Lab.
+
+## Overview
+This module automatically generates, backtests, ranks, and promotes intraday trading strategies for NIFTY and SENSEX.
+
+## Features
+- **Generation**: Creates strategies using a grammar of Entry (Breakout, Trend, MeanRev), Exit (ATR, Time), and Filters.
+- **Backtesting**: Runs on 5m and 15m data with realistic costs and slippage.
+- **Validation**: Uses Walk-Forward validation (folds) and 1D Sanity checks.
+- **Ranking**: Scores based on Sharpe, Calmar, CAGR, Stability, and Turnover.
+- **Live Signal**: Publishes `live_signal.json` during market hours if a champion exists.
 
 ## Directory Structure
-
-- `configs/`: Configuration files.
-- `data/`: Data loading and caching (Yahoo-style fetcher).
-- `adapters/`: Interfaces to `packages.core`.
-- `factory/`: Strategy generation grammar and logic.
-- `backtest/`: Engine, metrics, walk-forward validation.
-- `selection/`: Ranking and champion management.
+- `configs/`: YAML configurations.
+- `data/`: Data loading and caching.
+- `factory/`: Strategy grammar and generation.
+- `backtest/`: Engine and metrics.
+- `selection/`: Ranking and promotion logic.
 - `live/`: Signal publishing.
-- `results/`: Run artifacts and champion stores.
+- `results/`: Run artifacts and champions.
 
 ## Usage
-
-**Run Hourly (via Cron/CI):**
+Run manually (Fast Mode):
 ```bash
-python3 -m packages.strategy_foundry.run_hourly
+FAST_MODE=1 python packages/strategy_foundry/run_hourly.py
 ```
 
-**Fast Mode (for CI testing):**
+Run full (Production):
 ```bash
-FAST_MODE=1 python3 -m packages.strategy_foundry.run_hourly
+python packages/strategy_foundry/run_hourly.py
 ```
-
-## Outputs
-
-- `results/runs/<timestamp>/`: Contains candidates, metrics, and logs for a run.
-- `results/champions/`: Contains the current best strategies per instrument.
-- `results/live_signal.json`: The latest actionable signal (if eligible).

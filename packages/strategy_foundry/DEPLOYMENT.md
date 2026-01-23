@@ -1,25 +1,33 @@
 # Deployment & Live Signals
 
-## Philosophy
-This system is designed to be **Signal First, Execution Second**.
-It produces a JSON artifact (`live_signal.json`) representing the opinion of the current Champion strategy.
+## Live Signal
+The module does **NOT** place orders directly.
+It publishes `packages/strategy_foundry/results/live_signal.json`.
 
-## Signal Publishing
-- Runs hourly (or faster if scheduled).
-- Checks if Market is Open (Asia/Kolkata).
-- Checks if Champion is "Live Eligible" (Strict criteria: Sharpe > 1.2, Low DD, Stable).
-- Writes `live_signal.json`.
+Schema:
+```json
+{
+  "timestamp_ist": "2023-10-27T10:00:00+05:30",
+  "champion_id": "ab12cd34",
+  "signal": 1,
+  "risk": {
+      "stop": 19500.5,
+      "tp": 19600.0,
+      "flat_by": "15:25"
+  },
+  "status": "OK"
+}
+```
 
-## Consumption
-- Core system (or external executor) can poll `live_signal.json`.
-- **Safety**:
-  - Do NOT execute blindly.
-  - Verify `timestamp_ist` is fresh (< 5 mins old).
-  - Verify `status` is "OK".
-  - Verify `champion_id` matches expected.
+## Gating
+Live signals are only generated if:
+1. Market is Open.
+2. A valid Champion exists.
+3. Champion meets strict promotion criteria (Sharpe > 1.2, etc.).
 
-## Live Execution Gating
-To enable actual order placement (if implemented):
-1. Environment variable `ENABLE_LIVE=true`.
-2. File existence `approvals/ALLOW_LIVE.txt`.
-3. Core safety checks passed.
+## Execution Bridge
+To trade these signals, an external system (or `packages/core/execution.py` extension) must:
+1. Read `live_signal.json`.
+2. Verify `ENABLE_LIVE=true` env var.
+3. Verify `approvals/ALLOW_LIVE.txt` existence.
+4. Execute via Broker API.
