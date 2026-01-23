@@ -1,10 +1,11 @@
+from typing import Dict, List, Tuple
+
 import pandas as pd
-import numpy as np
 import structlog
-from typing import List, Dict, Tuple
-from packages.strategy_foundry.factory.grammar import Strategy
-from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
+
 from packages.strategy_foundry.adapters.core_costs import CostAdapter
+from packages.strategy_foundry.adapters.core_market_hours import MarketHoursAdapter
+from packages.strategy_foundry.factory.grammar import Strategy
 
 logger = structlog.get_logger(__name__)
 
@@ -49,15 +50,17 @@ class BacktestEngine:
 
         n = len(data)
 
+        # Precompute Market Hours Masks (Vectorized)
+        market_open_mask, session_closing_mask = self.market_guard.get_masks(data.index)
+
         # Tracking High/Low for Trailing Stop
         highest_since_entry = 0.0
         lowest_since_entry = 0.0
 
         for i in range(n - 1): # Stop at n-1 because we execute on i+1
-            timestamp = times[i]
+            # timestamp = times[i] # Vectorized masks used instead
 
             # Record Equity (Mark to Market)
-            current_val = capital
             if position != 0:
                 # Unrealized PnL based on Close
                 # Simplified: assumes we hold 'capital' worth of stock?
@@ -86,7 +89,7 @@ class BacktestEngine:
                 # We use i+1 time for execution, so if i+1 is next day, we MUST have exited at i close?
                 # Actually, "All positions flat by 15:25".
                 # If timestamp is >= 15:25, we should have exited.
-                if self.market_guard.is_session_closing(timestamp):
+                if session_closing_mask[i]:
                     exit_reason = "session_close"
 
                 # Signal Exit
@@ -170,7 +173,7 @@ class BacktestEngine:
             # 2. Check Entries (if flat)
             if position == 0:
                 # Check Market Hours for Entry
-                if self.market_guard.is_market_open(timestamp) and not self.market_guard.is_session_closing(timestamp):
+                if market_open_mask[i] and not session_closing_mask[i]:
                     if entry_sigs[i] != 0:
                         direction = entry_sigs[i] # 1 or -1
                         # Execute Entry at Open i+1
