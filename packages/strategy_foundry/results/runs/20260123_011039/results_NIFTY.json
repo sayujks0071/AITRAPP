@@ -1,0 +1,855 @@
+[
+  {
+    "candidate": {
+      "id": "12573306058b",
+      "entry_blocks": [
+        {
+          "type": "rsi_reversion",
+          "params": {
+            "period": 14,
+            "lower": 25,
+            "upper": 75
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 48
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": 5.98062954918185,
+      "calmar": 244.43914021417848,
+      "cagr": 27.57184434005011,
+      "max_dd": 11.279635624594144,
+      "trades": 21,
+      "win_rate": 0.7142857142857143,
+      "profit_factor": 4.135829388262043,
+      "positive_folds": 2
+    },
+    "metrics_15m": {
+      "sharpe": -1.6172133295823115,
+      "calmar": -3.337315562126099,
+      "cagr": -0.4759906306833398,
+      "max_dd": 14.262679744318248,
+      "trades": 14,
+      "win_rate": 0.5,
+      "profit_factor": 0.6071858659244455,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": 31.26938153896218
+  },
+  {
+    "candidate": {
+      "id": "0c811aef1210",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 2.0
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 12
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": 0.5202201460473346,
+      "calmar": 1.0644252285018858,
+      "cagr": 0.14154914008004016,
+      "max_dd": 13.29817598172321,
+      "trades": 34,
+      "win_rate": 0.47058823529411764,
+      "profit_factor": 1.0494876870837235,
+      "positive_folds": 2
+    },
+    "metrics_15m": {
+      "sharpe": -2.648827508363554,
+      "calmar": -3.701474754355017,
+      "cagr": -0.6891610309065038,
+      "max_dd": 18.618552783472662,
+      "trades": 16,
+      "win_rate": 0.4375,
+      "profit_factor": 0.5579732983157947,
+      "positive_folds": 1
+    },
+    "metrics_1d": {},
+    "score": -1.4116815058636865
+  },
+  {
+    "candidate": {
+      "id": "4ff8dcae6558",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 2.0
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 24
+          }
+        },
+        {
+          "type": "rsi_exit",
+          "params": {
+            "period": 21,
+            "threshold": 50
+          }
+        }
+      ],
+      "filters": [
+        {
+          "type": "volatility_filter_atr",
+          "params": {
+            "period": 14,
+            "min_val": 0.0
+          }
+        }
+      ]
+    },
+    "metrics_5m": {
+      "sharpe": 0.15934826917629702,
+      "calmar": -0.27943738494609466,
+      "cagr": -0.047707478727295305,
+      "max_dd": 17.072690089945695,
+      "trades": 32,
+      "win_rate": 0.71875,
+      "profit_factor": 1.5568046745079533,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": -2.0194948677955256,
+      "calmar": -2.9585313616660414,
+      "cagr": -0.6558755828845075,
+      "max_dd": 22.168958267022173,
+      "trades": 15,
+      "win_rate": 0.4666666666666667,
+      "profit_factor": 0.843056155221748,
+      "positive_folds": 1
+    },
+    "metrics_1d": {},
+    "score": -1.434127164247274
+  },
+  {
+    "candidate": {
+      "id": "159ab2023904",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 2.5
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 48
+          }
+        },
+        {
+          "type": "rsi_exit",
+          "params": {
+            "period": 7,
+            "threshold": 50
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": -0.7388700662795488,
+      "calmar": -1.8402549955481826,
+      "cagr": -0.2562989739188606,
+      "max_dd": 13.927361943800252,
+      "trades": 17,
+      "win_rate": 0.5882352941176471,
+      "profit_factor": 0.9367251882394998,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": -2.529562669398703,
+      "calmar": -3.4939942918051714,
+      "cagr": -0.5163859093020722,
+      "max_dd": 14.77924307183918,
+      "trades": 6,
+      "win_rate": 0.3333333333333333,
+      "profit_factor": 0.6008215571035799,
+      "positive_folds": 1
+    },
+    "metrics_1d": {},
+    "score": -1.8616693724475677
+  },
+  {
+    "candidate": {
+      "id": "bf43c909ffb3",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 2.5
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "trailing_stop_atr",
+          "params": {
+            "period": 14,
+            "multiplier": 1.5
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": -0.9865628325629835,
+      "calmar": -1.8309229356467034,
+      "cagr": -0.31625865961264565,
+      "max_dd": 17.273182472911643,
+      "trades": 13,
+      "win_rate": 0.38461538461538464,
+      "profit_factor": 0.8769899057411084,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": -2.3232421006924797,
+      "calmar": -3.311325366272919,
+      "cagr": -0.5163859093020722,
+      "max_dd": 15.594538505990826,
+      "trades": 6,
+      "win_rate": 0.3333333333333333,
+      "profit_factor": 0.6674096944866077,
+      "positive_folds": 1
+    },
+    "metrics_1d": {},
+    "score": -1.8779498377904535
+  },
+  {
+    "candidate": {
+      "id": "da6f59c969f0",
+      "entry_blocks": [
+        {
+          "type": "ema_crossover",
+          "params": {
+            "fast": 8,
+            "slow": 55
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 12
+          }
+        }
+      ],
+      "filters": [
+        {
+          "type": "trend_filter_ema",
+          "params": {
+            "period": 200
+          }
+        }
+      ]
+    },
+    "metrics_5m": {
+      "sharpe": -2.136640363080088,
+      "calmar": -2.022606168381767,
+      "cagr": -0.9421222846038076,
+      "max_dd": 46.579620854097094,
+      "trades": 99,
+      "win_rate": 0.47474747474747475,
+      "profit_factor": 0.8988061163627553,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": -5.181644243627367,
+      "calmar": -4.807383485612772,
+      "cagr": -0.7204705930525868,
+      "max_dd": 14.98675100933314,
+      "trades": 5,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "positive_folds": 0
+    },
+    "metrics_1d": {},
+    "score": -2.7741466937895627
+  },
+  {
+    "candidate": {
+      "id": "4bb8a7b065b1",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 1.5
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 6
+          }
+        }
+      ],
+      "filters": [
+        {
+          "type": "volatility_filter_atr",
+          "params": {
+            "period": 14,
+            "min_val": 0.0
+          }
+        }
+      ]
+    },
+    "metrics_5m": {
+      "sharpe": 2.93289256620251,
+      "calmar": 27.84100928391571,
+      "cagr": 4.6286193631480606,
+      "max_dd": 16.62518522926575,
+      "trades": 73,
+      "win_rate": 0.5753424657534246,
+      "profit_factor": 1.501146445702114,
+      "positive_folds": 2
+    },
+    "metrics_15m": {
+      "sharpe": -2.9580056425286125,
+      "calmar": -3.4616121482536544,
+      "cagr": -0.9001962144479501,
+      "max_dd": 26.005114839399013,
+      "trades": 35,
+      "win_rate": 0.2857142857142857,
+      "profit_factor": 0.3040933578680549,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -5.6676551303069544
+  },
+  {
+    "candidate": {
+      "id": "614a86e35afb",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 1.5
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 6
+          }
+        },
+        {
+          "type": "trailing_stop_atr",
+          "params": {
+            "period": 10,
+            "multiplier": 1.0
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": 2.93289256620251,
+      "calmar": 27.84100928391571,
+      "cagr": 4.6286193631480606,
+      "max_dd": 16.62518522926575,
+      "trades": 73,
+      "win_rate": 0.5753424657534246,
+      "profit_factor": 1.501146445702114,
+      "positive_folds": 2
+    },
+    "metrics_15m": {
+      "sharpe": -2.9580056425286125,
+      "calmar": -3.4616121482536544,
+      "cagr": -0.9001962144479501,
+      "max_dd": 26.005114839399013,
+      "trades": 35,
+      "win_rate": 0.2857142857142857,
+      "profit_factor": 0.3040933578680549,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -5.6676551303069544
+  },
+  {
+    "candidate": {
+      "id": "74b915a57383",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 2.0
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 48
+          }
+        },
+        {
+          "type": "trailing_stop_atr",
+          "params": {
+            "period": 10,
+            "multiplier": 1.0
+          }
+        }
+      ],
+      "filters": [
+        {
+          "type": "trend_filter_ema",
+          "params": {
+            "period": 200
+          }
+        }
+      ]
+    },
+    "metrics_5m": {
+      "sharpe": 1.7747607153236578,
+      "calmar": 8.14443251339224,
+      "cagr": 1.0910650115781708,
+      "max_dd": 13.396452236347784,
+      "trades": 9,
+      "win_rate": 0.4444444444444444,
+      "profit_factor": 1.4086782282398589,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -8.80627497469765
+  },
+  {
+    "candidate": {
+      "id": "d0caa83f7500",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 2.0
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 6
+          }
+        }
+      ],
+      "filters": [
+        {
+          "type": "trend_filter_ema",
+          "params": {
+            "period": 200
+          }
+        }
+      ]
+    },
+    "metrics_5m": {
+      "sharpe": 1.7941455536505533,
+      "calmar": 5.148040103541047,
+      "cagr": 0.34615752269699507,
+      "max_dd": 6.724064221234268,
+      "trades": 14,
+      "win_rate": 0.5714285714285714,
+      "profit_factor": 1.558155832388301,
+      "positive_folds": 2
+    },
+    "metrics_15m": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -9.633607073825521
+  },
+  {
+    "candidate": {
+      "id": "23aaf559e341",
+      "entry_blocks": [
+        {
+          "type": "bollinger_reversion",
+          "params": {
+            "period": 20,
+            "std": 2.5
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 6
+          }
+        },
+        {
+          "type": "rsi_exit",
+          "params": {
+            "period": 14,
+            "threshold": 50
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": 1.3697802855237269,
+      "calmar": 4.581368201184443,
+      "cagr": 0.3232300051721817,
+      "max_dd": 7.055316031761332,
+      "trades": 17,
+      "win_rate": 0.5294117647058824,
+      "profit_factor": 1.34865159782078,
+      "positive_folds": 2
+    },
+    "metrics_15m": {
+      "sharpe": -1.7466278418268886,
+      "calmar": -3.7611072186800785,
+      "cagr": -0.3432622541431225,
+      "max_dd": 9.126627723832527,
+      "trades": 6,
+      "win_rate": 0.3333333333333333,
+      "profit_factor": 0.8289226837030625,
+      "positive_folds": 1
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -10.284492063311834
+  },
+  {
+    "candidate": {
+      "id": "8523d73c7895",
+      "entry_blocks": [
+        {
+          "type": "rsi_reversion",
+          "params": {
+            "period": 7,
+            "lower": 15,
+            "upper": 85
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "rsi_exit",
+          "params": {
+            "period": 7,
+            "threshold": 50
+          }
+        }
+      ],
+      "filters": [
+        {
+          "type": "trend_filter_ema",
+          "params": {
+            "period": 200
+          }
+        }
+      ]
+    },
+    "metrics_5m": {
+      "sharpe": 0.0717964563053084,
+      "calmar": 0.0,
+      "cagr": 0.0,
+      "max_dd": 7.055744511952601,
+      "trades": 2,
+      "win_rate": 0.5,
+      "profit_factor": 0.4233879322136941,
+      "positive_folds": 0
+    },
+    "metrics_15m": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -10.574448907954816
+  },
+  {
+    "candidate": {
+      "id": "738dafd377f8",
+      "entry_blocks": [
+        {
+          "type": "donchian_breakout",
+          "params": {
+            "period": 40
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "time_stop",
+          "params": {
+            "bars": 24
+          }
+        },
+        {
+          "type": "trailing_stop_atr",
+          "params": {
+            "period": 14,
+            "multiplier": 3.0
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": -2.0846530033580297,
+      "calmar": -2.155875939916004,
+      "cagr": -0.8991702117967282,
+      "max_dd": 41.7078828678686,
+      "trades": 36,
+      "win_rate": 0.4722222222222222,
+      "profit_factor": 0.8708905491034367,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": -0.3123476517277248,
+      "calmar": -1.0090891734056104,
+      "cagr": -0.06503125530455989,
+      "max_dd": 6.444549898903744,
+      "trades": 5,
+      "win_rate": 0.2,
+      "profit_factor": 0.14476934971349567,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -10.646664623502327
+  },
+  {
+    "candidate": {
+      "id": "181b22b133f1",
+      "entry_blocks": [
+        {
+          "type": "donchian_breakout",
+          "params": {
+            "period": 40
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "rsi_exit",
+          "params": {
+            "period": 14,
+            "threshold": 50
+          }
+        }
+      ],
+      "filters": [
+        {
+          "type": "volatility_filter_atr",
+          "params": {
+            "period": 14,
+            "min_val": 0.0
+          }
+        }
+      ]
+    },
+    "metrics_5m": {
+      "sharpe": -4.651512860942285,
+      "calmar": -3.7371795662500094,
+      "cagr": -0.7678673698558013,
+      "max_dd": 20.54670791819353,
+      "trades": 116,
+      "win_rate": 0.4482758620689655,
+      "profit_factor": 0.7841430381625337,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": 0.7916435806343632,
+      "calmar": 3.3911520139195694,
+      "cagr": 0.08877951491802816,
+      "max_dd": 2.6179750879234343,
+      "trades": 5,
+      "win_rate": 0.6,
+      "profit_factor": 0.7171530487756511,
+      "positive_folds": 1
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -10.741085395958509
+  },
+  {
+    "candidate": {
+      "id": "e129f469e36f",
+      "entry_blocks": [
+        {
+          "type": "ema_crossover",
+          "params": {
+            "fast": 15,
+            "slow": 22
+          }
+        }
+      ],
+      "exit_blocks": [
+        {
+          "type": "rsi_exit",
+          "params": {
+            "period": 14,
+            "threshold": 50
+          }
+        }
+      ],
+      "filters": []
+    },
+    "metrics_5m": {
+      "sharpe": -2.283042067897603,
+      "calmar": -2.131373669961204,
+      "cagr": -0.9464579296586662,
+      "max_dd": 44.40600646417359,
+      "trades": 464,
+      "win_rate": 0.5150862068965517,
+      "profit_factor": 0.9632212035760641,
+      "positive_folds": 1
+    },
+    "metrics_15m": {
+      "sharpe": -9.011743108141484,
+      "calmar": -2.5105761272953644,
+      "cagr": -0.9894739499412973,
+      "max_dd": 39.412226507835655,
+      "trades": 70,
+      "win_rate": 0.2571428571428571,
+      "profit_factor": 0.25150695280764973,
+      "positive_folds": 0
+    },
+    "metrics_1d": {
+      "sharpe": -99.0,
+      "calmar": -99.0,
+      "cagr": 0.0,
+      "max_dd": 100.0,
+      "trades": 0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0
+    },
+    "score": -11.0
+  }
+]

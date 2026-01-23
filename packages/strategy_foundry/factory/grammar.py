@@ -69,7 +69,11 @@ class Strategy:
                 ema = IndicatorsAdapter.calculate_indicator(df, "ema_slow", {"ema_slow": params["period"]})
                 # Only long if Price > EMA
                 trade_allowed &= (df["close"] > ema)
-            # Add more filters here
+            elif ftype == "volatility_filter_atr":
+                atr = IndicatorsAdapter.calculate_indicator(df, "atr", {"atr_period": params.get("period", 14)})
+                trade_allowed &= (atr > params.get("min_val", 0.0))
+            elif ftype == "no_filter":
+                pass
 
         # 2. Entries
         # If any entry block triggers, we signal entry

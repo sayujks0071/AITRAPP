@@ -1,24 +1,21 @@
-# Strategy Foundry
+from typing import List
 import json
 import os
-from typing import List
-
-from .grammar import StrategySpec
-
+from packages.strategy_foundry.factory.grammar import Strategy
 
 class CandidateRegistry:
     def __init__(self, run_dir: str):
         self.run_dir = run_dir
-        self.candidates_file = os.path.join(run_dir, "candidates.json")
 
-    def save_candidates(self, candidates: List[StrategySpec]):
-        # StrategySpec is a dict, so no need for .to_dict()
-        with open(self.candidates_file, "w") as f:
-            json.dump(candidates, f, indent=2)
+    def save_candidates(self, filename: str, candidates: List[Strategy]):
+        path = os.path.join(self.run_dir, filename)
+        with open(path, "w") as f:
+            json.dump([c.to_dict() for c in candidates], f, indent=2)
 
-    def load_candidates(self) -> List[StrategySpec]:
-        if not os.path.exists(self.candidates_file):
+    def load_candidates(self, filename: str) -> List[Strategy]:
+        path = os.path.join(self.run_dir, filename)
+        if not os.path.exists(path):
             return []
-        with open(self.candidates_file, "r") as f:
+        with open(path, "r") as f:
             data = json.load(f)
-        return data  # Already dicts matching StrategySpec
+        return [Strategy.from_dict(d) for d in data]

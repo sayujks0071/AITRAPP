@@ -1,0 +1,376 @@
+[
+  {
+    "id": "d97fead94a4e",
+    "entry_blocks": [
+      {
+        "type": "rsi_reversion",
+        "params": {
+          "period": 14,
+          "lower": 20,
+          "upper": 80
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 6
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "7f3eea3671e4",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 17,
+          "slow": 58
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 48
+        }
+      },
+      {
+        "type": "rsi_exit",
+        "params": {
+          "period": 14,
+          "threshold": 50
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "205b3cd53685",
+    "entry_blocks": [
+      {
+        "type": "bollinger_reversion",
+        "params": {
+          "period": 20,
+          "std": 2.5
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 48
+        }
+      },
+      {
+        "type": "rsi_exit",
+        "params": {
+          "period": 21,
+          "threshold": 50
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "71b4a59cad47",
+    "entry_blocks": [
+      {
+        "type": "donchian_breakout",
+        "params": {
+          "period": 60
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 12
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "volatility_filter_atr",
+        "params": {
+          "period": 14,
+          "min_val": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "id": "191cd1ada40f",
+    "entry_blocks": [
+      {
+        "type": "rsi_reversion",
+        "params": {
+          "period": 7,
+          "lower": 25,
+          "upper": 80
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "rsi_exit",
+        "params": {
+          "period": 14,
+          "threshold": 50
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "1637396345d1",
+    "entry_blocks": [
+      {
+        "type": "donchian_breakout",
+        "params": {
+          "period": 40
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 24
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "volatility_filter_atr",
+        "params": {
+          "period": 14,
+          "min_val": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "id": "5e62980c9bca",
+    "entry_blocks": [
+      {
+        "type": "donchian_breakout",
+        "params": {
+          "period": 60
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 12
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "829a395c016a",
+    "entry_blocks": [
+      {
+        "type": "donchian_breakout",
+        "params": {
+          "period": 40
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "trailing_stop_atr",
+        "params": {
+          "period": 14,
+          "multiplier": 1.0
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "d25979cdbe97",
+    "entry_blocks": [
+      {
+        "type": "donchian_breakout",
+        "params": {
+          "period": 40
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "rsi_exit",
+        "params": {
+          "period": 21,
+          "threshold": 50
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "7ac24cbd9d34",
+    "entry_blocks": [
+      {
+        "type": "bollinger_reversion",
+        "params": {
+          "period": 20,
+          "std": 2.0
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 24
+        }
+      },
+      {
+        "type": "trailing_stop_atr",
+        "params": {
+          "period": 14,
+          "multiplier": 3.0
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "0c811aef1210",
+    "entry_blocks": [
+      {
+        "type": "bollinger_reversion",
+        "params": {
+          "period": 20,
+          "std": 2.0
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 12
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "eef1b0b22e94",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 6,
+          "slow": 36
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 24
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "af66ead8067b",
+    "entry_blocks": [
+      {
+        "type": "ema_crossover",
+        "params": {
+          "fast": 8,
+          "slow": 72
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 6
+        }
+      },
+      {
+        "type": "rsi_exit",
+        "params": {
+          "period": 7,
+          "threshold": 50
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "trend_filter_ema",
+        "params": {
+          "period": 200
+        }
+      }
+    ]
+  },
+  {
+    "id": "8313e01156ef",
+    "entry_blocks": [
+      {
+        "type": "donchian_breakout",
+        "params": {
+          "period": 20
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "rsi_exit",
+        "params": {
+          "period": 7,
+          "threshold": 50
+        }
+      }
+    ],
+    "filters": []
+  },
+  {
+    "id": "3e94e3f0df09",
+    "entry_blocks": [
+      {
+        "type": "rsi_reversion",
+        "params": {
+          "period": 7,
+          "lower": 20,
+          "upper": 85
+        }
+      }
+    ],
+    "exit_blocks": [
+      {
+        "type": "time_stop",
+        "params": {
+          "bars": 24
+        }
+      },
+      {
+        "type": "trailing_stop_atr",
+        "params": {
+          "period": 14,
+          "multiplier": 1.5
+        }
+      }
+    ],
+    "filters": []
+  }
+]

@@ -23,8 +23,8 @@ class ParameterSpace:
             "rsi_reversion",
             "bollinger_reversion",
             "ema_crossover",
-            "donchian_breakout",
-            "orb_breakout"
+            "donchian_breakout"
+            # "orb_breakout" # Disabled for MVP complexity
         ])
 
     @staticmethod
