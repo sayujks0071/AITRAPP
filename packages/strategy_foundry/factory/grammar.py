@@ -1,9 +1,29 @@
 import hashlib
 import json
+from enum import Enum
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
 from packages.strategy_foundry.adapters.core_indicators import IndicatorsAdapter
+
+class StrategyType(str, Enum):
+    RSI_REVERSION = "rsi_reversion"
+    BOLLINGER_REVERSION = "bollinger_reversion"
+    EMA_CROSSOVER = "ema_crossover"
+    BREAKOUT_DONCHIAN = "donchian_breakout"
+    BREAKOUT_ORB = "orb_breakout"
+
+class FilterType(str, Enum):
+    TREND_EMA = "trend_filter_ema"
+    VOLATILITY_ATR = "volatility_filter_atr"
+    NONE = "no_filter"
+
+class ExitType(str, Enum):
+    TIME_BASED = "time_stop"
+    RSI_EXIT = "rsi_exit"
+    TRAILING_STOP_ATR = "trailing_stop_atr"
+
+StrategySpec = Dict[str, Any]
 
 class Strategy:
     """
