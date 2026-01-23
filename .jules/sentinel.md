@@ -17,3 +17,13 @@
 **Vulnerability:** Found realistic-looking high-entropy API keys and secrets hardcoded in multiple markdown documentation files (`MCP_SERVER_SETUP.md`, `MCP_AUTHENTICATION_GUIDE.md`, etc.).
 **Learning:** Copy-pasting "working" examples into documentation without scrubbing sensitive data is a common source of leaks. Developers often forget that documentation is code and is public.
 **Prevention:** Always use obvious placeholders (e.g., `<YOUR_API_KEY>`) in documentation.
+
+## 2025-05-27 - DoS Vulnerability in Blocking Sync Endpoints
+**Vulnerability:** Found synchronous  called directly within async endpoint . This blocked the entire asyncio event loop, causing Denial of Service for critical endpoints like .
+**Learning:** Mixing synchronous CPU-bound code with async endpoints is a classic DoS vector in Python web frameworks (FastAPI/Starlette). The GIL ensures the main thread (event loop) is blocked.
+**Prevention:** Always offload blocking/CPU-intensive tasks to a thread pool using  or . Also enforce input validation limits (e.g. max date range) to prevent resource exhaustion even in threads.
+
+## 2025-05-27 - DoS Vulnerability in Blocking Sync Endpoints
+**Vulnerability:** Found synchronous `BacktestEngine.run_backtest` called directly within async endpoint `/backtest`. This blocked the entire asyncio event loop, causing Denial of Service for critical endpoints like `/flatten`.
+**Learning:** Mixing synchronous CPU-bound code with async endpoints is a classic DoS vector in Python web frameworks (FastAPI/Starlette). The GIL ensures the main thread (event loop) is blocked.
+**Prevention:** Always offload blocking/CPU-intensive tasks to a thread pool using `run_in_threadpool` or `loop.run_in_executor`. Also enforce input validation limits (e.g. max date range) to prevent resource exhaustion even in threads.

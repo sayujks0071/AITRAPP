@@ -27,7 +27,7 @@ def test_security_headers_present():
     # Check CSP content
     csp = keys["content-security-policy"]
     assert "default-src 'self'" in csp
-    assert "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net" in csp
+    assert "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net" in csp
 
 
 def test_security_headers_on_error():

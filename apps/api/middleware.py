@@ -23,7 +23,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         csp = (
             "default-src 'self'; "
             "img-src 'self' data: https:; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
         )
         response.headers["Content-Security-Policy"] = csp
