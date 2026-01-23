@@ -1,38 +1,31 @@
-# Aggressive Intraday StrategyFoundry Configuration
+# Default parameters for Strategy Foundry
 
 generation:
   candidates_per_run: 80
-  candidates_per_run_fast: 15
-  timeframes: ["5m", "15m"]
-  sanity_timeframe: "1d"
+  fast_mode_candidates: 15
+  intraday_timeframes: ["5m", "15m"]
+  sanity_timeframe: "1D"
 
 backtest:
-  costs:
-    all_in_cost_bps_per_side: 3.0  # Brokerage + Taxes approx
-    slippage_bps_per_side: 2.0     # Execution slip
-    spread_guard_bps: 1.0          # Extra guard for liquidity
+  cost_bps: 2.0         # 0.02% per side (approx futures/ETF)
+  slippage_bps: 3.0     # 0.03% per side estimate
+  spread_guard_bps: 2.0 # Extra penalty for liquidity
+  initial_capital: 100000
 
-  risk:
-    default_sizing_type: "fixed_fraction"
-    default_sizing_fraction: 1.0   # 100% of capital
-
-  validation:
-    min_trades_5m: 80
-    min_trades_15m: 40
-    max_drawdown_pct: 30.0
-    min_profit_factor: 1.1
-    min_positive_folds_ratio: 0.75 # 3 out of 4
-
-ranking:
-  weights:
-    sharpe: 0.25
-    calmar: 0.25
-    cagr: 0.20
-    stability: 0.15
-    turnover: 0.10
-    sanity: 0.05
+evaluation:
+  folds: 4
+  fast_mode_folds: 2
+  min_trades_5m: 80
+  min_trades_15m: 40
+  max_dd_pct: 30.0
+  min_profit_factor: 1.1
 
 promotion:
-  min_sharpe_to_live: 1.2
-  max_dd_to_live: 20.0
-  challenger_improvement_pct: 10.0 # Must be 10% better than champion
+  min_sharpe: 1.2
+  min_improvement_pct: 10.0
+  max_dd_live: 20.0
+  min_positive_folds: 3
+
+execution:
+  session_end_time: "15:25"
+  max_holding_time_minutes: 370 # 6 hours 10 mins (approx full session)

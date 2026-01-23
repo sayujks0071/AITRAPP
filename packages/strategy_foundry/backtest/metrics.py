@@ -1,73 +1,96 @@
-import pandas as pd
 import numpy as np
-from typing import Dict
+import pandas as pd
+from typing import Dict, Any, List
 
-def calculate_metrics(equity_curve: pd.Series, trades: list) -> Dict[str, float]:
+def calculate_metrics(
+    equity_curve: pd.Series,
+    trades: List[Dict],
+    initial_capital: float = 100000.0,
+    risk_free_rate: float = 0.0
+) -> Dict[str, Any]:
     """
-    Calculate performance metrics.
+    Calculate performance metrics from equity curve and trade list.
+
+    Args:
+        equity_curve: Series of equity values indexed by datetime
+        trades: List of trade dictionaries
+        initial_capital: Starting capital
+        risk_free_rate: Annual risk free rate (decimal)
+
+    Returns:
+        Dictionary of metrics
     """
-    if equity_curve.empty or len(trades) == 0:
-        return {
-            "sharpe": -99.0,
-            "calmar": -99.0,
-            "cagr": 0.0,
-            "max_dd": 100.0,
-            "trades": 0,
-            "win_rate": 0.0,
-            "profit_factor": 0.0
-        }
+    if equity_curve.empty:
+        return {}
 
-    # Returns
-    returns = equity_curve.pct_change().dropna()
+    # 1. Returns based metrics
+    # Resample to daily for standard annualization if intraday
+    daily_equity = equity_curve.resample('D').last().dropna()
+    if daily_equity.empty:
+         # Fallback for very short tests
+         daily_equity = equity_curve
 
-    # CAGR
+    returns = daily_equity.pct_change().dropna()
+
+    total_return = (equity_curve.iloc[-1] / initial_capital) - 1.0
+
     days = (equity_curve.index[-1] - equity_curve.index[0]).days
-    if days < 1:
-        days = 1
-    total_ret = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
-    cagr = ((1 + total_ret) ** (365 / days)) - 1
+    years = max(days / 365.0, 0.001) # Avoid div by zero
+
+    cagr = (equity_curve.iloc[-1] / initial_capital) ** (1/years) - 1.0
 
     # Volatility (Annualized)
-    # Assuming intraday 5m bars? No, equity curve might be sparsely sampled if we only mark on close?
-    # Better to resample equity curve to daily for Sharpe/CAGR standard comparisons
-    # or keep high freq.
-    # Let's use high freq annualized.
-    # 5m bars: ~75 per day. 252 days.
-    # But equity curve index is timestamps.
-    # Let's resample to Daily for robust Sharpe.
-    daily_equity = equity_curve.resample("D").last().dropna()
-    daily_returns = daily_equity.pct_change().dropna()
+    # Assuming daily returns
+    volatility = returns.std() * np.sqrt(252)
 
-    if len(daily_returns) < 2:
-        sharpe = 0.0
-    else:
-        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+    # Sharpe
+    sharpe = 0.0
+    if volatility > 0:
+        sharpe = (cagr - risk_free_rate) / volatility
 
-    # Max Drawdown
-    rolling_max = equity_curve.cummax()
-    drawdown = (equity_curve - rolling_max) / rolling_max
-    max_dd = abs(drawdown.min())
+    # Sortino
+    downside_returns = returns[returns < 0]
+    downside_vol = downside_returns.std() * np.sqrt(252)
+    sortino = 0.0
+    if downside_vol > 0:
+        sortino = (cagr - risk_free_rate) / downside_vol
 
-    # Calmar
-    calmar = cagr / max_dd if max_dd > 0 else 0.0
+    # Drawdown
+    rolling_max = daily_equity.cummax()
+    drawdown = (daily_equity - rolling_max) / rolling_max
+    max_dd = drawdown.min() # Negative value
 
-    # Trade Stats
-    wins = [t for t in trades if t["pnl"] > 0]
-    losses = [t for t in trades if t["pnl"] <= 0]
+    calmar = 0.0
+    if max_dd < 0:
+        calmar = cagr / abs(max_dd)
 
-    win_rate = len(wins) / len(trades) if len(trades) > 0 else 0.0
+    # 2. Trade metrics
+    total_trades = len(trades)
+    winning_trades = [t for t in trades if t['pnl'] > 0]
+    losing_trades = [t for t in trades if t['pnl'] <= 0]
 
-    gross_win = sum(t["pnl"] for t in wins)
-    gross_loss = abs(sum(t["pnl"] for t in losses))
+    win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0.0
 
-    profit_factor = gross_win / gross_loss if gross_loss > 0 else 99.0
+    gross_profit = sum(t['pnl'] for t in winning_trades)
+    gross_loss = abs(sum(t['pnl'] for t in losing_trades))
+
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+    if gross_loss == 0 and gross_profit == 0:
+        profit_factor = 0.0
+
+    avg_trade = sum(t['pnl'] for t in trades) / total_trades if total_trades > 0 else 0.0
 
     return {
-        "sharpe": sharpe,
-        "calmar": calmar,
-        "cagr": cagr,
-        "max_dd": max_dd * 100, # percent
-        "trades": len(trades),
-        "win_rate": win_rate,
-        "profit_factor": profit_factor
+        "cagr": round(cagr, 4),
+        "volatility": round(volatility, 4),
+        "sharpe": round(sharpe, 4),
+        "sortino": round(sortino, 4),
+        "max_dd": round(max_dd, 4),
+        "calmar": round(calmar, 4),
+        "total_trades": total_trades,
+        "win_rate": round(win_rate, 4),
+        "profit_factor": round(profit_factor, 4),
+        "avg_trade": round(avg_trade, 2),
+        "total_return": round(total_return, 4),
+        "pnl_net": round(equity_curve.iloc[-1] - initial_capital, 2)
     }

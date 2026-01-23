@@ -1,38 +1,67 @@
-from datetime import datetime, time
-import pytz
-from typing import Optional
-from packages.core.market_hours import MarketHoursGuard, MARKET_OPEN, MARKET_CLOSE, HARD_CLOSE
+"""Adapter for core market hours with vectorized support"""
+import pandas as pd
+import numpy as np
+from datetime import time
+from packages.core.market_hours import MarketHoursGuard, MARKET_OPEN, MARKET_CLOSE, HARD_CLOSE, IST
 
-class MarketHoursAdapter:
+class MarketHoursAdapter(MarketHoursGuard):
     """
-    Adapter for market hours logic.
+    Adapter extending core MarketHoursGuard with vectorized operations
+    for efficient backtesting.
     """
-    def __init__(self):
-        self.guard = MarketHoursGuard()
-        self.timezone = pytz.timezone("Asia/Kolkata")
 
-    def is_market_open(self, dt: Optional[datetime] = None) -> bool:
-        return self.guard.is_market_open(dt)
+    def get_masks(self, index: pd.DatetimeIndex):
+        """
+        Generate boolean masks for market hours.
 
-    def is_session_closing(self, dt: datetime, buffer_minutes: int = 5) -> bool:
+        Args:
+            index: DatetimeIndex in UTC or naive (assumed IST if naive, but safe to convert)
+
+        Returns:
+            (is_open, is_session_start, is_session_end)
         """
-        Check if we are within buffer_minutes of HARD_CLOSE.
-        """
-        if dt.tzinfo is None:
-            dt = self.timezone.localize(dt)
+        # Ensure index is timezone aware (IST)
+        if index.tz is None:
+            # If naive, assume IST
+            index = index.tz_localize(IST)
         else:
-            dt = dt.astimezone(self.timezone)
+            index = index.tz_convert(IST)
 
-        # Naive time comparison
-        current_time = dt.time()
+        # 1. Holiday/Weekend mask
+        # Vectorized weekday check (Sat=5, Sun=6)
+        is_weekday = index.dayofweek < 5
 
-        # Construct close time for today
-        close_dt = dt.replace(hour=HARD_CLOSE.hour, minute=HARD_CLOSE.minute, second=0, microsecond=0)
+        # Vectorized holiday check
+        # We need to check if date string is in trading_holidays set
+        # This is slower but done once per backtest
+        # Optimization: Create a set of dates from index and intersect with holidays
+        unique_dates = pd.to_datetime(index.date).unique()
+        holiday_dates = pd.to_datetime(list(self.trading_holidays)).date
+        holidays_in_range = set(holiday_dates).intersection(set(unique_dates.date))
 
-        # If current time is after close, yes
-        if current_time >= HARD_CLOSE:
-            return True
+        is_not_holiday = ~index.normalize().isin(holidays_in_range)
 
-        # Check difference
-        diff = (close_dt - dt).total_seconds() / 60.0
-        return diff <= buffer_minutes
+        is_trading_day = is_weekday & is_not_holiday
+
+        # 2. Time of day mask
+        # Convert times to minutes for easier comparison
+        minutes = index.hour * 60 + index.minute
+
+        open_minutes = MARKET_OPEN.hour * 60 + MARKET_OPEN.minute
+        close_minutes = MARKET_CLOSE.hour * 60 + MARKET_CLOSE.minute # 15:20
+        hard_close_minutes = HARD_CLOSE.hour * 60 + HARD_CLOSE.minute # 15:25
+
+        # Is Open (Entry allowed)
+        is_open_time = (minutes >= open_minutes) & (minutes < close_minutes)
+        is_open = is_trading_day & is_open_time
+
+        # Is Session Start (first bar of day)
+        # Often simpler to just say it's the first bar >= 09:15
+        is_session_start = is_trading_day & (minutes == open_minutes)
+
+        # Is Session End (last bar before close or at hard close)
+        # For 5m bars, 15:25 is the hard close.
+        # We flag the bar AT or AFTER which we must be flat.
+        is_session_end = is_trading_day & (minutes >= hard_close_minutes)
+
+        return is_open, is_session_start, is_session_end

@@ -1,5 +1,3 @@
-# Instrument Mapping for StrategyFoundry
-
 research:
   NIFTY: "^NSEI"
   SENSEX: "^BSESN"
@@ -9,6 +7,5 @@ paper_proxy:
   SENSEX: "SENSEXBEES"
 
 live_proxy:
-  # Examples, to be replaced with actual broker symbols if needed
-  NIFTY: "NIFTY24FEBFUT"
+  NIFTY: "NIFTY24FEBFUT" # Example, should be updated or templated
   SENSEX: "SENSEX24FEBFUT"

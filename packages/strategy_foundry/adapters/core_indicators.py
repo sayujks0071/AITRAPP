@@ -1,52 +1,40 @@
-from typing import Dict, Any
+from typing import Dict, Optional
 import pandas as pd
 import numpy as np
 from packages.core.indicators import IndicatorCalculator
 
 class IndicatorsAdapter:
-    """
-    Adapter to reuse packages.core.indicators logic with dynamic parameters.
-    """
+    """Adapter for core indicators to ensure interface stability and dynamic params"""
+    def __init__(self):
+        self.core_calc = IndicatorCalculator() # For EMA/Donchian which support dynamic params
 
-    @staticmethod
-    def get_calculator(params: Dict[str, Any]) -> IndicatorCalculator:
-        """
-        Factory to get a calculator instance with specific parameters.
-        """
-        return IndicatorCalculator(
-            atr_period=params.get("atr_period", 14),
-            rsi_period=params.get("rsi_period", 14),
-            adx_period=params.get("adx_period", 14),
-            ema_fast=params.get("ema_fast", 34),
-            ema_slow=params.get("ema_slow", 89),
-            supertrend_period=params.get("supertrend_period", 10),
-            supertrend_multiplier=params.get("supertrend_multiplier", 3.0),
-            bb_period=params.get("bb_period", 20),
-            bb_std=params.get("bb_std", 2.0)
-        )
+    def donchian_series(self, df: pd.DataFrame, period: int):
+        return self.core_calc.donchian_series(df, period)
 
-    @staticmethod
-    def calculate_indicator(df: pd.DataFrame, indicator_name: str, params: Dict[str, Any]) -> Any:
-        """
-        Calculate a specific indicator series.
-        """
-        calc = IndicatorsAdapter.get_calculator(params)
+    def ema_series(self, series: pd.Series, period: int):
+        return self.core_calc.ema_series(series, period)
 
-        if indicator_name == "rsi":
-            return calc.rsi_series(df)
-        elif indicator_name == "atr":
-            return calc.atr_series(df)
-        elif indicator_name == "adx":
-            return calc.adx_series(df)
-        elif indicator_name == "ema_fast":
-            return calc.ema_series(df["close"], calc.ema_fast)
-        elif indicator_name == "ema_slow":
-            return calc.ema_series(df["close"], calc.ema_slow)
-        elif indicator_name == "supertrend":
-            return calc.supertrend_series(df)
-        elif indicator_name == "bollinger":
-            return calc.bollinger_bands_series(df["close"])
-        elif indicator_name == "donchian":
-            return calc.donchian_series(df, period=params.get("donchian_period", 20))
-        else:
-            raise ValueError(f"Unknown indicator: {indicator_name}")
+    def rsi_series(self, df: pd.DataFrame, period: int = 14):
+        # Re-implementation to support dynamic period
+        close = df["close"].values
+        delta = np.diff(close, prepend=np.nan)
+
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+
+        avg_gain = self._rolling_mean(gain, period)
+        avg_loss = self._rolling_mean(loss, period)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+        return rsi
+
+    def atr_series(self, df: pd.DataFrame, period: int = 14):
+        # Re-implementation to support dynamic period
+        tr = self.core_calc.calculate_tr(df)
+        return self._rolling_mean(tr, period)
+
+    def _rolling_mean(self, arr: np.ndarray, window: int) -> np.ndarray:
+        # Reuse core logic if possible or copy
+        return self.core_calc.rolling_mean(arr, window)
