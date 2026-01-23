@@ -1,4 +1,5 @@
 from typing import List
+import random
 from packages.strategy_foundry.factory.grammar import Strategy
 from packages.strategy_foundry.factory.parameter_space import ParameterSpace
 
@@ -9,34 +10,47 @@ class StrategyGenerator:
 
     @staticmethod
     def generate_random() -> Strategy:
-        # 1 Entry Block
+        # 1. Entry Block (Always 1 for MVP)
         entry_type = ParameterSpace.sample_entry_type()
         entry_block = {
             "type": entry_type,
             "params": ParameterSpace.get_params(entry_type)
         }
 
-        # 1-2 Exit Blocks
+        # 2. Exit/Risk Blocks
         exit_blocks = []
-        # Always add time stop? Or maybe it's random.
-        if ParameterSpace.sample_exit_type() == "time_stop": # explicit sample
-             exit_blocks.append({
-                 "type": "time_stop",
-                 "params": ParameterSpace.get_params("time_stop")
-             })
 
-        # Optional Logical Exit
-        # exit_type = ParameterSpace.sample_exit_type()
-        # ...
-
-        # Filters
-        filters = []
-        filter_type = ParameterSpace.sample_filter_type()
-        if filter_type != "no_filter":
-            filters.append({
-                "type": filter_type,
-                "params": ParameterSpace.get_params(filter_type)
+        # Chance to add Time Stop
+        if random.random() < 0.7:
+            exit_blocks.append({
+                "type": "time_stop",
+                "params": ParameterSpace.get_params("time_stop")
             })
+
+        # Chance to add Trailing Stop or Signal Exit
+        other_exit = random.choice(["trailing_stop_atr", "rsi_exit", None])
+        if other_exit:
+            exit_blocks.append({
+                "type": other_exit,
+                "params": ParameterSpace.get_params(other_exit)
+            })
+
+        # Ensure at least one exit/risk control if none selected (unlikely but safe)
+        if not exit_blocks:
+             exit_blocks.append({
+                "type": "time_stop",
+                "params": ParameterSpace.get_params("time_stop")
+            })
+
+        # 3. Filters
+        filters = []
+        if random.random() < 0.5:
+            filter_type = ParameterSpace.sample_filter_type()
+            if filter_type != "no_filter":
+                filters.append({
+                    "type": filter_type,
+                    "params": ParameterSpace.get_params(filter_type)
+                })
 
         return Strategy(
             entry_blocks=[entry_block],

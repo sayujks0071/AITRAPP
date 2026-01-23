@@ -1,3 +1,4 @@
+# StrategyFoundry Implementation
 from typing import Optional
 from packages.core.risk import RiskManager
 from packages.core.config import RiskConfig

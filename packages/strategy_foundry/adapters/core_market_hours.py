@@ -1,3 +1,4 @@
+# StrategyFoundry Implementation
 from datetime import datetime, time
 import pytz
 from typing import Optional

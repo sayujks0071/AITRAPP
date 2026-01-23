@@ -1,3 +1,4 @@
+# StrategyFoundry Implementation
 import pandas as pd
 import structlog
 from pathlib import Path

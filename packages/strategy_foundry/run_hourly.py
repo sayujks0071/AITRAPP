@@ -51,7 +51,11 @@ class FoundryRunner:
         # 1. Update Data
         instruments = self.instrument_map.get("research", {})
         timeframes = self.config["generation"]["timeframes"] + [self.config["generation"]["sanity_timeframe"]]
-        self.data_loader.update_all(instruments, timeframes)
+
+        if os.environ.get("SKIP_UPDATE", "0") != "1":
+            self.data_loader.update_all(instruments, timeframes)
+        else:
+            logger.info("Skipping data update (SKIP_UPDATE=1)")
 
         # 2. Generation & Backtest per Instrument
         for inst_name, symbol in instruments.items():
