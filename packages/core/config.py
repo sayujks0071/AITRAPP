@@ -115,7 +115,21 @@ class Settings(BaseSettings):
     tops_cap_per_sec: int = Field(default=8, alias="TOPS_CAP_PER_SEC")
 
     class Config:
+        # Support both local dev and test environments.
+        # Precedence:
+        #   1. OS environment variables
+        #   2. Values loaded from the selected env file below
+        #
+        # In test environments, use `.env.test` *instead of* `.env` so that
+        # test configuration does not silently overlay values defined for
+        # development/production.
         env_file = ".env"
+        if (
+            os.getenv("APP_ENV") == "test"
+            or os.getenv("ENV") == "test"
+            or os.getenv("PYTHON_ENV") == "test"
+        ):
+            env_file = ".env.test"
         case_sensitive = False
 
 
