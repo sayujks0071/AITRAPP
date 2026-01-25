@@ -62,27 +62,16 @@ async def close_position(request: Request, instrument_token: int) -> dict:
     """Close a specific position"""
     state = request.app.state.aitrapp
     
-    # Find position
-    position = None
-    for p in state.positions.values():
-        if p.instrument_token == instrument_token:
-            position = p
-            break
+    result = await state.close_position_by_token(instrument_token)
     
-    if not position:
+    if result.status == "NOT_FOUND":
         from fastapi import HTTPException, status
-        
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Position not found for instrument {instrument_token}",
+            detail=result.reason,
         )
     
-    # TODO: Place market order to close position
-    
-    return {
-        "status": "SUCCESS",
-        "message": f"Closing position for {position.tradingsymbol}",
-    }
+    return result.dict()
 
 
 @router.post("/positions/close-all")

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytz
 from kiteconnect import KiteConnect
+from pydantic import BaseModel
 
 from packages.core.config import AppConfig, Settings
 from packages.core.execution import ExecutionEngine, OrderResult
@@ -41,6 +42,15 @@ from packages.core.strategies.base import Strategy, StrategyContext
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAPITAL_BASE = Decimal("1000000")
+
+
+class ClosePositionResponse(BaseModel):
+    """Response model for closing a position"""
+    status: str
+    position_id: Optional[str] = None
+    order_id: Optional[str] = None
+    average_price: Optional[float] = None
+    reason: Optional[str] = None
 
 
 class AppState:
@@ -88,6 +98,9 @@ class AppState:
         # Positions & universe
         self.positions: Dict[str, Position] = {}
         self.universe_tokens: List[int] = []
+
+        # Concurrency
+        self.lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -402,6 +415,57 @@ class AppState:
                 self.exit_manager.on_position_closed(position.position_id)
                 closed += 1
         return closed
+
+    async def close_position_by_token(
+        self,
+        instrument_token: int,
+        reason: str = "MANUAL"
+    ) -> ClosePositionResponse:
+        """
+        Close a single position by instrument token.
+        Thread-safe wrapper around execution engine.
+        """
+        async with self.lock:
+            # Find position
+            position = None
+            for p in self.positions.values():
+                if p.instrument.token == instrument_token:
+                    position = p
+                    break
+
+            if not position:
+                return ClosePositionResponse(
+                    status="NOT_FOUND",
+                    reason=f"Position not found for token {instrument_token}"
+                )
+
+            if not position.is_open:
+                return ClosePositionResponse(
+                    status="ALREADY_CLOSED",
+                    position_id=position.position_id,
+                    reason="Position is not open"
+                )
+
+            # Close it
+            order = await self.execution_engine.close_position(position, reason=reason)
+
+            if not order:
+                return ClosePositionResponse(
+                    status="REJECTED",
+                    position_id=position.position_id,
+                    reason="Order placement failed"
+                )
+
+            self._finalize_position(position, order.average_price)
+            self.exit_manager.on_position_closed(position.position_id)
+
+            return ClosePositionResponse(
+                status="CLOSED",
+                position_id=position.position_id,
+                order_id=order.order_id,
+                average_price=order.average_price,
+                reason=reason
+            )
 
     def get_system_state(self) -> SystemState:
         portfolio_state = self._build_portfolio_state()
