@@ -99,10 +99,11 @@ class HistoricalDataLoader:
             date_col = next((c for c in columns if c.lower() == 'date'), 'Date')
             expiry_col = next((c for c in columns if c.lower() == 'expiry'), 'Expiry')
             
-            # Load full CSV
+            # Load full CSV with explicit na_values for handling hyphens
             df = pd.read_csv(
                 filepath,
                 skipinitialspace=True,
+                na_values=['-']
             )
             
             # Clean column names
