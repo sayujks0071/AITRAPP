@@ -170,32 +170,33 @@ class ExecutionEngine:
 
                 # Check for partial fills after cancellation
                 # Refresh order from map as cancellation might have updated status
-                entry_order = self.orders.get(entry_order.order_id)
+                refreshed_order = self.orders.get(entry_order.order_id)
 
-                if entry_order and entry_order.filled_quantity > 0:
+                if refreshed_order and refreshed_order.filled_quantity > 0:
                     logger.warning(
                         "Partial fill detected on timeout",
-                        order_id=entry_order.order_id,
-                        filled=entry_order.filled_quantity,
+                        order_id=refreshed_order.order_id,
+                        filled=refreshed_order.filled_quantity,
                         requested=quantity
                     )
 
                     if place_exits:
                         # Place exit orders for the FILLED quantity
-                        await self._place_exit_orders(signal, entry_order, entry_order.filled_quantity)
+                        await self._place_exit_orders(signal, refreshed_order, refreshed_order.filled_quantity)
 
-                    return OrderResult.PARTIAL, entry_order
-                if filled_qty > 0:
+                    return OrderResult.PARTIAL, refreshed_order
+
+                if filled_qty > 0 and current_order:
                     logger.info(
-                        "Partial fill detected on timeout",
-                        order_id=entry_order.order_id,
+                        "Partial fill detected on timeout (fallback)",
+                        order_id=current_order.order_id,
                         filled_qty=filled_qty,
                         requested_qty=quantity
                     )
 
                     if place_exits:
                         # Place exit orders for the PARTIAL quantity
-                        await self._place_exit_orders(signal, entry_order, filled_qty)
+                        await self._place_exit_orders(signal, current_order, filled_qty)
 
                     return OrderResult.PARTIAL, current_order
 
