@@ -725,7 +725,7 @@ class TradingOrchestrator:
                     # Get market data
                     tick = self.market_data_stream.get_latest_tick(token)
                     bars_1s = self.market_data_stream.get_bars(token, 1, n=60)
-                    bars_5s = self.market_data_stream.get_bars(token, 5, n=100)
+                    bars_5s = self.market_data_stream.get_bars(token, 5, n=300)
                     
                     if not tick or not bars_5s:
                         continue
