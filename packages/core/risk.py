@@ -285,7 +285,8 @@ class RiskManager:
         instrument: Instrument,
         quantity: int,
         entry_price: float,
-        exit_price: float
+        exit_price: float,
+        side: SignalSide = SignalSide.LONG
     ) -> float:
         """
         Estimate trading fees for a round trip.
@@ -303,6 +304,7 @@ class RiskManager:
             quantity: Position quantity
             entry_price: Entry price
             exit_price: Exit price
+            side: Signal side (LONG/SHORT)
         
         Returns:
             Estimated total fees in INR
@@ -342,15 +344,21 @@ class RiskManager:
         # GST on brokerage and transaction charges
         fees *= (1 + TaxConfig.GST_RATE)
 
-        # STT Calculation
+        # STT Calculation (Sell Side Only)
         stt = 0.0
+        sell_value = 0.0
+        if side == SignalSide.LONG:
+            sell_value = exit_price * quantity
+        else:
+            sell_value = entry_price * quantity
+
         if instrument.is_equity:
             # Assuming Intraday for now as safe default. For delivery it's higher (0.1% on both sides).
-            stt = (exit_price * quantity) * TaxConfig.STT_EQUITY_INTRADAY_SELL
+            stt = sell_value * TaxConfig.STT_EQUITY_INTRADAY_SELL
         elif instrument.is_future:
-            stt = (exit_price * quantity) * TaxConfig.STT_FUTURES_SELL
+            stt = sell_value * TaxConfig.STT_FUTURES_SELL
         elif instrument.is_option:
-            stt = (exit_price * quantity) * TaxConfig.STT_OPTIONS_SELL
+            stt = sell_value * TaxConfig.STT_OPTIONS_SELL
 
         fees += stt
         
@@ -358,7 +366,13 @@ class RiskManager:
         fees += turnover * TaxConfig.SEBI_CHARGES
         
         # Stamp duty: on buy side
-        fees += (entry_price * quantity) * TaxConfig.STAMP_DUTY_BUY
+        buy_value = 0.0
+        if side == SignalSide.LONG:
+            buy_value = entry_price * quantity
+        else:
+            buy_value = exit_price * quantity
+
+        fees += buy_value * TaxConfig.STAMP_DUTY_BUY
         
         return fees
     
