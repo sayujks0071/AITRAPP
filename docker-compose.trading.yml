@@ -1,0 +1,97 @@
+# Docker Compose for AITRAPP Trading System
+# Simplified setup focused on trading functionality
+version: "3.9"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16
+    container_name: aitrapp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aitrapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aitrapp}
+      POSTGRES_DB: ${POSTGRES_DB:-aitrapp}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aitrapp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading-network
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: aitrapp-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading-network
+
+  # AITRAPP Trading API
+  trading-api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: aitrapp-trading-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override database/redis URLs for Docker networking
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aitrapp}:${POSTGRES_PASSWORD:-aitrapp}@postgres:5432/${POSTGRES_DB:-aitrapp}
+      REDIS_URL: redis://redis:6379/0
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Mount application code (for development)
+      - ./apps:/app/apps:ro
+      - ./packages:/app/packages:ro
+      - ./src:/app/src:ro
+      - ./configs:/app/configs:ro
+      - ./scripts:/app/scripts:ro
+      # Mount data directories for persistence
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+      - ./data:/app/data
+      # Mount .env for runtime updates (access tokens updated by kite_trader.py)
+      - ./.env:/app/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - trading-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  trading-network:
+    driver: bridge
